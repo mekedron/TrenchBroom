@@ -4,6 +4,7 @@ Thumbs.db
 .vscode
 .zed
 .cache
+__pycache__/
 
 /cmake-build-*
 /build*
