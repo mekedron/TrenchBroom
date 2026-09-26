@@ -22,6 +22,7 @@
 #include "mcp/Errors.h"
 #include "mcp/Host.h"
 #include "mcp/Json.h"
+#include "mcp/LogCapture.h"
 
 #include <functional>
 #include <optional>
@@ -58,6 +59,7 @@ class CallContext
 public:
   using ProgressFn =
     std::function<void(double progress, std::optional<double> total, const std::string&)>;
+  using Deferrer = std::function<void(std::function<void()>)>;
 
 private:
   ServerState& m_server;
@@ -67,8 +69,10 @@ private:
   bool m_dryRun;
   ProgressFn m_progress;
   std::vector<Warning> m_warnings;
-  const std::vector<std::string>* m_capturedMessages = nullptr;
+  const ScopedLogCapture* m_logCapture = nullptr;
   std::optional<std::string> m_undoStep;
+  bool m_cancelled = false;
+  Deferrer m_deferrer;
 
 public:
   CallContext(
@@ -112,7 +116,25 @@ public:
   void setUndoStep(std::string undoStep);
   const std::optional<std::string>& undoStep() const;
 
-  void setCapturedMessages(const std::vector<std::string>* messages);
+  void setLogCapture(const ScopedLogCapture* logCapture);
+
+  /**
+   * The warnings and errors that the editor logged for the target document during this
+   * call so far, e.g. entity definition or material loading problems.
+   */
+  std::vector<LogMessage> loggedProblems() const;
+
+  /** Whether the client cancelled the call (asynchronous tools only). */
+  bool cancelled() const;
+  void cancel();
+
+  /**
+   * For asynchronous tools: runs the given step later on the main thread, after pending
+   * events (such as a cancellation) were processed. The step is dropped if the call was
+   * abandoned, e.g. because the server shut down.
+   */
+  void defer(std::function<void()> step);
+  void setDeferrer(Deferrer deferrer);
 
   /**
    * Returns an OPERATION_FAILED error that includes the warnings and errors the editor

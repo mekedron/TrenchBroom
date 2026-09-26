@@ -61,6 +61,16 @@ enum class DocumentUse
 
 using ToolHandler = std::function<ToolResult(CallContext&, const Args&)>;
 
+/** Delivers the result of an asynchronous tool call. Must be called exactly once. */
+using ToolCompletion = std::function<void(ToolResult)>;
+
+/**
+ * An asynchronous handler starts the work and returns. It continues in steps scheduled
+ * with CallContext::defer and finally calls the completion. The context stays valid until
+ * then. Between steps, the handler should check CallContext::cancelled().
+ */
+using AsyncToolHandler = std::function<void(CallContext&, const Args&, ToolCompletion)>;
+
 /**
  * Declares a tool. Built fluently:
  *
@@ -89,6 +99,7 @@ private:
   bool m_idempotent = false;
   bool m_openWorld = false;
   ToolHandler m_handler;
+  AsyncToolHandler m_asyncHandler;
 
 public:
   explicit ToolDef(std::string name);
@@ -112,6 +123,12 @@ public:
   ToolDef& idempotent(bool idempotent = true);
   ToolDef& openWorld(bool openWorld = true);
   ToolDef& handler(ToolHandler handler);
+  /**
+   * Sets an asynchronous handler for long operations that report progress and can be
+   * cancelled (spec E2.16). Only for Mutation::External tools: they wait in the call
+   * queue, and the queue waits until they complete.
+   */
+  ToolDef& asyncHandler(AsyncToolHandler handler);
 
   const std::string& name() const;
   const std::string& title() const;
@@ -124,6 +141,8 @@ public:
   bool idempotent() const;
   bool openWorld() const;
   const ToolHandler& handler() const;
+  const AsyncToolHandler& asyncHandler() const;
+  bool isAsync() const;
 
   /** Whether calls wait while the human is busy (Map and External tools). */
   bool isModifying() const;
@@ -147,7 +166,10 @@ private:
   std::vector<ToolDef> m_tools;
 
 public:
-  /** Precondition: the name is valid and not yet registered, and there is a handler. */
+  /**
+   * Precondition: the name is valid and not yet registered, and there is exactly one
+   * handler. Asynchronous tools are Mutation::External.
+   */
   void add(ToolDef tool);
 
   const ToolDef* find(std::string_view name) const;

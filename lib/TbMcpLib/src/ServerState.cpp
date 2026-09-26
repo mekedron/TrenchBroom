@@ -23,6 +23,7 @@
 #include "mcp/JsonRpc.h"
 #include "mcp/Scheduler.h"
 #include "mdl/Map.h"
+#include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
 #include <algorithm>
@@ -30,14 +31,52 @@
 namespace tb::mcp
 {
 
-DocumentState::DocumentState(ui::MapDocument& document_)
+DocumentState::DocumentState(
+  ui::MapDocument& document_, std::function<void()> infoDidChange_)
   : document{document_}
   , ids{document_}
+  , m_infoDidChange{std::move(infoDidChange_)}
+  , m_lastModified{document_.map().modified()}
 {
   // reloading replaces the map and with it the command processor, so an open agent
   // transaction is gone
+  m_notifierConnection += document.documentWasLoadedNotifier.connect([&]() {
+    transaction.reset();
+    infoDidChange();
+  });
+
   m_notifierConnection +=
-    document.documentWasLoadedNotifier.connect([&]() { transaction.reset(); });
+    document.documentWasSavedNotifier.connect(this, &DocumentState::infoDidChange);
+  m_notifierConnection += document.modificationStateDidChangeNotifier.connect([&]() {
+    // only a change of the modified flag changes the info
+    if (document.map().modified() != m_lastModified)
+    {
+      infoDidChange();
+    }
+  });
+  m_notifierConnection +=
+    document.modsDidChangeNotifier.connect(this, &DocumentState::infoDidChange);
+  m_notifierConnection += document.entityDefinitionsDidChangeNotifier.connect(
+    this, &DocumentState::infoDidChange);
+  m_notifierConnection += document.materialCollectionsDidChangeNotifier.connect(
+    this, &DocumentState::infoDidChange);
+  m_notifierConnection +=
+    document.nodesDidChangeNotifier.connect([&](const std::vector<mdl::Node*>& nodes) {
+      // worldspawn holds the soft bounds, WAD list and other document settings
+      if (std::ranges::find(nodes, &document.map().worldNode()) != nodes.end())
+      {
+        infoDidChange();
+      }
+    });
+}
+
+void DocumentState::infoDidChange()
+{
+  m_lastModified = document.map().modified();
+  if (m_infoDidChange)
+  {
+    m_infoDidChange();
+  }
 }
 
 ServerState::ServerState(
@@ -85,8 +124,12 @@ DocumentState& ServerState::documentState(ui::MapDocument& document)
   auto it = documentStates.find(&document);
   if (it == documentStates.end())
   {
-    it =
-      documentStates.emplace(&document, std::make_unique<DocumentState>(document)).first;
+    it = documentStates
+           .emplace(
+             &document,
+             std::make_unique<DocumentState>(
+               document, [this, &document]() { documentInfoDidChange(document); }))
+           .first;
   }
   return *it->second;
 }
@@ -271,7 +314,23 @@ void ServerState::documentWillClose(ui::MapDocument& document)
 
 void ServerState::documentsDidChange()
 {
+  // track every open document so that info subscriptions work before any tool used it
+  for (const auto& document : host.documents())
+  {
+    documentState(*document.document);
+  }
   notifyResourceUpdated("trenchbroom://editor/status");
+}
+
+void ServerState::documentInfoDidChange(ui::MapDocument& document)
+{
+  for (const auto& info_ : host.documents())
+  {
+    if (info_.document == &document)
+    {
+      notifyResourceUpdated("trenchbroom://documents/" + info_.id + "/info");
+    }
+  }
 }
 
 } // namespace tb::mcp

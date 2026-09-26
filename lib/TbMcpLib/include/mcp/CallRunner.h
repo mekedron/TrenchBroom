@@ -25,6 +25,7 @@
 #include <chrono>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -65,9 +66,14 @@ private:
     std::chrono::steady_clock::time_point enqueued;
   };
 
+  /** An asynchronous call that has started and not yet completed. */
+  struct AsyncCall;
+
   ServerState& m_server;
   std::deque<PendingCall> m_queue;
   bool m_running = false;
+  std::unique_ptr<AsyncCall> m_asyncCall;
+  bool m_startingAsync = false;
   bool m_pollScheduled = false;
   /** Invalidates scheduled polls when the runner is destroyed. */
   std::shared_ptr<bool> m_alive;
@@ -78,11 +84,17 @@ public:
 
   void submit(CallRequest request);
 
-  /** Removes a queued call and completes it with CANCELLED. Returns false if not queued.
+  /**
+   * Removes a queued call and completes it with CANCELLED, or asks a running asynchronous
+   * call to stop at its next step. Returns false if the call is neither queued nor
+   * running asynchronously.
    */
   bool cancel(const std::string& sessionId, const Json& requestId);
 
-  /** Cancels all queued calls, or those of one session. */
+  /**
+   * Cancels all queued calls, or those of one session. A running asynchronous call of
+   * the affected sessions is abandoned and completed with CANCELLED.
+   */
   void cancelAll(const std::optional<std::string>& sessionId = std::nullopt);
 
   size_t queueSize() const;
@@ -93,6 +105,14 @@ private:
 
   /** Executes the call; returns the CallToolResult. */
   Json execute(const CallRequest& request);
+
+  /**
+   * Starts an asynchronous call. Returns true if the call is still running; it then
+   * resumes the queue when it completes.
+   */
+  bool startAsync(CallRequest request);
+  /** Completes the running asynchronous call and resumes the queue. */
+  void completeAsync(ToolResult result);
   void finish(const CallRequest& request, Json result);
 };
 

@@ -114,7 +114,9 @@ public:
   /** Sends a JSON-RPC request on the default session and returns the response. */
   Json rpc(const std::string& method, Json params = Json::object());
 
-  /** Calls a tool and returns the full CallToolResult. Requires a synchronous response.
+  /**
+   * Calls a tool and returns the full CallToolResult. Runs pending scheduler tasks until
+   * an asynchronous tool has completed.
    */
   Json callRaw(std::string_view tool, Json arguments = Json::object());
   Json callRawAs(const std::string& sessionId, std::string_view tool, Json arguments);

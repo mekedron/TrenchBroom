@@ -23,6 +23,7 @@
 #include "base/NotifierConnection.h"
 #include "mcp/Args.h"
 #include "mcp/ChangeCollector.h"
+#include "mcp/LogCapture.h"
 #include "mcp/ProtocolVersion.h"
 #include "mcp/Scheduler.h"
 #include "mcp/ServerState.h"
@@ -31,6 +32,8 @@
 #include "mdl/TransactionScope.h"
 #include "ui/MapDocument.h"
 
+#include "kd/contracts.h"
+
 #include <algorithm>
 #include <exception>
 
@@ -38,63 +41,6 @@ namespace tb::mcp
 {
 namespace
 {
-
-/**
- * Forwards everything to the original target logger and records warnings and errors, so
- * that failures of Map_* functions can be explained to the agent.
- */
-class CapturingLogger : public Logger
-{
-private:
-  Logger* m_target;
-  std::vector<std::string> m_messages;
-
-public:
-  explicit CapturingLogger(Logger* target)
-    : m_target{target}
-  {
-  }
-
-  const std::vector<std::string>& messages() const { return m_messages; }
-
-  void clear() { m_messages.clear(); }
-
-private:
-  void doLog(const LogLevel level, const std::string_view message) override
-  {
-    if (level == LogLevel::Warn || level == LogLevel::Error)
-    {
-      m_messages.emplace_back(message);
-    }
-    if (m_target)
-    {
-      m_target->log(level, message);
-    }
-  }
-};
-
-class ScopedLogCapture
-{
-private:
-  ui::MapDocument& m_document;
-  Logger* m_previousTarget;
-  CapturingLogger m_logger;
-
-public:
-  explicit ScopedLogCapture(ui::MapDocument& document)
-    : m_document{document}
-    , m_previousTarget{document.targetLogger()}
-    , m_logger{m_previousTarget}
-  {
-    m_document.setTargetLogger(&m_logger);
-    // setting a target logger flushes cached messages that predate this call
-    m_logger.clear();
-  }
-
-  ~ScopedLogCapture() { m_document.setTargetLogger(m_previousTarget); }
-
-  const std::vector<std::string>& messages() const { return m_logger.messages(); }
-};
 
 Json errorContent(const ToolError& error)
 {
@@ -187,6 +133,24 @@ Json makeCallToolResult(
   return result;
 }
 
+struct CallRunner::AsyncCall
+{
+  CallRequest request;
+  std::optional<Args> args;
+  std::chrono::steady_clock::time_point startTime;
+  CallLogEntry logEntry;
+  bool dryRun = false;
+  ui::MapDocument* document = nullptr;
+  bool documentClosed = false;
+  std::unique_ptr<CallContext> context;
+  std::unique_ptr<ScopedLogCapture> logCapture;
+  NotifierConnection connection;
+  /** Cleared when the call completes; pending steps and completions are then ignored. */
+  std::shared_ptr<bool> alive = std::make_shared<bool>(true);
+
+  ~AsyncCall() { *alive = false; }
+};
+
 CallRunner::CallRunner(ServerState& server)
   : m_server{server}
   , m_alive{std::make_shared<bool>(true)}
@@ -272,6 +236,14 @@ bool CallRunner::cancel(const std::string& sessionId, const Json& requestId)
   });
   if (it == m_queue.end())
   {
+    if (
+      m_asyncCall && m_asyncCall->request.sessionId == sessionId
+      && m_asyncCall->request.requestId == requestId)
+    {
+      // the call stops at its next step
+      m_asyncCall->context->cancel();
+      return true;
+    }
     return false;
   }
 
@@ -308,6 +280,12 @@ void CallRunner::cancelAll(const std::optional<std::string>& sessionId)
           ErrorCode::Cancelled, "The call was cancelled because the agent was stopped.")),
         true,
         protocolVersionOf(m_server, request.sessionId)));
+  }
+
+  if (m_asyncCall && (!sessionId || m_asyncCall->request.sessionId == *sessionId))
+  {
+    completeAsync(makeError(
+      ErrorCode::Cancelled, "The call was cancelled because the agent was stopped."));
   }
 
   if (m_queue.empty() && !m_running)
@@ -368,6 +346,16 @@ void CallRunner::pump()
     m_queue.pop_front();
 
     m_running = true;
+    if (tool && tool->isAsync())
+    {
+      if (startAsync(std::move(request)))
+      {
+        // the queue resumes when the call completes
+        return;
+      }
+      continue;
+    }
+
     auto result = execute(request);
     m_running = false;
 
@@ -471,7 +459,7 @@ Json CallRunner::execute(const CallRequest& request)
   if (mapDocument)
   {
     logCapture.emplace(*mapDocument);
-    context.setCapturedMessages(&logCapture->messages());
+    context.setLogCapture(&*logCapture);
   }
   if (tool->mutation() == Mutation::Map && mapDocument)
   {
@@ -546,7 +534,14 @@ Json CallRunner::execute(const CallRequest& request)
           }
         });
 
-      if (!map.commitTransaction())
+      // Consecutive calls that change the same objects must not be collated into one
+      // undo step (spec X2)
+      const auto collationEnabled = map.isCommandCollationEnabled();
+      map.setIsCommandCollationEnabled(false);
+      const auto committed = map.commitTransaction();
+      map.setIsCommandCollationEnabled(collationEnabled);
+
+      if (!committed)
       {
         result = context.operationFailed(
           "The change could not be applied to all linked groups, so it was rolled back.",
@@ -636,6 +631,191 @@ Json CallRunner::execute(const CallRequest& request)
   finishLog(true, {});
   m_server.setActivity(ServerActivity::State::Idle);
   return makeCallToolResult(structured, false, session->protocolVersion);
+}
+
+bool CallRunner::startAsync(CallRequest request)
+{
+  const auto* tool = m_server.tools.find(request.toolName);
+  auto* session = m_server.findSession(request.sessionId);
+  if (!tool || !session)
+  {
+    m_running = false;
+    finish(
+      request,
+      makeCallToolResult(
+        errorContent(makeError(ErrorCode::Cancelled, "The session was closed.")),
+        true,
+        protocolVersionOf(m_server, request.sessionId)));
+    return false;
+  }
+
+  auto call = std::make_unique<AsyncCall>();
+  call->request = std::move(request);
+  call->args.emplace(call->request.arguments);
+  call->startTime = std::chrono::steady_clock::now();
+  call->dryRun = findMember(call->request.arguments, "dryRun")
+                 && call->request.arguments["dryRun"].get<bool>();
+  call->logEntry.sessionId = session->id;
+  call->logEntry.clientName = session->clientDisplayName();
+  call->logEntry.tool = tool->name();
+  call->logEntry.arguments = call->request.arguments;
+  call->logEntry.dryRun = call->dryRun;
+
+  auto document = resolveDocument(m_server, *tool, call->request.arguments, *session);
+  if (document.is_error())
+  {
+    const auto error = errorOf(document);
+    call->logEntry.ok = false;
+    call->logEntry.errorCode = toString(error.code);
+    m_server.callLog.add(call->logEntry);
+    m_running = false;
+    finish(
+      call->request,
+      makeCallToolResult(errorContent(error), true, session->protocolVersion));
+    return false;
+  }
+
+  auto documentInfo = document.value();
+  call->document = documentInfo ? documentInfo->document : nullptr;
+  call->context = std::make_unique<CallContext>(
+    m_server, *session, *tool, documentInfo, call->dryRun, call->request.progress);
+
+  if (call->document)
+  {
+    call->logCapture = std::make_unique<ScopedLogCapture>(*call->document);
+    call->context->setLogCapture(call->logCapture.get());
+
+    // the document may be closed between two steps
+    call->connection += m_server.host.documentWillCloseNotifier.connect(
+      [callPtr = call.get()](ui::MapDocument& closing) {
+        if (&closing == callPtr->document)
+        {
+          callPtr->logCapture.reset();
+          callPtr->context->setLogCapture(nullptr);
+          callPtr->documentClosed = true;
+        }
+      });
+  }
+
+  call->context->setDeferrer([this, alive = call->alive](std::function<void()> step) {
+    m_server.scheduler.post([this, alive, step = std::move(step)]() {
+      if (!*alive)
+      {
+        return;
+      }
+      if (m_asyncCall->documentClosed)
+      {
+        completeAsync(makeError(
+          ErrorCode::DocumentNotFound,
+          "The document was closed while the call was running.",
+          "Use document_list to see the open documents."));
+        return;
+      }
+
+      try
+      {
+        step();
+      }
+      catch (const std::exception& e)
+      {
+        if (*alive)
+        {
+          completeAsync(makeError(
+            ErrorCode::InternalError,
+            std::string{"The tool failed with an internal error: "} + e.what()));
+        }
+      }
+    });
+  });
+
+  m_server.setActivity(ServerActivity::State::Running, tool->title());
+
+  const auto alive = call->alive;
+  m_asyncCall = std::move(call);
+
+  m_startingAsync = true;
+  try
+  {
+    tool->asyncHandler()(
+      *m_asyncCall->context, *m_asyncCall->args, [this, alive](ToolResult result) {
+        if (*alive)
+        {
+          completeAsync(std::move(result));
+        }
+      });
+  }
+  catch (const std::exception& e)
+  {
+    if (*alive)
+    {
+      completeAsync(makeError(
+        ErrorCode::InternalError,
+        std::string{"The tool failed with an internal error: "} + e.what()));
+    }
+  }
+  m_startingAsync = false;
+
+  return *alive;
+}
+
+void CallRunner::completeAsync(ToolResult result)
+{
+  contract_pre(m_asyncCall != nullptr);
+
+  auto call = std::move(m_asyncCall);
+  *call->alive = false;
+  call->logCapture.reset();
+  call->connection.disconnect();
+
+  const auto* session = m_server.findSession(call->request.sessionId);
+  const auto protocolVersion =
+    session ? session->protocolVersion : std::string{ProtocolVersion::Latest};
+
+  auto& logEntry = call->logEntry;
+  logEntry.durationMs = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - call->startTime)
+                          .count();
+
+  auto callToolResult = Json{};
+  if (result.is_error())
+  {
+    const auto error = errorOf(result);
+    logEntry.ok = false;
+    logEntry.errorCode = toString(error.code);
+    callToolResult = makeCallToolResult(errorContent(error), true, protocolVersion);
+  }
+  else
+  {
+    auto warnings = Json::array();
+    for (const auto& warning : call->context->warnings())
+    {
+      warnings.push_back(toJson(warning));
+    }
+
+    auto structured = Json{
+      {"ok", true},
+      {"dryRun", call->dryRun},
+      {"undoStep", nullptr},
+      {"result", std::move(result.value())},
+      {"warnings", std::move(warnings)},
+    };
+    if (call->document && !call->documentClosed)
+    {
+      structured["grid"] = call->document->map().grid().actualSize();
+    }
+    callToolResult = makeCallToolResult(structured, false, protocolVersion);
+  }
+  m_server.callLog.add(logEntry);
+
+  finish(call->request, std::move(callToolResult));
+  call.reset();
+
+  m_running = false;
+  m_server.setActivity(ServerActivity::State::Idle);
+  if (!m_startingAsync)
+  {
+    pump();
+  }
 }
 
 void CallRunner::finish(const CallRequest& request, Json result)

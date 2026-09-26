@@ -11,7 +11,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | Epic | Area | Spec sections | Phase | Status |
 |---|---|---|---|---|
 | E1 | Server foundation and editor integration | §1, §2, §14 | MVP | Done |
-| E2 | Documents, games and assets | §3, §4 | MVP + v1 | Not started |
+| E2 | Documents, games and assets | §3, §4 | MVP + v1 | Done |
 | E3 | Scene inspection, selection and resources | §5, §6, §21 | MVP + v1 | Not started |
 | E4 | Geometry: creation, transforms, editing, CSG | §7, §8, §9 | MVP + v1 | Not started |
 | E5 | Entities, NPCs and models | §10 | MVP + v1 | Not started |
@@ -75,22 +75,22 @@ Goal: a running MCP server inside TrenchBroom that an MCP client can connect to,
 
 Goal: the agent can manage map files and everything that controls how a map loads.
 
-- [ ] E2.1 `document_new` (game + format; initial map template).
-- [ ] E2.2 `document_open` with game/format detection or explicit values; returns load warnings.
-- [ ] E2.3 `document_save`, `document_save_as` (with `overwrite`).
-- [ ] E2.4 `document_close` (with `save` / `discard`), `document_revert`.
-- [ ] E2.5 `document_recent`, `map_files_list`.
-- [ ] E2.6 `document_export_map` (omit-from-export layers, strip editor-only properties).
-- [ ] E2.7 `document_export_obj` (texture path mode).
-- [ ] E2.8 `autosave_list`.
-- [ ] E2.9 `game_list`, `game_info` (formats, file system, materials setup, definition files, tags, face flags, soft bounds, compile tools).
-- [ ] E2.10 `game_set_path`.
-- [ ] E2.11 `mods_get`, `mods_set`.
-- [ ] E2.12 `entity_definitions_get`, `entity_definitions_set`, `entity_definitions_reload`.
-- [ ] E2.13 `materials_collections_get`, `materials_collections_set` (folder collections and ordered WAD list), `materials_reload`.
-- [ ] E2.14 `soft_bounds_get`, `soft_bounds_set`.
-- [ ] E2.15 Resources: document info, game configuration.
-- [ ] E2.16 Long operations (open, reload) report progress and support cancellation.
+- [x] E2.1 `document_new` (game + format; initial map template).
+- [x] E2.2 `document_open` with game/format detection or explicit values; returns load warnings.
+- [x] E2.3 `document_save`, `document_save_as` (with `overwrite`).
+- [x] E2.4 `document_close` (with `save` / `discard`), `document_revert`.
+- [x] E2.5 `document_recent`, `map_files_list`.
+- [x] E2.6 `document_export_map` (omit-from-export layers, strip editor-only properties).
+- [x] E2.7 `document_export_obj` (texture path mode).
+- [x] E2.8 `autosave_list`.
+- [x] E2.9 `game_list`, `game_info` (formats, file system, materials setup, definition files, tags, face flags, soft bounds, compile tools).
+- [x] E2.10 `game_set_path`.
+- [x] E2.11 `mods_get`, `mods_set`.
+- [x] E2.12 `entity_definitions_get`, `entity_definitions_set`, `entity_definitions_reload`.
+- [x] E2.13 `materials_collections_get`, `materials_collections_set` (folder collections and ordered WAD list), `materials_reload`.
+- [x] E2.14 `soft_bounds_get`, `soft_bounds_set`.
+- [x] E2.15 Resources: document info, game configuration.
+- [x] E2.16 Long operations (open, reload) report progress and support cancellation.
 
 **Done when:** an agent creates a Quake map, saves it, closes it, reopens it, switches mods and WADs, and all of it is covered by tests on test fixtures.
 

@@ -22,7 +22,15 @@
 #include "mcp/McpServer.h"
 #include "mcp/ResourceRegistry.h"
 #include "mcp/ServerState.h"
+#include "mcp/tools/DocumentTools.h"
+#include "mcp/tools/GameTools.h"
 #include "mcp/tools/SessionTools.h"
+#include "mdl/GameInfo.h"
+#include "mdl/Map.h"
+#include "tools/ToolUtils.h"
+#include "ui/MapDocument.h"
+
+#include <algorithm>
 
 namespace tb::mcp
 {
@@ -74,6 +82,87 @@ void registerResources(McpServer& server)
     [](ServerState& state, Session& session, const std::string& uri, const auto&)
       -> Result<Json, ToolError> {
       return jsonResourceContents(uri, editorStatus(state, session));
+    },
+  });
+
+  resources.addTemplate(ResourceTemplateDef{
+    "trenchbroom://documents/{doc}/info",
+    "document-info",
+    "Document Info",
+    "Path, game, format, modified flag, game folder, mods, entity definitions, material "
+    "collections and soft bounds of an open document ({doc} is a handle such as "
+    "doc:1). Subscribe to get notified when it is saved, reloaded, modified or its "
+    "settings change.",
+    "application/json",
+    [](ServerState& state, Session& session, const std::string& uri, const auto& vars)
+      -> Result<Json, ToolError> {
+      const auto documentId = vars.at("doc");
+      if (const auto document = state.findDocument(documentId))
+      {
+        return jsonResourceContents(uri, documentInfo(state, *document, session));
+      }
+      return makeError(
+        ErrorCode::DocumentNotFound,
+        "Document " + documentId + " is not open.",
+        "Use document_list to see the open documents.");
+    },
+    [](ServerState& state, Session&) {
+      auto entries = std::vector<Json>{};
+      for (const auto& document : state.host.documents())
+      {
+        entries.push_back(Json{
+          {"uri", "trenchbroom://documents/" + document.id + "/info"},
+          {"name", "document-info-" + document.id},
+          {"title", "Document Info: " + document.windowTitle},
+          {"mimeType", "application/json"},
+        });
+      }
+      return entries;
+    },
+  });
+
+  resources.addTemplate(ResourceTemplateDef{
+    "trenchbroom://games/{game}/config",
+    "game-config",
+    "Game Configuration",
+    "A game's configuration: map formats, file system, material setup, entity "
+    "definition files, smart tags, surface and content flags, soft bounds and compile "
+    "tools ({game} is the percent-encoded game name, e.g. Quake%202). Updated when the "
+    "game folder changes.",
+    "application/json",
+    [](ServerState& state, Session&, const std::string& uri, const auto& vars)
+      -> Result<Json, ToolError> {
+      const auto gameName = percentDecode(vars.at("game"));
+      const auto* gameInfo = gameName ? findGame(state.host, *gameName) : nullptr;
+      if (!gameInfo)
+      {
+        return unknownGameError(state.host, gameName.value_or(vars.at("game")));
+      }
+      return jsonResourceContents(uri, gameConfigJson(*gameInfo));
+    },
+    [](ServerState& state, Session&) {
+      // only the games of open documents, to keep the list short
+      auto names = std::vector<std::string>{};
+      for (const auto& document : state.host.documents())
+      {
+        const auto& name = document.document->map().gameInfo().gameConfig.name;
+        if (std::ranges::find(names, name) == names.end())
+        {
+          names.push_back(name);
+        }
+      }
+
+      auto entries = std::vector<Json>{};
+      for (const auto& name : names)
+      {
+        entries.push_back(Json{
+          {"uri", gameConfigUri(name)},
+          {"name", "game-config-" + percentEncode(name)},
+          {"title", "Game Configuration: " + name},
+          {"mimeType", "application/json"},
+        });
+      }
+      return entries;
     },
   });
 

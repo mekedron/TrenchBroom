@@ -39,7 +39,10 @@ The design is described in `docs/mcp/05-technical-design.md`.
      `AI: <title>`, rolled back on error or dry run; `dryRun` and `document` are added
      to the input automatically),
    - `Mutation::External` for non-undoable side effects (the handler must honor
-     `context.dryRun()`).
+     `context.dryRun()`). Long operations use `.asyncHandler(...)` instead of `.handler(...)`:
+     they report progress with `context.progress`, continue in steps scheduled with
+     `context.defer`, check `context.cancelled()` between steps, and call the completion once
+     (see `document_open`).
 3. Change the map only through the `mdl::` free functions (`Map_*.h`). Use
    `resolveTargets` / `withTargets` (`Targets.h`) for tools that act on "ids or the
    current selection", `context.ids()` to format and resolve object ids, and return
@@ -58,8 +61,12 @@ The design is described in `docs/mcp/05-technical-design.md`.
 - `ChangeCollector`: created / modified / removed ids and introduced issues of a call.
 - `Pagination`: cursors, limits and field selection for list tools.
 - `CallLog`: the ring buffer behind `session_log` plus sinks (console, JSONL file).
-- `Host`: the editor as seen by the server (`McpHost`). The editor implements it in
-  `TbUiLib` (`QtMcpHost`); tests use `FakeHost` from `TbMcpTestUtilsLib`.
+- `Host`: the editor as seen by the server (`McpHost`, with the `DocumentHost` sub-interface
+  that creates, loads and closes documents). The editor implements it in `TbUiLib`
+  (`QtMcpHost`); tests use `FakeHost` from `TbMcpTestUtilsLib`.
+- `LogCapture`: records the warnings and errors the editor logs during a call or while a
+  document loads.
+- `src/tools/ToolUtils`: small helpers shared by the tool files (game lookup, paths, times).
 
 ## Tests
 

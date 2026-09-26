@@ -23,6 +23,7 @@
 
 #include "mcp/Host.h"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -45,7 +46,7 @@ std::optional<std::string> activeModalToolName(const MapViewToolBox& toolBox);
  * Implements the MCP server's view of the editor using the application controller and its
  * map windows.
  */
-class QtMcpHost : public QObject, public mcp::McpHost
+class QtMcpHost : public QObject, public mcp::McpHost, public mcp::DocumentHost
 {
   Q_OBJECT
 private:
@@ -67,8 +68,22 @@ public: // mcp::McpHost
   std::vector<std::string> prepareForAgentEdit(MapDocument& document) override;
   std::optional<std::string> currentToolName(MapDocument& document) override;
   bool isCompileRunning(MapDocument& document) override;
+  mcp::DocumentHost& documentHost() override;
+  mdl::GameManager& gameManager() override;
+
+public: // mcp::DocumentHost
+  std::optional<mcp::DocumentInfo> documentToReplace() override;
+  Result<mcp::OpenedDocument> createDocument(
+    const mdl::GameInfo& gameInfo, mdl::MapFormat mapFormat) override;
+  Result<mcp::OpenedDocument> loadDocument(
+    const mdl::GameInfo& gameInfo,
+    mdl::MapFormat mapFormat,
+    const std::filesystem::path& path) override;
+  void closeDocument(MapDocument& document) override;
+  std::vector<std::filesystem::path> recentDocuments() override;
 
 private:
+  mcp::DocumentInfo documentInfo(const MapDocument& document);
   void assignDocumentIds();
   size_t documentId(const MapDocument& document);
 

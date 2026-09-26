@@ -33,6 +33,7 @@
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
+#include "mdl/NodeContents.h"
 #include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
@@ -71,8 +72,57 @@ ToolResult addEntity(CallContext& context, const Args& args)
   return Json{{"entity", context.ids().format(*entityNode)}};
 }
 
+ToolResult setWorldMessage(CallContext& context, const Args& args)
+{
+  auto& map = context.map();
+  auto entity = map.worldNode().entity();
+  entity.addOrUpdateProperty("message", args.get<std::string>("message"));
+  mdl::updateNodeContents(
+    map, "Set Message", {{&map.worldNode(), mdl::NodeContents{std::move(entity)}}});
+  return Json::object();
+}
+
+/** Runs two deferred steps; fails or throws in the second step if asked to. */
+void asyncSteps(CallContext& context, const Args& args, ToolCompletion completion)
+{
+  const auto throwInStep = args.get<bool>("throw");
+  context.progress(0, 2, "first step");
+  context.defer([&context, completion, throwInStep]() {
+    if (context.cancelled())
+    {
+      completion(makeError(ErrorCode::Cancelled, "cancelled"));
+      return;
+    }
+    context.progress(1, 2, "second step");
+    context.defer([&context, completion, throwInStep]() {
+      if (throwInStep)
+      {
+        throw std::runtime_error{"boom"};
+      }
+      context.warn("TEST_WARNING", "async warning");
+      completion(Json{
+        {"steps", 2},
+        {"document",
+         context.hasDocument() ? Json(context.documentInfo().id) : Json(nullptr)}});
+    });
+  });
+}
+
 void registerTestTools(McpServer& server)
 {
+  server.tools().add(ToolDef{"test_set_message"}
+                       .title("Set Message")
+                       .input(object({field("message", string()).required()}))
+                       .mutation(Mutation::Map)
+                       .handler(setWorldMessage));
+
+  server.tools().add(ToolDef{"test_async"}
+                       .title("Async")
+                       .input(object({field("throw", boolean().defaultsTo(false))}))
+                       .mutation(Mutation::External)
+                       .documentUse(DocumentUse::Optional)
+                       .asyncHandler(asyncSteps));
+
   server.tools().add(ToolDef{"test_add_entity"}
                        .title("Add Test Entity")
                        .input(object({
@@ -406,6 +456,102 @@ TEST_CASE("CallRunner")
       fixture.host().removeDocument(other);
       CHECK(fixture.callExpectingError("test_add_entity").code == ErrorCode::NoDocument);
       CHECK(fixture.call("test_read")["document"].is_null());
+    }
+  }
+
+  SECTION("consecutive calls changing the same object are separate undo steps")
+  {
+    map.setIsCommandCollationEnabled(true);
+
+    fixture.call("test_set_message", Json{{"message", "a"}});
+    fixture.call("test_set_message", Json{{"message", "b"}});
+    CHECK(map.commandProcessor().undoCommandNames().size() == 2);
+    CHECK(map.isCommandCollationEnabled());
+  }
+
+  SECTION("asynchronous calls")
+  {
+    SECTION("complete in steps and report progress")
+    {
+      auto stream = fixture.post(
+        fixture.sessionId(),
+        jsonrpc::makeRequest(
+          500,
+          "tools/call",
+          Json{
+            {"name", "test_async"},
+            {"arguments", Json::object()},
+            {"_meta", Json{{"progressToken", 7}}},
+          }));
+      CHECK(!stream->response.has_value());
+      CHECK(stream->notifications.size() == 1);
+
+      // a modifying call waits in the queue until the asynchronous call is done
+      auto queued =
+        fixture.post(fixture.sessionId(), callRequest(501, "test_add_entity"));
+      CHECK(!queued->response.has_value());
+
+      fixture.scheduler().runPending();
+      REQUIRE(stream->response.has_value());
+      const auto& result = (*stream->response)["result"]["structuredContent"];
+      CHECK(result["ok"] == true);
+      CHECK(result["undoStep"].is_null());
+      CHECK(result["result"]["steps"] == 2);
+      CHECK(result["result"]["document"] == fixture.documentId(document));
+      CHECK(result["warnings"][0]["code"] == "TEST_WARNING");
+      CHECK(result["grid"] == 16.0);
+      CHECK(stream->notifications.size() == 2);
+
+      REQUIRE(queued->response.has_value());
+      CHECK(entityCount(document) == 1);
+      CHECK(fixture.server().callLog().entries().front().tool == "test_async");
+    }
+
+    SECTION("can be cancelled between steps")
+    {
+      auto stream = fixture.post(fixture.sessionId(), callRequest(510, "test_async"));
+      fixture.post(
+        fixture.sessionId(),
+        jsonrpc::makeNotification("notifications/cancelled", Json{{"requestId", 510}}));
+      fixture.scheduler().runPending();
+
+      REQUIRE(stream->response.has_value());
+      CHECK(
+        (*stream->response)["result"]["structuredContent"]["error"]["code"]
+        == "CANCELLED");
+    }
+
+    SECTION("are abandoned when the session closes")
+    {
+      auto stream = fixture.post(fixture.sessionId(), callRequest(520, "test_async"));
+      fixture.server().deleteSession(fixture.sessionId());
+
+      REQUIRE(stream->response.has_value());
+      CHECK(
+        (*stream->response)["result"]["structuredContent"]["error"]["code"]
+        == "CANCELLED");
+      // the remaining steps are dropped
+      fixture.scheduler().runPending();
+    }
+
+    SECTION("fail when the document is closed meanwhile")
+    {
+      auto stream = fixture.post(fixture.sessionId(), callRequest(530, "test_async"));
+      fixture.host().removeDocument(document);
+      fixture.scheduler().runPending();
+
+      REQUIRE(stream->response.has_value());
+      CHECK(
+        (*stream->response)["result"]["structuredContent"]["error"]["code"]
+        == "DOCUMENT_NOT_FOUND");
+    }
+
+    SECTION("exceptions in a step become INTERNAL_ERROR")
+    {
+      const auto error = fixture.callExpectingError("test_async", Json{{"throw", true}});
+      CHECK(error.code == ErrorCode::InternalError);
+      // the queue continues
+      fixture.call("test_add_entity");
     }
   }
 

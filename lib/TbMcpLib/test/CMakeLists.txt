@@ -8,7 +8,9 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Errors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpResponse.cpp
@@ -39,6 +41,7 @@ target_link_libraries(TbMcpLibTest
     TbMcpTestUtilsLib
     TbAppTestUtilsLib
     TbBaseTestUtilsLib
+    TbFsTestUtilsLib
     TbMdlTestUtilsLib
 )
 

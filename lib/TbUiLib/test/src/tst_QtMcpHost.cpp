@@ -38,6 +38,7 @@
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
 #include "ui/QtMcpHost.h"
+#include "ui/RecentDocuments.h"
 #include "ui/Tool.h"
 #include "ui/ToolChain.h"
 #include "ui/ToolController.h"
@@ -319,6 +320,63 @@ TEST_CASE("QtMcpHost")
     }
 
     closeAllMapWindows(appController);
+  }
+
+  SECTION("gameManager")
+  {
+    CHECK(&host.gameManager() == &appController.gameManager());
+  }
+
+  SECTION("documentHost")
+  {
+    auto& documentHost = host.documentHost();
+
+    SECTION("documentToReplace")
+    {
+      CHECK(!documentHost.documentToReplace());
+
+      auto& window = createMapWindow(appController);
+      const auto replaced = documentHost.documentToReplace();
+      CHECK(replaced.has_value() == AppController::useSDI);
+      if (replaced)
+      {
+        CHECK(replaced->document == &window.document());
+      }
+
+      closeAllMapWindows(appController);
+    }
+
+    // createDocument and loadDocument show a window, which needs OpenGL; the offscreen
+    // platform used for the tests does not support it. The tool logic is covered by
+    // TbMcpLibTest with FakeHost.
+
+    SECTION("closeDocument discards unsaved changes without asking")
+    {
+      auto closedDocuments = std::vector<const MapDocument*>{};
+      auto connection = host.documentWillCloseNotifier.connect(
+        [&](auto& document) { closedDocuments.push_back(&document); });
+
+      auto& window = createMapWindow(appController);
+      auto& document = window.document();
+      auto& map = document.map();
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {mdl::createBrushNode(map)}}});
+      REQUIRE(map.modified());
+
+      documentHost.closeDocument(document);
+      // the document is still alive until the event loop deletes the window
+      CHECK(closedDocuments == std::vector<const MapDocument*>{&document});
+      CHECK(host.documents().empty());
+
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      CHECK(appController.mapWindowManager().allMapWindowsClosed());
+    }
+
+    SECTION("recentDocuments")
+    {
+      CHECK(
+        documentHost.recentDocuments()
+        == appController.recentDocuments().recentDocuments());
+    }
   }
 
   SECTION("isCompileRunning")

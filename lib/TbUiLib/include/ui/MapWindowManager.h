@@ -88,6 +88,15 @@ public:
    */
   void addMapWindow(MapWindow* mapWindow);
 
+  /**
+   * Whether a new or loaded document gets its own window. Otherwise, it replaces the
+   * document of the top window (single window mode).
+   */
+  bool shouldCreateWindowForDocument() const;
+
+  /** Creates, registers and shows a window for the given document. */
+  MapWindow* createMapWindow(std::unique_ptr<MapDocument> document);
+
 signals:
   /**
    * Emitted when the given window is about to close, before its document is destroyed.
@@ -103,8 +112,6 @@ signals:
 private:
   void onFocusChange(QWidget* old, QWidget* now);
 
-  bool shouldCreateWindowForDocument() const;
-  MapWindow* createMapWindow(std::unique_ptr<MapDocument> document);
   void removeMapWindow(MapWindow* mapWindow);
 
   friend class MapWindow;

@@ -131,18 +131,44 @@ const std::optional<std::string>& CallContext::undoStep() const
   return m_undoStep;
 }
 
-void CallContext::setCapturedMessages(const std::vector<std::string>* messages)
+void CallContext::setLogCapture(const ScopedLogCapture* logCapture)
 {
-  m_capturedMessages = messages;
+  m_logCapture = logCapture;
+}
+
+std::vector<LogMessage> CallContext::loggedProblems() const
+{
+  return m_logCapture ? m_logCapture->messages() : std::vector<LogMessage>{};
+}
+
+bool CallContext::cancelled() const
+{
+  return m_cancelled;
+}
+
+void CallContext::cancel()
+{
+  m_cancelled = true;
+}
+
+void CallContext::defer(std::function<void()> step)
+{
+  contract_pre(m_deferrer != nullptr);
+  m_deferrer(std::move(step));
+}
+
+void CallContext::setDeferrer(Deferrer deferrer)
+{
+  m_deferrer = std::move(deferrer);
 }
 
 ToolError CallContext::operationFailed(std::string message, std::string hint) const
 {
   auto error = makeError(ErrorCode::OperationFailed, std::move(message), std::move(hint));
-  if (m_capturedMessages && !m_capturedMessages->empty())
+  if (m_logCapture && !m_logCapture->texts().empty())
   {
-    error.details["editorMessages"] = *m_capturedMessages;
-    error.message += " Editor said: " + m_capturedMessages->back();
+    error.details["editorMessages"] = m_logCapture->texts();
+    error.message += " Editor said: " + m_logCapture->texts().back();
   }
   return error;
 }

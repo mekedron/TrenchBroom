@@ -21,6 +21,7 @@
 
 #include <QApplication>
 
+#include "gl/GlManager.h"
 #include "mdl/Map.h"
 #include "ui/AppController.h"
 #include "ui/GetVersion.h"
@@ -28,7 +29,9 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
+#include "ui/RecentDocuments.h"
 
+#include "kd/contracts.h"
 #include "kd/ranges/to.h"
 
 #include <fmt/format.h>
@@ -217,6 +220,121 @@ bool QtMcpHost::isCompileRunning(MapDocument& document)
 {
   const auto* mapWindow = findMapWindow(document);
   return mapWindow && mapWindow->compilationRunning();
+}
+
+mcp::DocumentHost& QtMcpHost::documentHost()
+{
+  return *this;
+}
+
+mdl::GameManager& QtMcpHost::gameManager()
+{
+  return m_appController.gameManager();
+}
+
+std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()
+{
+  const auto& mapWindowManager = m_appController.mapWindowManager();
+  if (mapWindowManager.shouldCreateWindowForDocument())
+  {
+    return std::nullopt;
+  }
+
+  const auto* mapWindow = mapWindowManager.topMapWindow();
+  return mapWindow ? std::optional{documentInfo(mapWindow->document())} : std::nullopt;
+}
+
+Result<mcp::OpenedDocument> QtMcpHost::createDocument(
+  const mdl::GameInfo& gameInfo, const mdl::MapFormat mapFormat)
+{
+  auto& mapWindowManager = m_appController.mapWindowManager();
+  if (const auto replaced = documentToReplace())
+  {
+    // single window mode: the document is recreated in place, logging to its console
+    const auto capture = mcp::ScopedLogCapture{*replaced->document};
+    return mapWindowManager.createDocument(
+             gameInfo, mapFormat, MapDocument::DefaultWorldBounds)
+           | kdl::transform([&]() {
+               return mcp::OpenedDocument{
+                 documentInfo(*replaced->document), capture.messages()};
+             });
+  }
+
+  return MapDocument::createDocument(
+           m_appController.environmentConfig(),
+           gameInfo,
+           mapFormat,
+           MapDocument::DefaultWorldBounds,
+           m_appController.taskManager(),
+           m_appController.glManager().resourceManager())
+         | kdl::transform([&](auto document) {
+             // the new document caches its messages until its window's console shows
+             // them
+             auto messages = mcp::collectCachedMessages(*document);
+             auto* mapWindow = mapWindowManager.createMapWindow(std::move(document));
+             return mcp::OpenedDocument{
+               documentInfo(mapWindow->document()), std::move(messages)};
+           });
+}
+
+Result<mcp::OpenedDocument> QtMcpHost::loadDocument(
+  const mdl::GameInfo& gameInfo,
+  const mdl::MapFormat mapFormat,
+  const std::filesystem::path& path)
+{
+  auto& mapWindowManager = m_appController.mapWindowManager();
+  if (const auto replaced = documentToReplace())
+  {
+    const auto capture = mcp::ScopedLogCapture{*replaced->document};
+    return mapWindowManager.loadDocument(
+             gameInfo, mapFormat, MapDocument::DefaultWorldBounds, path)
+           | kdl::transform([&]() {
+               return mcp::OpenedDocument{
+                 documentInfo(*replaced->document), capture.messages()};
+             });
+  }
+
+  return MapDocument::loadDocument(
+           m_appController.environmentConfig(),
+           gameInfo,
+           mapFormat,
+           MapDocument::DefaultWorldBounds,
+           path,
+           m_appController.taskManager(),
+           m_appController.glManager().resourceManager())
+         | kdl::transform([&](auto document) {
+             auto messages = mcp::collectCachedMessages(*document);
+             auto* mapWindow = mapWindowManager.createMapWindow(std::move(document));
+             return mcp::OpenedDocument{
+               documentInfo(mapWindow->document()), std::move(messages)};
+           });
+}
+
+void QtMcpHost::closeDocument(MapDocument& document)
+{
+  if (auto* mapWindow = findMapWindow(document))
+  {
+    // the window is deleted later, when control returns to the event loop
+    mapWindow->closeWithoutConfirmation();
+  }
+}
+
+std::vector<std::filesystem::path> QtMcpHost::recentDocuments()
+{
+  return m_appController.recentDocuments().recentDocuments();
+}
+
+mcp::DocumentInfo QtMcpHost::documentInfo(const MapDocument& document)
+{
+  for (auto& info : documents())
+  {
+    if (info.document == &document)
+    {
+      return info;
+    }
+  }
+  contract_assert(false);
+  return {};
 }
 
 void QtMcpHost::assignDocumentIds()

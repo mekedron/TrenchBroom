@@ -15,6 +15,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LogCapture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Pagination.cpp
@@ -31,8 +32,12 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.h
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -50,6 +55,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Json.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonRpc.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonVm.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/LogCapture.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/McpServer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ObjectIds.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Pagination.h
@@ -66,6 +72,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/StreamableHttp.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
 )

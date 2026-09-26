@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-26 · Status: Accepted (E1.1), implemented for E1 (see §13) · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-26 · Status: Accepted (E1.1), implemented for E1 and E2 (see §13) · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint for the MCP server. Every decision below is final unless a later
 design note replaces it. Implementation agents follow it literally. When the code disagrees
@@ -879,3 +879,91 @@ They are binding for later epics in the same way as the rest of this document.
 - A headless smoke test of the real editor works with `QT_QPA_PLATFORM=offscreen` and an isolated
   `HOME` whose `Preferences.json` sets `"updater/Ask for auto updates": false` (otherwise a modal update
   question blocks start-up before `--mcp-server` is processed).
+
+### 13.6 Implementation notes (E2, as built)
+
+**Host.** `McpHost` got `documentHost()` and `gameManager()`. `DocumentHost` (in `Host.h`) has
+`documentToReplace()` (the document a new or loaded one replaces in single-window mode, else
+nullopt), `createDocument(gameInfo, format)`, `loadDocument(gameInfo, format, path)` (format
+`Unknown` = detect), `closeDocument(document)` (no questions, discards changes; the
+`MapDocument` object must stay alive until control returns to the event loop) and
+`recentDocuments()`. Create/load return `OpenedDocument{DocumentInfo, messages}` with the
+warnings and errors logged while loading. There is no `PreferenceHost` yet: `game_set_path` uses
+`setPref` on the game's `gamePathPreference` directly (Qt-free; open documents react through
+their preference observer). Game and format detection (`readMapHeader`) happens in the core.
+
+- `QtMcpHost` implements `DocumentHost`. New documents are built with
+  `MapDocument::createDocument/loadDocument` and shown with `MapWindowManager::createMapWindow`
+  (now public, as is `shouldCreateWindowForDocument`); in single-window mode the top window's
+  document is recreated in place. `closeDocument` calls the new
+  `MapWindow::closeWithoutConfirmation()`. Agent-created documents do not close the welcome
+  window. Creating and loading are not covered by `TbUiLibTest` because showing a map window
+  needs OpenGL, which the offscreen test platform lacks.
+- `FakeHost` implements `DocumentHost` with its own task and resource managers and a
+  `GameManager` with the games "Test", "Quake" and "Quake 2" (the real configurations from the
+  fixture's `games/` folder, game paths in `test/mdl/Game/`). `singleWindow` simulates
+  single-window mode; `recentDocumentList` is the recent list; closed documents stay alive.
+  `McpToolFixture::call*` run pending scheduler tasks until an asynchronous call completes.
+
+**Log capture.** `CapturingLogger`/`ScopedLogCapture` moved from `CallRunner.cpp` to
+`LogCapture.h`, plus `LogMessage` and `collectCachedMessages(document)` (reads the messages a
+document without a target logger has cached, and caches them again for its console).
+`CallContext::setCapturedMessages` became `setLogCapture`; `loggedProblems()` returns the warnings
+and errors logged for the target document during the call.
+
+**Asynchronous tools (§4.2, E2.16).** `ToolDef::asyncHandler(fn)` with
+`fn(CallContext&, const Args&, ToolCompletion)`; only for `Mutation::External` tools, which go
+through the queue: the queue waits until the call completes. The handler continues in steps
+scheduled with `CallContext::defer` and checks `CallContext::cancelled()` between them.
+`notifications/cancelled` for a running asynchronous call sets that flag (cooperative); closing
+the session or **Stop agent** abandons it with `CANCELLED` and drops its pending steps; if its
+target document closes meanwhile, it fails with `DOCUMENT_NOT_FOUND`; an exception in a step
+becomes `INTERNAL_ERROR`. `document_open`, `entity_definitions_reload` and `materials_reload`
+are asynchronous: they emit progress, then load/reload in a deferred step, so a cancellation sent
+meanwhile is honored. The load itself is synchronous and cannot be interrupted.
+
+**Undo collation (X2 fix).** `CommandProcessor` collates a transaction with the previous one when
+their first commands collate (e.g. two consecutive worldspawn changes within the collation
+interval), which merged two agent calls into one undo step. `CallRunner` now disables collation
+while it commits a call's transaction.
+
+**Document tools** (`DocumentTools.cpp`):
+- All paths are absolute (`INVALID_ARGUMENT` otherwise); the server does not create folders.
+- `unsavedChanges: "error" | "save" | "discard"` (default `"error"` → `UNSAVED_CHANGES`) on
+  `document_close`, `document_revert`, and on `document_new` / `document_open` when they replace a
+  document (single-window mode). `"save"` fails for a never-saved document.
+- `document_new` / `document_open` make the new document the session's active document.
+  `document_new` reports the game's `initialMap` template for the format (or null).
+- `document_open` reads game and format from the header comments; explicit `game` / `format`
+  override them; a missing format is detected by the loader (`formatSource: "detected"`). A file
+  that is already open is returned with `alreadyOpen: true` instead of opening it twice.
+  `loadMessages` lists the warnings and errors logged while loading.
+- `document_revert` reloads from disk (`idsInvalidated: true`); `document_close` refuses while a
+  compilation runs.
+- `document_save_as` accepts the document's own path without `overwrite`, and warns
+  (`UNUSUAL_EXTENSION`) for paths not ending in `.map`. Exports refuse the document's own path.
+- `map_files_list` matches a case-insensitive glob (default `*.map`), optionally recursive,
+  sorted naturally. `autosave_list` lists `<map dir>/autosave/<name>.<n>.map`, newest first.
+
+**Game tools** (`GameTools.cpp`):
+- `game_info` without `game` describes the active document's game; smart tags are reported with
+  their name, attributes and a textual definition.
+- `mods_set`, `entity_definitions_set`, `materials_collections_set` and `soft_bounds_set` are
+  `Mutation::Map` (worldspawn changes, one undo step each); the resulting reload problems become
+  warnings (`LOAD_WARNING` / `LOAD_ERROR`). Unknown values are warnings (X14): `UNKNOWN_MOD`,
+  `DEFAULT_MOD`, `FILE_NOT_FOUND`, `UNKNOWN_COLLECTION`, `BOUNDS_OUTSIDE_WORLD`.
+- `materials_collections_set` takes `wads` (the ordered WAD list; WAD games only, else
+  `UNSUPPORTED`) and/or `enabled` (enabled collection paths, any game).
+  `entity_definitions_set` takes `type: "builtin" | "external"` and `path`.
+- `soft_bounds_*` use `mode: "game" | "unlimited" | "custom"` with `bounds` for custom.
+- Shared helpers (game lookup, ISO times, absolute path arguments, percent-encoding) are in
+  `src/tools/ToolUtils.{h,cpp}`. `documentInfo()` (DocumentTools.h) and `gameConfigJson()`,
+  `modsJson()`, `entityDefinitionsJson()`, `materialsJson()`, `softBoundsJson()`
+  (GameTools.h) are shared with the resources.
+
+**Resources.** `trenchbroom://documents/{doc}/info` (template; one entry per open document;
+subscribers are notified when the document is saved, loaded, its modified flag flips, or mods,
+entity definitions, materials or worldspawn change) and `trenchbroom://games/{game}/config`
+(template; `{game}` is the percent-encoded game name; listed for the games of open documents;
+notified by `game_set_path`). `ServerState` now creates a `DocumentState` for every open document
+when the document list changes, so subscriptions work before any tool touched a document.

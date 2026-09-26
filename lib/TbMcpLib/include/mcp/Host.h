@@ -20,15 +20,28 @@
 #pragma once
 
 #include "base/Notifier.h"
+#include "base/Result.h"
+#include "mcp/LogCapture.h"
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
-namespace tb::ui
+namespace tb
+{
+namespace mdl
+{
+class GameManager;
+struct GameInfo;
+enum class MapFormat;
+} // namespace mdl
+
+namespace ui
 {
 class MapDocument;
 }
+} // namespace tb
 
 namespace tb::mcp
 {
@@ -49,6 +62,55 @@ struct DocumentInfo
   std::string windowTitle;
   /** Whether the document's window is the focused (or most recently focused) window. */
   bool focused = false;
+};
+
+/** A document that the host created or loaded, with the messages it logged meanwhile. */
+struct OpenedDocument
+{
+  DocumentInfo document;
+  /** Warnings and errors logged while the document was created or loaded. */
+  std::vector<LogMessage> messages;
+};
+
+/**
+ * Creates, loads and closes documents without showing dialogs. Implemented by the host.
+ */
+class DocumentHost
+{
+public:
+  virtual ~DocumentHost();
+
+  /**
+   * The document that a new or loaded document replaces instead of opening a new window
+   * (single window mode), or nullopt if new documents get their own window.
+   */
+  virtual std::optional<DocumentInfo> documentToReplace() = 0;
+
+  /**
+   * Creates a new document for the given game and format and shows it. The new
+   * document's window gets the focus.
+   */
+  virtual Result<OpenedDocument> createDocument(
+    const mdl::GameInfo& gameInfo, mdl::MapFormat mapFormat) = 0;
+
+  /**
+   * Loads the given map file and shows it. MapFormat::Unknown detects the format. The
+   * new document's window gets the focus.
+   */
+  virtual Result<OpenedDocument> loadDocument(
+    const mdl::GameInfo& gameInfo,
+    mdl::MapFormat mapFormat,
+    const std::filesystem::path& path) = 0;
+
+  /**
+   * Closes the given document without asking the user, discarding unsaved changes. The
+   * host fires documentWillCloseNotifier. The document object must stay alive until
+   * control returns to the event loop, because the calling tool may still refer to it.
+   */
+  virtual void closeDocument(ui::MapDocument& document) = 0;
+
+  /** The recently opened map files, most recent first. */
+  virtual std::vector<std::filesystem::path> recentDocuments() = 0;
 };
 
 /**
@@ -101,6 +163,12 @@ public:
 
   /** Whether a compilation is running for the given document. */
   virtual bool isCompileRunning(ui::MapDocument& document) = 0;
+
+  /** Creates, loads and closes documents. */
+  virtual DocumentHost& documentHost() = 0;
+
+  /** The configured games. */
+  virtual mdl::GameManager& gameManager() = 0;
 };
 
 } // namespace tb::mcp

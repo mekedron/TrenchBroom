@@ -21,6 +21,8 @@
 
 #include "mcp/McpServer.h"
 #include "mcp/Resources.h"
+#include "mcp/tools/DocumentTools.h"
+#include "mcp/tools/GameTools.h"
 #include "mcp/tools/HistoryTools.h"
 #include "mcp/tools/SessionTools.h"
 
@@ -31,6 +33,8 @@ void registerAll(McpServer& server)
 {
   registerSessionTools(server.tools());
   registerHistoryTools(server.tools());
+  registerDocumentTools(server.tools());
+  registerGameTools(server.tools());
   registerResources(server);
 }
 

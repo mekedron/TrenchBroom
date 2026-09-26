@@ -189,9 +189,25 @@ bool ToolDef::openWorld() const
   return m_openWorld;
 }
 
+ToolDef& ToolDef::asyncHandler(AsyncToolHandler handler)
+{
+  m_asyncHandler = std::move(handler);
+  return *this;
+}
+
 const ToolHandler& ToolDef::handler() const
 {
   return m_handler;
+}
+
+const AsyncToolHandler& ToolDef::asyncHandler() const
+{
+  return m_asyncHandler;
+}
+
+bool ToolDef::isAsync() const
+{
+  return m_asyncHandler != nullptr;
 }
 
 bool ToolDef::isModifying() const
@@ -293,7 +309,8 @@ void ToolRegistry::add(ToolDef tool)
 {
   contract_pre(isValidToolName(tool.name()));
   contract_pre(find(tool.name()) == nullptr);
-  contract_pre(tool.handler() != nullptr);
+  contract_pre((tool.handler() != nullptr) != (tool.asyncHandler() != nullptr));
+  contract_pre(!tool.isAsync() || tool.mutation() == Mutation::External);
 
   m_tools.push_back(std::move(tool));
 }

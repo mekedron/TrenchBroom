@@ -117,6 +117,8 @@ private:
 
   std::optional<std::string> m_lastCompilationProfileName;
 
+  bool m_closeWithoutConfirmation = false;
+
   NotifierConnection m_notifierConnection;
 
 private: // shortcuts
@@ -209,6 +211,12 @@ private: // menu event handlers
   void bindEvents();
 
 public:
+  /**
+   * Closes the window without asking whether to save unsaved changes, which are
+   * discarded. Returns whether the window was closed.
+   */
+  bool closeWithoutConfirmation();
+
   bool saveDocument();
   bool saveDocumentAs();
   void revertDocument();

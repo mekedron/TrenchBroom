@@ -992,6 +992,14 @@ void MapWindow::bindEvents()
     &MapWindow::updateStatusBar);
 }
 
+bool MapWindow::closeWithoutConfirmation()
+{
+  m_closeWithoutConfirmation = true;
+  const auto closed = close();
+  m_closeWithoutConfirmation = false;
+  return closed;
+}
+
 bool MapWindow::saveDocument()
 {
   auto& map = m_document->map();
@@ -2489,7 +2497,8 @@ void MapWindow::changeEvent(QEvent*)
 
 void MapWindow::closeEvent(QCloseEvent* event)
 {
-  if (!closeCompileDialog() || !confirmOrDiscardChanges())
+  if (
+    !closeCompileDialog() || (!m_closeWithoutConfirmation && !confirmOrDiscardChanges()))
   {
     event->ignore();
     return;

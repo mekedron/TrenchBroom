@@ -17,13 +17,30 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/Host.h"
+#pragma once
+
+#include "mcp/Json.h"
 
 namespace tb::mcp
 {
+struct DocumentInfo;
+class ServerState;
+class Session;
+class ToolRegistry;
 
-DocumentHost::~DocumentHost() = default;
+/**
+ * Registers document_new, document_open, document_save, document_save_as,
+ * document_close, document_revert, document_recent, map_files_list,
+ * document_export_map, document_export_obj and autosave_list.
+ */
+void registerDocumentTools(ToolRegistry& registry);
 
-McpHost::~McpHost() = default;
+/**
+ * The detailed description of an open document: the summary of document_list plus game
+ * path, world bounds, mods, entity definitions, material collections and soft bounds.
+ * Used by the document tools and the trenchbroom://documents/{doc}/info resource.
+ */
+Json documentInfo(
+  ServerState& server, const DocumentInfo& document, const Session& session);
 
 } // namespace tb::mcp

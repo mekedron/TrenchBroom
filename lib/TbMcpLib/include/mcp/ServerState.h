@@ -68,9 +68,20 @@ public:
 
 private:
   NotifierConnection m_notifierConnection;
+  std::function<void()> m_infoDidChange;
+  bool m_lastModified = false;
 
 public:
-  explicit DocumentState(ui::MapDocument& document);
+  /**
+   * The callback is called when the document info (trenchbroom://documents/{doc}/info)
+   * may have changed: saved, loaded, modified flag, mods, entity definitions, materials
+   * or worldspawn changed.
+   */
+  explicit DocumentState(
+    ui::MapDocument& document, std::function<void()> infoDidChange = {});
+
+private:
+  void infoDidChange();
 };
 
 /**
@@ -150,6 +161,7 @@ public:
 private:
   void documentWillClose(ui::MapDocument& document);
   void documentsDidChange();
+  void documentInfoDidChange(ui::MapDocument& document);
 };
 
 } // namespace tb::mcp
