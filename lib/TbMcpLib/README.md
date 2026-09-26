@@ -67,6 +67,9 @@ The design is described in `docs/mcp/05-technical-design.md`.
 - `LogCapture`: records the warnings and errors the editor logs during a call or while a
   document loads.
 - `src/tools/ToolUtils`: small helpers shared by the tool files (game lookup, paths, times).
+- `src/tools/GeometryUtils`: helpers of the geometry, brush editing and transform tools
+  (brush builder with game defaults, material argument, world bounds and validity errors,
+  `intersectsInterior`, non-integer vertex warnings, `ScopedLockOverride`).
 - `src/tools/NodeJson`: the shared JSON descriptions of objects and faces (`nodeSummary`,
   `nodeState`, `faceJson`); list and query tools use them so that all tools describe objects
   the same way.

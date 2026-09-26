@@ -795,11 +795,18 @@ bool csgIntersect(Map& map)
   return transaction.commit();
 }
 
-bool csgHollow(Map& map)
+bool csgHollow(Map& map, const std::optional<double> thickness)
 {
   const auto brushNodes = map.selection().brushes;
   if (brushNodes.empty())
   {
+    return false;
+  }
+
+  const auto hollowWallThickness = thickness.value_or(double(map.grid().actualSize()));
+  if (hollowWallThickness <= 0.0)
+  {
+    map.logger().error() << "Could not hollow brushes: thickness must be positive";
     return false;
   }
 
@@ -812,7 +819,7 @@ bool csgHollow(Map& map)
     const auto& originalBrush = brushNode->brush();
 
     auto shrunkenBrush = originalBrush;
-    shrunkenBrush.expand(map.worldBounds(), -double(map.grid().actualSize()), true)
+    shrunkenBrush.expand(map.worldBounds(), -hollowWallThickness, true)
       | kdl::and_then([&]() {
           didHollowAnything = true;
 

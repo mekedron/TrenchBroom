@@ -13,7 +13,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E1 | Server foundation and editor integration | §1, §2, §14 | MVP | Done |
 | E2 | Documents, games and assets | §3, §4 | MVP + v1 | Done |
 | E3 | Scene inspection, selection and resources | §5, §6, §21 | MVP + v1 | Done |
-| E4 | Geometry: creation, transforms, editing, CSG | §7, §8, §9 | MVP + v1 | Not started |
+| E4 | Geometry: creation, transforms, editing, CSG | §7, §8, §9 | MVP + v1 | Done |
 | E5 | Entities, NPCs and models | §10 | MVP + v1 | Not started |
 | E6 | Materials, UV and face attributes | §11 | MVP + v1 | Not started |
 | E7 | Organization, clipboard and import | §12, §13 | v1 | Not started |
@@ -123,28 +123,28 @@ Goal: the agent can build and reshape any brush geometry the editor can.
 
 **Creation**
 
-- [ ] E4.1 `brush_create_box`.
-- [ ] E4.2 `brush_create_shape`: stairs, arch, cylinder (hollow), cone, UV sphere, icosphere, with all shape tool parameters.
-- [ ] E4.3 `brush_create_hull`.
-- [ ] E4.4 `room_create`, `opening_cut` (convenience builders).
+- [x] E4.1 `brush_create_box`.
+- [x] E4.2 `brush_create_shape`: stairs, arch, cylinder (hollow), cone, UV sphere, icosphere, with all shape tool parameters.
+- [x] E4.3 `brush_create_hull`.
+- [x] E4.4 `room_create`, `opening_cut` (convenience builders).
 
 **Transforms**
 
-- [ ] E4.5 `objects_move`, `objects_rotate` (center, axis, angle, update entity angles), `objects_flip`.
-- [ ] E4.6 `objects_scale` (factors or target box, anchor), `objects_shear`.
-- [ ] E4.7 `objects_duplicate`, `objects_delete`.
-- [ ] E4.8 `objects_array` (line, grid, circle with rotation).
-- [ ] E4.9 `command_repeat`, `command_repeat_clear`.
-- [ ] E4.10 `grid_get`, `grid_set`; `locks_get`, `locks_set` (texture lock, UV lock) — shared with E6.
+- [x] E4.5 `objects_move`, `objects_rotate` (center, axis, angle, update entity angles), `objects_flip`.
+- [x] E4.6 `objects_scale` (factors or target box, anchor), `objects_shear`.
+- [x] E4.7 `objects_duplicate`, `objects_delete`.
+- [x] E4.8 `objects_array` (line, grid, circle with rotation).
+- [x] E4.9 `command_repeat`, `command_repeat_clear`.
+- [x] E4.10 `grid_get`, `grid_set`; `locks_get`, `locks_set` (texture lock, UV lock) — shared with E6.
 
 **Editing**
 
-- [ ] E4.11 `brush_clip` (2–3 points or face plane; front / back / both).
-- [ ] E4.12 `face_extrude`, `face_extrude_new` (new brush, stamp).
-- [ ] E4.13 `vertices_move` (vertices, edges, faces; shared handles move together; UV lock).
-- [ ] E4.14 `vertex_add`, `vertices_remove`, `vertices_snap`.
-- [ ] E4.15 `csg_merge`, `csg_subtract`, `csg_intersect`, `csg_hollow` (thickness).
-- [ ] E4.16 Validity errors: explain non-convex, out-of-bounds and degenerate results with the involved IDs.
+- [x] E4.11 `brush_clip` (2–3 points or face plane; front / back / both).
+- [x] E4.12 `face_extrude`, `face_extrude_new` (new brush, stamp).
+- [x] E4.13 `vertices_move` (vertices, edges, faces; shared handles move together; UV lock).
+- [x] E4.14 `vertex_add`, `vertices_remove`, `vertices_snap`.
+- [x] E4.15 `csg_merge`, `csg_subtract`, `csg_intersect`, `csg_hollow` (thickness).
+- [x] E4.16 Validity errors: explain non-convex, out-of-bounds and degenerate results with the involved IDs.
 
 **Done when:** scenario S7 (column ring, spiral stairs) works; every tool has tests including invalid-input and dry-run cases.
 
@@ -252,6 +252,7 @@ Goal: agents use the server well without extra hints.
 - [ ] E10.3 Prompts: blockout a level, populate with enemies and items, lighting pass, texture pass, fix all issues, compile and debug, explain this map, explain an entity, convert / clean up a map.
 - [ ] E10.4 Run scenarios S1–S7 and S9 from 04 with a real agent; record results and fix gaps.
 - [ ] E10.5 User documentation: how to enable the server and connect Claude Code / Claude Desktop / IDEs; add a section to the TrenchBroom manual.
+- [ ] E10.6 Lazy bridge start: the stdio bridge answers `initialize`, `tools/list`, `resources/list` and `prompts/list` itself (from the TbMcpLib registries) and launches or connects to the editor only on the first call that needs it, so starting an MCP client never opens TrenchBroom by itself. Then `--no-launch` stops being necessary.
 
 **Done when:** all MVP and v1 scenarios pass with a real agent.
 

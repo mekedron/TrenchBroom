@@ -5,24 +5,28 @@ target_sources(TbMcpLibTest
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Errors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Pagination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PromptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ResourceRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Resources.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Scenarios.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SceneTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SelectionTools.cpp
@@ -32,6 +36,8 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ToolRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TransformTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewTools.cpp
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)

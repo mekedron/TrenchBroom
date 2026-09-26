@@ -32,9 +32,14 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SceneTools.cpp
@@ -43,6 +48,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpatialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TransformTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ViewTools.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -77,13 +84,18 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/StreamableHttp.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpatialTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TransformTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ViewTools.h
 )
 
 target_link_libraries(TbMcpLib

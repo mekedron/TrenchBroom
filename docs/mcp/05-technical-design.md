@@ -1041,3 +1041,89 @@ logged by the editor.
   while no session has subscriptions (the hooks run on every map change, e.g. during drags).
 - `McpHost::currentToolDidChangeNotifier(MapDocument&)` is new; `QtMcpHost` fires it from each
   map window's `ToolBox` `toolActivatedNotifier` / `toolDeactivatedNotifier`.
+
+### 13.8 Implementation notes (E4, as built)
+
+**Layout.** The geometry tools are split over two domain files instead of one
+`GeometryTools.cpp`: `GeometryTools.cpp` (`brush_create_box/shape/hull`, `room_create`,
+`opening_cut`) and `BrushEditTools.cpp` (`brush_clip`, `face_extrude*`, `vertices_*`,
+`vertex_add`, `csg_*`). `TransformTools.cpp` holds `objects_*` and `command_repeat*`,
+`ViewTools.cpp` `grid_get/set`, and `MaterialTools.cpp` `locks_get/set` (E6 adds the material
+tools there). Shared helpers are in `src/tools/GeometryUtils.{h,cpp}`: `brushBuilder` (game face
+defaults), `materialArgument` (`UNKNOWN_MATERIAL` warning), `checkBox`,
+`checkInsideWorldBounds`, `geometryError` / `geometryOperationFailed` (E4.16),
+`addBrushes`, `nodeSummaries`, `warnNonIntegerVertices` (`NON_INTEGER_VERTICES`, S7),
+`ScopedLockOverride` (per-call `alignmentLock` / `uvLock` overrides) and `intersectsInterior`
+(moved here from `SpatialTools.cpp`, now shared with `opening_cut`).
+
+**Validity errors (E4.16).** Degenerate or non-convex results are `INVALID_GEOMETRY`, results
+that reach or leave the world bounds `OUT_OF_WORLD_BOUNDS`; both name the involved ids and
+the editor's logged message (`details.editorMessages`). Brush geometry is clipped to the
+world bounds by `mdl::Brush`, so touching the world bounds counts as out of bounds. Vertex,
+edge and face moves pre-check each brush (`canTransformVertices` etc.) to name the offending
+brush. The editor logs nothing when a brush transform fails; the transform tools compute
+the transformed bounds themselves to report `OUT_OF_WORLD_BOUNDS`.
+
+**TbMdlLib.** `csgHollow(Map&, std::optional<double> thickness = std::nullopt)`: the wall
+thickness defaults to the grid size; a thickness ≤ 0 fails.
+
+**Creation.**
+- Creation tools select their result (as the editor does). `brush_create_shape` calls the
+  editor's `ui::DrawShapeTool*Extension` classes; `material` is applied to the faces of the
+  returned brushes instead of changing the current material. Parameters that do not apply
+  to the chosen shape are warned about (`IGNORED_ARGUMENT`), so their defaults are applied
+  in code, not in the schema. The arch axis defaults to `x` (upright arch). Hollow cylinder
+  and arch thicknesses are validated (the editor would silently build solid wedges);
+  a step height ≥ the box height only warns (`SINGLE_STEP`). The editor preference that
+  groups shape brushes automatically is not read; the `group` argument covers it.
+- `brush_create_hull` explains degenerate point sets (coincident, collinear, coplanar)
+  and warns about unused points (`POINTS_INSIDE_HULL`).
+- `room_create`: floor and ceiling span the outer footprint, the west/east walls the outer
+  depth, and the south/north walls fit between them; the result names each brush by role.
+- `opening_cut` subtracts the opening from each target with `Brush::subtract`, re-applies
+  the wall's own face attributes (subtract copies the cutter's attributes to coplanar
+  faces) and uses `material` or the wall's most used material inside the opening. Any
+  invalid fragment fails the whole call (the editor's `csgSubtract` drops it). Without ids
+  it cuts every selectable brush the opening overlaps.
+
+**Transforms.**
+- Rotate and flip default to the exact bounds center (the editor uses its grid reference
+  point). `objects_rotate` sets the world's `updateAnglePropertyAfterTransform` for the call
+  (`updateEntityAngles`, default true) and restores it.
+- `objects_array` `count` is the total number of instances including the originals
+  (≤ 1024); circle arrays rotate the copies around the center (`rotate`, default true), so
+  they keep facing it, and `rise` offsets each instance along the axis (spiral stairs). The
+  array is left selected; the call is one undo step and one repeatable entry.
+- `command_repeat` is `transactional(false)`: the repeat stack refuses to repeat while a map
+  transaction is open, so the tool opens its own `LongRunning` command-processor transaction
+  named `AI: Repeat Last Commands`, handles dry run itself (rollback; the change report of a
+  dry run is empty, the result lists the selection), and fails with `TRANSACTION_ACTIVE` inside
+  an agent transaction. Each agent call is one repeatable entry. Selection changes made by
+  tools happen inside the call transaction and therefore do not start a new repeat
+  recording (would need a CallRunner/TbMdlLib hook).
+- `grid_set` / `locks_set` are `Mutation::External` (grid on the map, locks via the
+  `AlignmentLock` / `UvLock` preferences, which `MapDocument` applies to the editor context).
+
+**Brush editing.**
+- `brush_clip`: the plane normal is `cross(p1-p0, p2-p0)`, with 2 points `cross(b-a, axis)`,
+  with `face` the face normal; "front" is the side the normal points to.
+- `face_extrude` groups faces by normal and extrudes each group; `face_extrude_new` reimplements
+  the Extrude tool's split (outward / inward for negative distances) and stamp logic with mdl
+  calls, since those functions are file-local to `ExtrudeTool.cpp`.
+- `vertices_move` targets the selected brushes, or else every editable brush that has one of
+  the handles; positions match within 0.01.
+- Clip, extrude-to-new and all `csg_*` tools leave their results selected (editor behavior);
+  the others restore the selection. Subtracting with cutters that touch nothing and
+  intersecting disjoint brushes follow the editor (brushes are removed) and warn
+  (`NOTHING_SUBTRACTED`, `EMPTY_INTERSECTION`). Other warnings: `NOTHING_CLIPPED`,
+  `VERTICES_MERGED`, `SNAP_FAILED`, `NOT_HOLLOWED`.
+- An explicit id of the wrong kind fails schema validation (`INVALID_ARGUMENT`);
+  `WRONG_OBJECT_KIND` is returned for a selection of the wrong kinds.
+
+**Tests.** `tst_GeometryTools`, `tst_BrushEditTools`, `tst_TransformTools`, `tst_ViewTools`,
+`tst_MaterialTools`, and `tst_Scenarios` ("Scenario S7": 12 columns on a circle of radius 384
+facing the center, a 20-step spiral staircase, each one undo step).
+
+**Known gaps.** `csg_subtract` does not map fragments to the brush they came from;
+`vertices_move` reports `hasRemainingVertices` only for vertex moves; the world bounds
+error after `objects_duplicate` names copy ids that will not exist.

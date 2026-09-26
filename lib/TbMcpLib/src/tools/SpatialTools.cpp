@@ -19,6 +19,7 @@
 
 #include "mcp/tools/SpatialTools.h"
 
+#include "GeometryUtils.h"
 #include "NodeJson.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
@@ -164,77 +165,6 @@ Result<std::vector<const mdl::Node*>, ToolError> resolveIds(
 }
 
 // Exact geometry
-
-/**
- * Whether the interior of the convex brush intersects the given box (separating axis
- * test over the brush face normals, the box axes and the cross products of the brush
- * edges with the box axes). Surfaces that merely touch do not count. The box may be
- * degenerate (e.g. flat).
- */
-bool intersectsInterior(const mdl::Brush& brush, const vm::bbox3d& box)
-{
-  const auto& bounds = brush.bounds();
-  for (size_t i = 0; i < 3; ++i)
-  {
-    const auto separated = box.min[i] == box.max[i]
-                             ? bounds.min[i] >= box.min[i] || bounds.max[i] <= box.max[i]
-                             : bounds.max[i] <= box.min[i] || bounds.min[i] >= box.max[i];
-    if (separated)
-    {
-      return false;
-    }
-  }
-
-  const auto corners = box.vertices();
-  for (const auto& face : brush.faces())
-  {
-    if (std::ranges::all_of(corners, [&](const auto& corner) {
-          return face.boundary().point_distance(corner) >= 0.0;
-        }))
-    {
-      return false;
-    }
-  }
-
-  const auto vertices = brush.vertexPositions();
-  const auto axes =
-    std::array{vm::vec3d{1, 0, 0}, vm::vec3d{0, 1, 0}, vm::vec3d{0, 0, 1}};
-  for (const auto* edge : brush.edges())
-  {
-    const auto direction =
-      edge->secondVertex()->position() - edge->firstVertex()->position();
-    for (const auto& axis : axes)
-    {
-      const auto normal = vm::cross(direction, axis);
-      if (vm::squared_length(normal) < 1e-12)
-      {
-        continue;
-      }
-
-      auto brushMin = std::numeric_limits<double>::max();
-      auto brushMax = std::numeric_limits<double>::lowest();
-      for (const auto& vertex : vertices)
-      {
-        const auto d = vm::dot(normal, vertex);
-        brushMin = std::min(brushMin, d);
-        brushMax = std::max(brushMax, d);
-      }
-      auto boxMin = std::numeric_limits<double>::max();
-      auto boxMax = std::numeric_limits<double>::lowest();
-      for (const auto& corner : corners)
-      {
-        const auto d = vm::dot(normal, corner);
-        boxMin = std::min(boxMin, d);
-        boxMax = std::max(boxMax, d);
-      }
-      if (brushMax <= boxMin || boxMax <= brushMin)
-      {
-        return false;
-      }
-    }
-  }
-  return true;
-}
 
 vm::bbox3d shrink(const vm::bbox3d& box, const double amount)
 {

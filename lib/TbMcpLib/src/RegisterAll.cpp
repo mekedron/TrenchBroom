@@ -21,13 +21,18 @@
 
 #include "mcp/McpServer.h"
 #include "mcp/Resources.h"
+#include "mcp/tools/BrushEditTools.h"
 #include "mcp/tools/DocumentTools.h"
 #include "mcp/tools/GameTools.h"
+#include "mcp/tools/GeometryTools.h"
 #include "mcp/tools/HistoryTools.h"
+#include "mcp/tools/MaterialTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
 #include "mcp/tools/SpatialTools.h"
+#include "mcp/tools/TransformTools.h"
+#include "mcp/tools/ViewTools.h"
 
 namespace tb::mcp
 {
@@ -41,6 +46,11 @@ void registerAll(McpServer& server)
   registerSceneTools(server.tools());
   registerSpatialTools(server.tools());
   registerSelectionTools(server.tools());
+  registerGeometryTools(server.tools());
+  registerTransformTools(server.tools());
+  registerBrushEditTools(server.tools());
+  registerViewTools(server.tools());
+  registerMaterialTools(server.tools());
   registerResources(server);
 }
 
