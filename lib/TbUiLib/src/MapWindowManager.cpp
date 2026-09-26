@@ -75,7 +75,8 @@ Result<void> MapWindowManager::createDocument(
   contract_assert(mapWindow != nullptr);
 
   return mapWindow->document().create(
-    m_appController.environmentConfig(), gameInfo, mapFormat, worldBounds);
+           m_appController.environmentConfig(), gameInfo, mapFormat, worldBounds)
+         | kdl::transform([&]() { emit mapWindowsDidChange(); });
 }
 
 Result<void> MapWindowManager::loadDocument(
@@ -101,11 +102,12 @@ Result<void> MapWindowManager::loadDocument(
   contract_assert(mapWindow != nullptr);
 
   return mapWindow->document().load(
-    m_appController.environmentConfig(),
-    gameInfo,
-    mapFormat,
-    worldBounds,
-    std::move(path));
+           m_appController.environmentConfig(),
+           gameInfo,
+           mapFormat,
+           worldBounds,
+           std::move(path))
+         | kdl::transform([&]() { emit mapWindowsDidChange(); });
 }
 
 bool MapWindowManager::allMapWindowsClosed() const
@@ -125,9 +127,18 @@ void MapWindowManager::onFocusChange(QWidget* /* old */, QWidget* now)
           it != m_mapWindows.end() && it != m_mapWindows.begin())
       {
         std::rotate(m_mapWindows.begin(), it, std::next(it));
+        emit mapWindowsDidChange();
       }
     }
   }
+}
+
+void MapWindowManager::addMapWindow(MapWindow* mapWindow)
+{
+  contract_pre(mapWindow != nullptr);
+
+  m_mapWindows.insert(m_mapWindows.begin(), mapWindow);
+  emit mapWindowsDidChange();
 }
 
 bool MapWindowManager::shouldCreateWindowForDocument() const
@@ -141,7 +152,7 @@ MapWindow* MapWindowManager::createMapWindow(std::unique_ptr<MapDocument> docume
 
   auto* mapWindow = new MapWindow{m_appController, std::move(document)};
   mapWindow->positionOnScreen(topMapWindow());
-  m_mapWindows.insert(m_mapWindows.begin(), mapWindow);
+  addMapWindow(mapWindow);
 
   mapWindow->show();
   mapWindow->activateWindow();
@@ -153,8 +164,13 @@ void MapWindowManager::removeMapWindow(MapWindow* mapWindow)
   // This is called from MapWindow::closeEvent
   if (auto it = std::ranges::find(m_mapWindows, mapWindow); it != m_mapWindows.end())
   {
-    m_mapWindows.erase(it);
+    emit mapWindowWillClose(mapWindow);
+
+    // The slots may have changed the window list
+    std::erase(m_mapWindows, mapWindow);
     // MapWindow uses Qt::WA_DeleteOnClose so we don't need to delete it here
+
+    emit mapWindowsDidChange();
   }
 }
 

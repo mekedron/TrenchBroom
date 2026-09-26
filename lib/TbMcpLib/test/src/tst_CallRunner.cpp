@@ -1,0 +1,429 @@
+/*
+ Copyright (C) 2026 Nikita Rabykin
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "base/Logger.h"
+#include "mcp/Args.h"
+#include "mcp/CallContext.h"
+#include "mcp/CallRunner.h"
+#include "mcp/JsonRpc.h"
+#include "mcp/McpServer.h"
+#include "mcp/McpToolFixture.h"
+#include "mcp/ObjectIds.h"
+#include "mcp/ServerState.h"
+#include "mcp/ToolRegistry.h"
+#include "mdl/CommandProcessor.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
+#include "mdl/LayerNode.h"
+#include "mdl/Map.h"
+#include "mdl/Map_Nodes.h"
+#include "mdl/TransactionScope.h"
+#include "mdl/WorldNode.h"
+#include "ui/MapDocument.h"
+
+#include <stdexcept>
+
+#include <catch2/catch_test_macros.hpp>
+
+namespace tb::mcp
+{
+using namespace schema;
+using namespace std::chrono_literals;
+
+namespace
+{
+
+ToolResult addEntity(CallContext& context, const Args& args)
+{
+  auto& map = context.map();
+  auto* entityNode = new mdl::EntityNode{mdl::Entity{{{"classname", "info_null"}}}};
+  mdl::addNodes(map, {{&mdl::parentForNodes(map), {entityNode}}});
+
+  if (args.get<bool>("fail"))
+  {
+    return makeError(ErrorCode::InvalidGeometry, "Failing on purpose.");
+  }
+  if (args.get<bool>("throw"))
+  {
+    throw std::runtime_error{"boom"};
+  }
+  if (args.get<bool>("logError"))
+  {
+    context.document().logger().error() << "Something went wrong";
+    return context.operationFailed("Could not do it.");
+  }
+  return Json{{"entity", context.ids().format(*entityNode)}};
+}
+
+void registerTestTools(McpServer& server)
+{
+  server.tools().add(ToolDef{"test_add_entity"}
+                       .title("Add Test Entity")
+                       .input(object({
+                         field("fail", boolean().defaultsTo(false)),
+                         field("throw", boolean().defaultsTo(false)),
+                         field("logError", boolean().defaultsTo(false)),
+                       }))
+                       .mutation(Mutation::Map)
+                       .handler(addEntity));
+
+  server.tools().add(
+    ToolDef{"test_noop"}
+      .title("Do Nothing")
+      .mutation(Mutation::Map)
+      .handler([](CallContext&, const Args&) -> ToolResult { return Json::object(); }));
+
+  server.tools().add(ToolDef{"test_external"}
+                       .title("External")
+                       .mutation(Mutation::External)
+                       .documentUse(DocumentUse::Optional)
+                       .handler([](CallContext& context, const Args&) -> ToolResult {
+                         return Json{{"wouldDo", context.dryRun()}};
+                       }));
+
+  server.tools().add(
+    ToolDef{"test_read"}
+      .title("Read")
+      .documentUse(DocumentUse::Optional)
+      .handler([](CallContext& context, const Args&) -> ToolResult {
+        context.warn("TEST_WARNING", "just so you know");
+        return Json{
+          {"document",
+           context.hasDocument() ? Json(context.documentInfo().id) : Json(nullptr)}};
+      }));
+}
+
+size_t entityCount(ui::MapDocument& document)
+{
+  return document.map().worldNode().defaultLayer()->childCount();
+}
+
+Json callRequest(const int id, const std::string& tool, Json arguments = Json::object())
+{
+  return jsonrpc::makeRequest(
+    id, "tools/call", Json{{"name", tool}, {"arguments", std::move(arguments)}});
+}
+
+} // namespace
+
+TEST_CASE("CallRunner")
+{
+  auto fixture = McpToolFixture{};
+  registerTestTools(fixture.server());
+  auto& document = fixture.create();
+  auto& map = document.map();
+
+  SECTION("a modifying call is one undo step named after the tool")
+  {
+    const auto result = fixture.call("test_add_entity");
+    CHECK(result["ok"] == true);
+    CHECK(result["dryRun"] == false);
+    CHECK(result["undoStep"] == "AI: Add Test Entity");
+    CHECK(result["changes"]["created"] == Json::array({result["result"]["entity"]}));
+    CHECK(result["changes"]["modified"] == Json::array({"layer:default"}));
+    CHECK(result["selection"]["mode"] == "none");
+    CHECK(result["grid"] == 16.0);
+    CHECK(result["warnings"] == Json::array());
+
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "AI: Add Test Entity");
+    CHECK(map.commandProcessor().undoCommandNames().size() == 1);
+    CHECK(entityCount(document) == 1);
+  }
+
+  SECTION("a call that changes nothing creates no undo step")
+  {
+    const auto result = fixture.call("test_noop");
+    CHECK(result["undoStep"].is_null());
+    CHECK(!map.canUndoCommand());
+  }
+
+  SECTION("a failed call leaves no trace")
+  {
+    const auto modificationCount = map.modificationCount();
+
+    const auto error =
+      fixture.callExpectingError("test_add_entity", Json{{"fail", true}});
+    CHECK(error.code == ErrorCode::InvalidGeometry);
+    CHECK(entityCount(document) == 0);
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(!map.canUndoCommand());
+    CHECK(map.transactionDepth() == 0);
+  }
+
+  SECTION("an exception becomes INTERNAL_ERROR and leaves no trace")
+  {
+    const auto error =
+      fixture.callExpectingError("test_add_entity", Json{{"throw", true}});
+    CHECK(error.code == ErrorCode::InternalError);
+    CHECK(error.message.find("boom") != std::string::npos);
+    CHECK(entityCount(document) == 0);
+    CHECK(map.transactionDepth() == 0);
+  }
+
+  SECTION("operationFailed includes the messages the editor logged")
+  {
+    const auto error =
+      fixture.callExpectingError("test_add_entity", Json{{"logError", true}});
+    CHECK(error.code == ErrorCode::OperationFailed);
+    CHECK(error.message.find("Something went wrong") != std::string::npos);
+    CHECK(error.details["editorMessages"] == Json::array({"Something went wrong"}));
+  }
+
+  SECTION("dry run")
+  {
+    fixture.call("test_add_entity");
+    map.undoCommand();
+    REQUIRE(map.canRedoCommand());
+    const auto modificationCount = map.modificationCount();
+
+    const auto result = fixture.call("test_add_entity", Json{{"dryRun", true}});
+    CHECK(result["dryRun"] == true);
+    CHECK(result["undoStep"].is_null());
+    CHECK(result["changes"]["created"].size() == 1);
+    CHECK(result["changes"]["ephemeral"] == true);
+
+    CHECK(entityCount(document) == 0);
+    CHECK(map.modificationCount() == modificationCount);
+    CHECK(!map.canUndoCommand());
+    CHECK(map.canRedoCommand());
+    CHECK(*map.redoCommandName() == "AI: Add Test Entity");
+  }
+
+  SECTION("external tools honor dry run and get no transaction")
+  {
+    const auto result = fixture.call("test_external", Json{{"dryRun", true}});
+    CHECK(result["dryRun"] == true);
+    CHECK(result["result"]["wouldDo"] == true);
+    CHECK(!result.contains("changes"));
+  }
+
+  SECTION("read-only tools return their result directly, with warnings")
+  {
+    const auto result = fixture.call("test_read");
+    CHECK(result["document"] == fixture.documentId(document));
+    CHECK(result["warnings"][0]["code"] == "TEST_WARNING");
+  }
+
+  SECTION("notes from prepareForAgentEdit become warnings")
+  {
+    fixture.host().prepareNotes = {"deactivated tool: Vertex Tool"};
+    const auto result = fixture.call("test_add_entity");
+    CHECK(fixture.host().prepareCount == 1);
+    CHECK(result["warnings"][0]["message"] == "deactivated tool: Vertex Tool");
+  }
+
+  SECTION("calls within an agent transaction")
+  {
+    fixture.call("transaction_begin", Json{{"name", "Build"}});
+    fixture.call("test_add_entity");
+    fixture.call("test_add_entity");
+
+    SECTION("a failed call only rolls back itself")
+    {
+      fixture.callExpectingError("test_add_entity", Json{{"fail", true}});
+      CHECK(entityCount(document) == 2);
+      CHECK(map.transactionDepth() == 1);
+    }
+
+    SECTION("commit creates one undo step")
+    {
+      const auto result = fixture.call("transaction_commit");
+      CHECK(result["undoStep"] == "AI: Build");
+      CHECK(
+        map.commandProcessor().undoCommandNames()
+        == std::vector<std::string>{"AI: Build"});
+      CHECK(entityCount(document) == 2);
+    }
+
+    SECTION("rollback leaves no trace")
+    {
+      const auto result = fixture.call("transaction_rollback");
+      CHECK(result["changes"]["removed"].size() == 2);
+      CHECK(!map.canUndoCommand());
+      CHECK(entityCount(document) == 0);
+    }
+
+    SECTION("other sessions cannot modify the document")
+    {
+      const auto other = fixture.openSession("other");
+      const auto error =
+        fixture.callExpectingErrorAs(other, "test_add_entity", Json::object());
+      CHECK(error.code == ErrorCode::TransactionActive);
+      CHECK(error.message.find("test-client") != std::string::npos);
+
+      // but they can read
+      fixture.callAs(other, "test_read", Json::object());
+    }
+
+    SECTION("closing the session rolls the transaction back")
+    {
+      fixture.server().deleteSession(fixture.sessionId());
+      CHECK(map.transactionDepth() == 0);
+      CHECK(entityCount(document) == 0);
+    }
+
+    SECTION("closing the document drops the transaction")
+    {
+      fixture.host().removeDocument(document);
+      CHECK(map.transactionDepth() == 0);
+      CHECK(fixture.server().activity().openTransactions.empty());
+    }
+  }
+
+  SECTION("busy gate")
+  {
+    auto& server = fixture.server();
+
+    SECTION("modifying calls wait while the human is busy")
+    {
+      fixture.host().busy = BusyState::Busy;
+      auto stream = fixture.post(fixture.sessionId(), callRequest(1, "test_add_entity"));
+      CHECK(!stream->response);
+      CHECK(server.activity().state == ServerActivity::State::WaitingForUser);
+      CHECK(server.activity().toolTitle == "Add Test Entity");
+
+      fixture.scheduler().advance(100ms);
+      CHECK(!stream->response);
+
+      // read-only calls are not blocked
+      fixture.call("test_read");
+      CHECK(!stream->response);
+
+      fixture.host().busy = BusyState::Idle;
+      fixture.scheduler().advance(50ms);
+      REQUIRE(stream->response);
+      CHECK((*stream->response)["result"]["isError"] == false);
+      CHECK(entityCount(document) == 1);
+      CHECK(server.activity().state == ServerActivity::State::Idle);
+    }
+
+    SECTION("calls run in order")
+    {
+      fixture.host().busy = BusyState::Busy;
+      auto first = fixture.post(fixture.sessionId(), callRequest(1, "test_add_entity"));
+      auto second = fixture.post(fixture.sessionId(), callRequest(2, "undo"));
+      fixture.host().busy = BusyState::Idle;
+      fixture.scheduler().advance(50ms);
+
+      REQUIRE(first->response);
+      REQUIRE(second->response);
+      CHECK(entityCount(document) == 0);
+      CHECK(map.canRedoCommand());
+    }
+
+    SECTION("a transaction the human opened makes the document busy")
+    {
+      map.startTransaction("drag", mdl::TransactionScope::LongRunning);
+      auto stream = fixture.post(fixture.sessionId(), callRequest(1, "test_add_entity"));
+      CHECK(!stream->response);
+
+      map.commitTransaction();
+      fixture.scheduler().advance(50ms);
+      CHECK(stream->response);
+    }
+
+    SECTION("calls time out")
+    {
+      fixture.host().busy = BusyState::Busy;
+      auto stream = fixture.post(fixture.sessionId(), callRequest(1, "test_add_entity"));
+      fixture.scheduler().advance(30s);
+      REQUIRE(stream->response);
+      CHECK(
+        (*stream->response)["result"]["structuredContent"]["error"]["code"]
+        == "BUSY_TIMEOUT");
+      CHECK(entityCount(document) == 0);
+    }
+
+    SECTION("invalid arguments fail immediately")
+    {
+      fixture.host().busy = BusyState::Busy;
+      auto stream = fixture.post(
+        fixture.sessionId(), callRequest(1, "test_add_entity", Json{{"fail", "yes"}}));
+      REQUIRE(stream->response);
+      CHECK(
+        (*stream->response)["result"]["structuredContent"]["error"]["code"]
+        == "INVALID_ARGUMENT");
+    }
+  }
+
+  SECTION("document targeting")
+  {
+    auto& other = fixture.create();
+    const auto firstId = fixture.documentId(document);
+    const auto otherId = fixture.documentId(other);
+
+    SECTION("defaults to the focused document")
+    {
+      CHECK(fixture.call("test_read")["document"] == otherId);
+      fixture.host().setFocused(firstId);
+      CHECK(fixture.call("test_read")["document"] == firstId);
+    }
+
+    SECTION("uses the explicit document argument")
+    {
+      fixture.call("test_add_entity", Json{{"document", firstId}});
+      CHECK(entityCount(document) == 1);
+      CHECK(entityCount(other) == 0);
+    }
+
+    SECTION("uses the activated document")
+    {
+      fixture.call("document_activate", Json{{"document", firstId}});
+      CHECK(fixture.call("test_read")["document"] == firstId);
+
+      // other sessions are not affected
+      const auto session = fixture.openSession();
+      CHECK(fixture.callAs(session, "test_read", Json::object())["document"] == otherId);
+    }
+
+    SECTION("fails for unknown documents")
+    {
+      CHECK(
+        fixture.callExpectingError("test_add_entity", Json{{"document", "doc:99"}}).code
+        == ErrorCode::DocumentNotFound);
+    }
+
+    SECTION("fails without documents")
+    {
+      fixture.host().removeDocument(document);
+      fixture.host().removeDocument(other);
+      CHECK(fixture.callExpectingError("test_add_entity").code == ErrorCode::NoDocument);
+      CHECK(fixture.call("test_read")["document"].is_null());
+    }
+  }
+
+  SECTION("calls are logged")
+  {
+    fixture.call("test_add_entity");
+    fixture.callExpectingError("test_add_entity", Json{{"fail", true}});
+
+    const auto& entries = fixture.server().callLog().entries();
+    REQUIRE(entries.size() == 2);
+    CHECK(entries[0].tool == "test_add_entity");
+    CHECK(entries[0].ok);
+    CHECK(entries[0].undoStep == "AI: Add Test Entity");
+    CHECK(entries[0].created == 1);
+    CHECK(entries[0].clientName == "test-client 1.0");
+    CHECK(!entries[1].ok);
+    CHECK(entries[1].errorCode == "INVALID_GEOMETRY");
+  }
+}
+
+} // namespace tb::mcp

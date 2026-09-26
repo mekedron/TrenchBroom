@@ -53,6 +53,17 @@ TEST_CASE("LoggingHub")
   auto hub = LoggingHub{};
   auto logger = TestLogger{};
 
+  SECTION("targetLogger")
+  {
+    CHECK(hub.targetLogger() == nullptr);
+
+    hub.setTargetLogger(&logger);
+    CHECK(hub.targetLogger() == &logger);
+
+    hub.setTargetLogger(nullptr);
+    CHECK(hub.targetLogger() == nullptr);
+  }
+
   SECTION("caches messages until a target logger is set")
   {
     hub.log(LogLevel::Info, "asdf");

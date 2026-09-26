@@ -41,6 +41,7 @@
 #include "ui/CrashReporter.h"
 #include "ui/FileEventFilter.h"
 #include "ui/MapWindowManager.h"
+#include "ui/McpServerController.h"
 #include "ui/QPathUtils.h"
 #include "ui/QPreferenceStore.h"
 #include "ui/RecentDocuments.h"
@@ -234,7 +235,15 @@ bool parseCommandLineAndOpenFiles(AppController& appController)
   auto parser = QCommandLineParser{};
   parser.addOption(QCommandLineOption("portable"));
   parser.addOption(QCommandLineOption("enableDraftReleaseUpdates"));
+  parser.addOption(QCommandLineOption(
+    "mcp-server",
+    "Enable the MCP server for this process, regardless of the preferences."));
   parser.process(*qApp);
+
+  if (parser.isSet("mcp-server"))
+  {
+    appController.mcpServerController().setForceEnabled(true);
+  }
 
   if (parser.isSet("enableDraftReleaseUpdates"))
   {

@@ -22,6 +22,11 @@
 namespace tb
 {
 
+Logger* LoggingHub::targetLogger() const
+{
+  return m_targetLogger;
+}
+
 void LoggingHub::setTargetLogger(Logger* targetLogger)
 {
   const auto lock = std::lock_guard{m_cacheMutex};

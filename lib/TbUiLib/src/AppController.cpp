@@ -51,6 +51,7 @@
 #include "ui/MapDocument.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
+#include "ui/McpServerController.h"
 #include "ui/PreferenceDialog.h"
 #include "ui/QPathUtils.h"
 #include "ui/RecentDocuments.h"
@@ -190,6 +191,7 @@ AppController::AppController(
   , m_actionManager{std::make_unique<ActionManager>()}
   , m_welcomeWindow{std::make_unique<WelcomeWindow>(*this)}
   , m_aboutDialog{std::make_unique<AboutDialog>(*this)}
+  , m_mcpServerController{std::make_unique<McpServerController>(*this)}
 {
   using namespace std::chrono_literals;
 
@@ -215,6 +217,8 @@ Result<std::unique_ptr<AppController>> AppController::create()
 
 AppController::~AppController()
 {
+  // Stop the MCP server while the map windows and their documents still exist
+  m_mcpServerController.reset();
   processGlResources();
 }
 
@@ -261,6 +265,11 @@ RecentDocuments& AppController::recentDocuments()
 ActionManager& AppController::actionManager()
 {
   return *m_actionManager;
+}
+
+McpServerController& AppController::mcpServerController()
+{
+  return *m_mcpServerController;
 }
 
 void AppController::askForAutoUpdates()

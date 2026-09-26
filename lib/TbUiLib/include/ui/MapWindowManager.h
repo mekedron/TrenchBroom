@@ -82,6 +82,24 @@ public:
   MapWindow* topMapWindow() const;
   bool allMapWindowsClosed() const;
 
+  /**
+   * Registers the given window as the top window. The window must have been created with
+   * this manager's app controller. The manager does not show the window.
+   */
+  void addMapWindow(MapWindow* mapWindow);
+
+signals:
+  /**
+   * Emitted when the given window is about to close, before its document is destroyed.
+   */
+  void mapWindowWillClose(MapWindow* mapWindow);
+
+  /**
+   * Emitted after a window was opened or closed, after a window's document was replaced,
+   * or when the window order changed because another window received the focus.
+   */
+  void mapWindowsDidChange();
+
 private:
   void onFocusChange(QWidget* old, QWidget* now);
 

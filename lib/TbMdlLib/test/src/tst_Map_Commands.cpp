@@ -49,6 +49,44 @@ using namespace Catch::Matchers;
 
 TEST_CASE("Map_Commands")
 {
+  SECTION("canUndoCommand / canRedoCommand")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+
+    CHECK(!map.canUndoCommand());
+    CHECK(!map.canRedoCommand());
+
+    auto* entityNode = new EntityNode{Entity{}};
+    addNodes(map, {{&parentForNodes(map), {entityNode}}});
+
+    CHECK(map.canUndoCommand());
+    CHECK(!map.canRedoCommand());
+
+    map.undoCommand();
+    CHECK(!map.canUndoCommand());
+    CHECK(map.canRedoCommand());
+    CHECK(map.redoCommandName() != nullptr);
+  }
+
+  SECTION("transactionDepth")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+
+    CHECK(map.transactionDepth() == 0u);
+
+    map.startTransaction("outer", TransactionScope::LongRunning);
+    map.startTransaction("inner", TransactionScope::Oneshot);
+    CHECK(map.transactionDepth() == 2u);
+
+    map.cancelTransaction();
+    CHECK(map.transactionDepth() == 1u);
+
+    CHECK(map.commitTransaction());
+    CHECK(map.transactionDepth() == 0u);
+  }
+
   SECTION("undoCommand")
   {
     auto fixture = MapFixture{};

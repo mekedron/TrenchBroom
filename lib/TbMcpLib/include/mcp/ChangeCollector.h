@@ -1,0 +1,146 @@
+/*
+ Copyright (C) 2026 Nikita Rabykin
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include "base/NotifierConnection.h"
+#include "mcp/Json.h"
+
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+namespace tb
+{
+namespace mdl
+{
+class Map;
+class Node;
+struct SelectionChange;
+} // namespace mdl
+
+namespace ui
+{
+class MapDocument;
+}
+
+namespace mcp
+{
+class IdRegistry;
+
+/** An ordered set of ids. */
+class IdList
+{
+private:
+  std::vector<std::string> m_ids;
+  std::unordered_set<std::string> m_set;
+
+public:
+  bool add(std::string id);
+  bool contains(const std::string& id) const;
+  const std::vector<std::string>& ids() const;
+  size_t size() const;
+  bool empty() const;
+};
+
+struct IntroducedIssue
+{
+  std::string objectId;
+  std::string type;
+  std::string description;
+};
+
+struct ChangeReport
+{
+  std::vector<std::string> created;
+  std::vector<std::string> modified;
+  std::vector<std::string> removed;
+  std::vector<IntroducedIssue> issuesIntroduced;
+  bool selectionChanged = false;
+  bool contextChanged = false;
+
+  bool empty() const;
+};
+
+/**
+ * Serializes the change lists. Each list is capped at `limit` ids; if any list is
+ * truncated, the result contains `"truncated": true` and the full counts.
+ */
+Json changesToJson(const ChangeReport& report, size_t limit = 500);
+Json issuesToJson(const std::vector<IntroducedIssue>& issues, size_t limit = 100);
+
+/**
+ * Summarizes the current selection:
+ * `{"mode": "none"|"objects"|"faces", "count": n, "ids": [...], "truncated": bool}`.
+ */
+Json selectionSummary(const mdl::Map& map, const IdRegistry& ids, size_t limit = 50);
+
+/**
+ * Collects the changes a call makes to a document by observing its notifiers.
+ *
+ * Nodes are identified by their canonical ids, so a node in a linked group that was
+ * replaced by a clone (and kept its id through aliasing) is reported as modified rather
+ * than removed and created.
+ */
+class ChangeCollector
+{
+private:
+  ui::MapDocument& m_document;
+  IdRegistry& m_ids;
+
+  IdList m_added;
+  IdList m_removed;
+  IdList m_changed;
+  /** issue signatures (type + description) of nodes before they changed */
+  std::unordered_map<std::string, std::unordered_set<std::string>> m_issuesBefore;
+  bool m_selectionChanged = false;
+  bool m_contextChanged = false;
+
+  NotifierConnection m_notifierConnection;
+
+public:
+  ChangeCollector(ui::MapDocument& document, IdRegistry& ids);
+  ~ChangeCollector();
+
+  ChangeCollector(const ChangeCollector&) = delete;
+  ChangeCollector& operator=(const ChangeCollector&) = delete;
+
+  /**
+   * Stops observing and returns the net changes. Issues are computed against the
+   * current state of the document, so call this before rolling back a dry run.
+   */
+  ChangeReport finish();
+
+private:
+  void snapshotIssues(const std::vector<mdl::Node*>& nodes);
+  void addRecursively(IdList& list, const mdl::Node& node);
+  void addParent(const mdl::Node& node);
+
+  void nodesWereAdded(const std::vector<mdl::Node*>& nodes);
+  void nodesWillBeRemoved(const std::vector<mdl::Node*>& nodes);
+  void nodesWillChange(const std::vector<mdl::Node*>& nodes);
+  void nodesDidChange(const std::vector<mdl::Node*>& nodes);
+  void nodeStateDidChange(const std::vector<mdl::Node*>& nodes);
+  void selectionDidChange(const mdl::SelectionChange& change);
+  void contextDidChange();
+};
+
+} // namespace mcp
+} // namespace tb

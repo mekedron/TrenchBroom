@@ -1432,7 +1432,7 @@ bool Map::canUndoCommand() const
 
 bool Map::canRedoCommand() const
 {
-  return m_commandProcessor->undoCommandName() != nullptr;
+  return m_commandProcessor->redoCommandName() != nullptr;
 }
 
 const std::string* Map::undoCommandName() const
@@ -1531,6 +1531,11 @@ void Map::cancelTransaction()
   m_repeatStack->rollbackTransaction();
   m_commandProcessor->commitTransaction();
   m_repeatStack->commitTransaction();
+}
+
+size_t Map::transactionDepth() const
+{
+  return m_commandProcessor->transactionDepth();
 }
 
 bool Map::isCurrentDocumentStateObservable() const

@@ -148,6 +148,12 @@ endif()
 # so we must make TrenchBroom depend on GenerateManual (see #3608)
 add_dependencies(TrenchBroom GenerateManual)
 
+# The MCP stdio bridge is shipped next to the editor executable (inside the bundle on
+# macOS) so that it can find and launch the editor.
+add_dependencies(TrenchBroom TrenchBroomMcp)
+add_custom_command(TARGET TrenchBroom POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:TrenchBroomMcp>" "$<TARGET_FILE_DIR:TrenchBroom>")
+
 set_target_properties(TrenchBroom PROPERTIES AUTORCC TRUE)
 
 if(APPLE)
@@ -183,6 +189,7 @@ if(APPLE)
             # how to set up the signing identity.
             add_custom_command(TARGET TrenchBroom POST_BUILD
                 COMMAND "${TB_MACDEPLOYQT_PATH}" "$<TARGET_BUNDLE_DIR:TrenchBroom>"
+                        "-executable=$<TARGET_FILE_DIR:TrenchBroom>/$<TARGET_FILE_NAME:TrenchBroomMcp>"
                         "-codesign=${TB_SIGN_IDENTITY}"
                         "-sign-for-notarization=${TB_SIGN_IDENTITY}"
                         "-hardened-runtime"
@@ -203,6 +210,7 @@ if(APPLE)
             # damaged.
             add_custom_command(TARGET TrenchBroom POST_BUILD
                 COMMAND "${TB_MACDEPLOYQT_PATH}" "$<TARGET_BUNDLE_DIR:TrenchBroom>"
+                        "-executable=$<TARGET_FILE_DIR:TrenchBroom>/$<TARGET_FILE_NAME:TrenchBroomMcp>"
                 COMMAND "codesign"
                         "--force"
                         "--deep"
@@ -355,6 +363,7 @@ if(WIN32)
     endif()
 
     install(TARGETS TrenchBroom RUNTIME DESTINATION . COMPONENT TrenchBroom)
+    install(TARGETS TrenchBroomMcp RUNTIME DESTINATION . COMPONENT TrenchBroom)
     install(CODE [[
         # The regexes are a workaround for https://gitlab.kitware.com/cmake/cmake/-/issues/22431
         file(GET_RUNTIME_DEPENDENCIES
@@ -467,6 +476,7 @@ elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 
     # add files
     install(TARGETS TrenchBroom RUNTIME DESTINATION bin COMPONENT TrenchBroom)
+    install(TARGETS TrenchBroomMcp RUNTIME DESTINATION bin COMPONENT TrenchBroom)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fonts"           DESTINATION ${LINUX_RESOURCE_LOCATION} COMPONENT TrenchBroom)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/defaults"        DESTINATION ${LINUX_RESOURCE_LOCATION} COMPONENT TrenchBroom)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/games"           DESTINATION ${LINUX_RESOURCE_LOCATION} COMPONENT TrenchBroom)

@@ -33,6 +33,7 @@
 #include "kd/vector_utils.h"
 
 #include <algorithm>
+#include <atomic>
 #include <iterator>
 #include <ranges>
 #include <string>
@@ -43,11 +44,31 @@ namespace tb::mdl
 
 kdl_reflect_impl(NodePath);
 
-Node::Node() = default;
+namespace
+{
+
+IdType nextRuntimeId()
+{
+  // atomic because nodes may be created on worker threads, e.g. when parsing a map
+  static auto counter = std::atomic<IdType>{1};
+  return counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+} // namespace
+
+Node::Node()
+  : m_runtimeId{nextRuntimeId()}
+{
+}
 
 Node::~Node()
 {
   clearChildren();
+}
+
+IdType Node::runtimeId() const
+{
+  return m_runtimeId;
 }
 
 const std::string& Node::name() const

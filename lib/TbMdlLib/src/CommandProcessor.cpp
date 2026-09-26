@@ -25,10 +25,12 @@
 #include "mdl/UndoableCommand.h"
 
 #include "kd/contracts.h"
+#include "kd/ranges/to.h"
 #include "kd/set_temp.h"
 #include "kd/vector_utils.h"
 
 #include <algorithm>
+#include <ranges>
 
 namespace tb::mdl
 {
@@ -208,6 +210,20 @@ const std::string* CommandProcessor::redoCommandName() const
   return canRedo() ? &m_redoStack.back()->name() : nullptr;
 }
 
+std::vector<std::string> CommandProcessor::undoCommandNames() const
+{
+  return m_undoStack | std::views::reverse
+         | std::views::transform([](const auto& command) { return command->name(); })
+         | kdl::ranges::to<std::vector>();
+}
+
+std::vector<std::string> CommandProcessor::redoCommandNames() const
+{
+  return m_redoStack | std::views::reverse
+         | std::views::transform([](const auto& command) { return command->name(); })
+         | kdl::ranges::to<std::vector>();
+}
+
 void CommandProcessor::startTransaction(std::string name, const TransactionScope scope)
 {
   m_transactionStack.emplace_back(std::move(name), scope);
@@ -249,6 +265,11 @@ void CommandProcessor::rollbackTransaction()
 bool CommandProcessor::isTransactionActive() const
 {
   return !m_transactionStack.empty();
+}
+
+size_t CommandProcessor::transactionDepth() const
+{
+  return m_transactionStack.size();
 }
 
 bool CommandProcessor::isCurrentDocumentStateObservable() const
@@ -326,7 +347,6 @@ CommandProcessor::SubmitAndStoreResult CommandProcessor::executeAndStoreCommand(
   }
 
   const auto commandStored = storeCommand(std::move(command), collate);
-  m_redoStack.clear();
   return {true, commandStored};
 }
 
@@ -370,6 +390,10 @@ bool CommandProcessor::storeCommand(
 {
   if (m_transactionStack.empty())
   {
+    // The redo stack is only cleared once a command reaches the undo stack. Commands
+    // executed within a transaction may still be rolled back, and in that case, the redo
+    // stack must remain intact.
+    m_redoStack.clear();
     return pushToUndoStack(std::move(command), collate);
   }
   else
@@ -413,6 +437,7 @@ void CommandProcessor::createAndStoreTransaction()
 
     if (m_transactionStack.empty())
     {
+      m_redoStack.clear();
       pushToUndoStack(std::move(command), true);
     }
     else

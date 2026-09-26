@@ -1,0 +1,88 @@
+add_library(TbMcpLib STATIC)
+
+target_sources(TbMcpLib
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CallContext.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CallLog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CallRunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ChangeCollector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Endpoint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Errors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Host.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonRpc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ObjectIds.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Pagination.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/PromptRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ProtocolVersion.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/RegisterAll.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Resources.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ServerState.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Session.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/SseParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/StreamableHttp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
+
+  PUBLIC FILE_SET headers TYPE HEADERS
+    BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
+    FILES
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Args.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallContext.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallLog.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallRunner.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ChangeCollector.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Endpoint.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Errors.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Host.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/HttpParser.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/HttpResponse.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Json.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonRpc.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonVm.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/McpServer.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ObjectIds.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Pagination.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/PromptRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ProtocolVersion.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/RegisterAll.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ResourceRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Resources.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Scheduler.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Schema.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ServerState.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Session.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/SseParser.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/StreamableHttp.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
+)
+
+target_link_libraries(TbMcpLib
+  PRIVATE
+    CompilerConfig
+    PrecompileStdHeaders
+    fmt::fmt-header-only
+  PUBLIC
+    nlohmann_json::nlohmann_json
+    KdLib
+    TbAppLib
+    TbBaseLib
+    TbMdlLib
+    VmLib
+)
+
+add_subdirectory(test-utils)
+add_subdirectory(test)

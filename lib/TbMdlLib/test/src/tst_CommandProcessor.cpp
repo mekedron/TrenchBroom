@@ -753,6 +753,95 @@ TEST_CASE("CommandProcessor")
     }
   }
 
+  SECTION("transactionDepth")
+  {
+    CHECK(commandProcessor.transactionDepth() == 0u);
+
+    commandProcessor.startTransaction("outer", TransactionScope::LongRunning);
+    CHECK(commandProcessor.transactionDepth() == 1u);
+
+    commandProcessor.startTransaction("inner", TransactionScope::Oneshot);
+    CHECK(commandProcessor.transactionDepth() == 2u);
+
+    commandProcessor.commitTransaction();
+    CHECK(commandProcessor.transactionDepth() == 1u);
+
+    commandProcessor.rollbackTransaction();
+    commandProcessor.commitTransaction();
+    CHECK(commandProcessor.transactionDepth() == 0u);
+  }
+
+  SECTION("redo stack")
+  {
+    commandProcessor.executeAndStore(std::make_unique<NullCommand>("command 1"));
+    commandProcessor.executeAndStore(std::make_unique<NullCommand>("command 2"));
+    REQUIRE(commandProcessor.undo());
+    REQUIRE(commandProcessor.canRedo());
+
+    SECTION("is preserved when a transaction is rolled back")
+    {
+      commandProcessor.startTransaction("transaction", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::make_unique<NullCommand>("command 3"));
+      commandProcessor.rollbackTransaction();
+      commandProcessor.commitTransaction();
+
+      REQUIRE(commandProcessor.canRedo());
+      CHECK(*commandProcessor.redoCommandName() == "command 2");
+    }
+
+    SECTION(
+      "is preserved when a nested transaction is committed and the outer one is "
+      "rolled back")
+    {
+      commandProcessor.startTransaction("outer", TransactionScope::LongRunning);
+      commandProcessor.startTransaction("inner", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::make_unique<NullCommand>("command 3"));
+      commandProcessor.commitTransaction();
+      commandProcessor.rollbackTransaction();
+      commandProcessor.commitTransaction();
+
+      REQUIRE(commandProcessor.canRedo());
+      CHECK(*commandProcessor.redoCommandName() == "command 2");
+    }
+
+    SECTION("is cleared when a transaction is committed")
+    {
+      commandProcessor.startTransaction("transaction", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::make_unique<NullCommand>("command 3"));
+      commandProcessor.commitTransaction();
+
+      CHECK(!commandProcessor.canRedo());
+    }
+
+    SECTION("is cleared when a command is stored outside of a transaction")
+    {
+      commandProcessor.executeAndStore(std::make_unique<NullCommand>("command 3"));
+
+      CHECK(!commandProcessor.canRedo());
+    }
+
+    SECTION("undoCommandNames and redoCommandNames")
+    {
+      CHECK(commandProcessor.undoCommandNames() == std::vector<std::string>{"command 1"});
+      CHECK(commandProcessor.redoCommandNames() == std::vector<std::string>{"command 2"});
+
+      REQUIRE(commandProcessor.undo());
+      CHECK(commandProcessor.undoCommandNames().empty());
+      CHECK(
+        commandProcessor.redoCommandNames()
+        == std::vector<std::string>{"command 1", "command 2"});
+    }
+
+    SECTION("is preserved by redo")
+    {
+      REQUIRE(commandProcessor.undo());
+      REQUIRE(commandProcessor.redo());
+
+      REQUIRE(commandProcessor.canRedo());
+      CHECK(*commandProcessor.redoCommandName() == "command 2");
+    }
+  }
+
   SECTION("isCurrentDocumentStateObservable")
   {
     SECTION("No enclosing transaction")

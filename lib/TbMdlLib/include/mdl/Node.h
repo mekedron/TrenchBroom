@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "mdl/IdType.h"
 #include "mdl/IssueType.h"
 #include "mdl/LockState.h"
 #include "mdl/NodeVisitor.h"
@@ -59,6 +60,8 @@ struct NodePath
 class Node : public Taggable
 {
 private:
+  IdType m_runtimeId;
+
   Node* m_parent = nullptr;
   std::vector<Node*> m_children;
   size_t m_descendantCount = 0;
@@ -89,6 +92,15 @@ public:
   ~Node() override;
 
 public: // getters
+  /**
+   * Returns an identifier that is unique among all nodes created by this process.
+   *
+   * The identifier is assigned when the node is constructed. It is never copied (a clone
+   * is a new node and receives a new identifier), never persisted, and never reused, so
+   * it stays valid for as long as the node exists, including across undo and redo.
+   */
+  IdType runtimeId() const;
+
   const std::string& name() const;
 
   /**

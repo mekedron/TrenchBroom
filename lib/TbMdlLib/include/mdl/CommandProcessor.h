@@ -175,6 +175,19 @@ public:
    * no command can be redone.
    */
   const std::string* redoCommandName() const;
+
+  /**
+   * Returns the names of all commands on the undo stack, the most recently executed
+   * command first.
+   */
+  std::vector<std::string> undoCommandNames() const;
+
+  /**
+   * Returns the names of all commands on the redo stack, the command that `redo` would
+   * execute first.
+   */
+  std::vector<std::string> redoCommandNames() const;
+
   /**
    * Starts a new transaction. If a transaction is currently executing, then the newly
    * started transaction becomes a nested transaction and will be added as a command to
@@ -214,6 +227,11 @@ public:
    * Indicates whether a transaction is currently active.
    */
   bool isTransactionActive() const;
+
+  /**
+   * Returns the number of currently executing (possibly nested) transactions.
+   */
+  size_t transactionDepth() const;
 
   /**
    * Indicates whether the current document state is observable.

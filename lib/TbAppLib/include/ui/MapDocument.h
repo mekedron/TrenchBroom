@@ -221,6 +221,7 @@ public: // accessors and such
   const render::MapRenderer& mapRenderer() const;
 
   Logger& logger();
+  Logger* targetLogger() const;
   void setTargetLogger(Logger* parentLogger);
 
 public: // point file management

@@ -114,6 +114,10 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialBrowser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialBrowserView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialCollectionEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpPreferencePane.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServerController.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpStatusIndicator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpTcpTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MiniToolBarLayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ModEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MousePreferencePane.cpp
@@ -135,6 +139,8 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/QStyleUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/QThreadUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/QWidgetUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/QtMcpHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/QtScheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RecentDocumentListBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RecentDocuments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderView.cpp
@@ -299,6 +305,10 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowser.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowserView.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialCollectionEditor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpPreferencePane.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpServerController.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpStatusIndicator.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpTcpTransport.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MiniToolBarLayout.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/ModEditor.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MousePreferencePane.h
@@ -321,6 +331,8 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/QThreadUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/QVecUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/QWidgetUtils.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/QtMcpHost.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/QtScheduler.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/RecentDocumentListBox.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/RecentDocuments.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/RenderView.h
@@ -387,6 +399,7 @@ target_link_libraries(TbUiLib
     Qt6::Widgets
     TbAppLib
     TbBaseLib
+    TbMcpLib
     TbMdlLib
     TbPreferencesLib
     TbRenderLib

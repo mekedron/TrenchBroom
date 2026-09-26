@@ -367,6 +367,7 @@ public:
 
   void showCompileDialog();
   bool closeCompileDialog();
+  bool compilationRunning() const;
   void rerunLastCompilation();
   bool hasLastCompilationProfile() const;
 

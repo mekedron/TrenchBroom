@@ -1,0 +1,315 @@
+/*
+ Copyright (C) 2026 Nikita Rabykin
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "mcp/tools/SessionTools.h"
+
+#include "base/PreferenceManager.h"
+#include "mcp/Args.h"
+#include "mcp/CallContext.h"
+#include "mcp/CallLog.h"
+#include "mcp/ChangeCollector.h"
+#include "mcp/Pagination.h"
+#include "mcp/ServerState.h"
+#include "mcp/ToolRegistry.h"
+#include "mdl/GameConfig.h"
+#include "mdl/GameInfo.h"
+#include "mdl/Grid.h"
+#include "mdl/Map.h"
+#include "mdl/MapFormat.h"
+#include "mdl/WorldNode.h"
+#include "prefs/Preferences.h"
+#include "ui/MapDocument.h"
+
+#include <algorithm>
+
+namespace tb::mcp
+{
+namespace
+{
+using namespace schema;
+
+Schema documentSummarySchema()
+{
+  return object({
+    field("id", string()).required().describe("Document handle, e.g. 'doc:1'"),
+    field("title", string()).describe("Window title"),
+    field("path", any()).describe("Absolute file path, or null if never saved"),
+    field("game", string()).describe("Game name, e.g. 'Quake'"),
+    field("format", string()).describe("Map format, e.g. 'Valve'"),
+    field("modified", boolean()).describe("Whether there are unsaved changes"),
+    field("focused", boolean()).describe("Whether its window is the focused window"),
+    field("active", boolean())
+      .describe("Whether tools of this session target it by default"),
+  });
+}
+
+ToolResult editorStatusTool(CallContext& context, const Args&)
+{
+  return editorStatus(context.server(), context.session());
+}
+
+ToolResult documentListTool(CallContext& context, const Args&)
+{
+  auto documents = Json::array();
+  for (const auto& document : context.host().documents())
+  {
+    documents.push_back(documentSummary(context.server(), document, context.session()));
+  }
+
+  const auto active = context.server().defaultDocument(context.session());
+  return Json{
+    {"documents", std::move(documents)},
+    {"activeDocument", active ? Json(active->id) : Json(nullptr)},
+  };
+}
+
+ToolResult documentActivateTool(CallContext& context, const Args& args)
+{
+  const auto documentId = args.get<std::string>("document");
+  const auto document = context.server().findDocument(documentId);
+  if (!document)
+  {
+    return makeError(
+      ErrorCode::DocumentNotFound,
+      "Document " + documentId + " is not open.",
+      "Use document_list to see the open documents.");
+  }
+
+  context.session().activeDocumentId = documentId;
+  return Json{
+    {"activeDocument", documentId},
+    {"document", documentSummary(context.server(), *document, context.session())},
+  };
+}
+
+ToolResult sessionLogTool(CallContext& context, const Args& args)
+{
+  const auto& log = context.server().callLog;
+  const auto lastSeq =
+    log.entries().empty() ? size_t{0} : size_t(log.entries().back().seq);
+
+  auto request = pageRequest(args, lastSeq);
+  if (request.is_error())
+  {
+    return errorOf(request);
+  }
+
+  const auto allSessions = args.get<std::string>("scope") == "all";
+  const auto toolFilter = args.getOptional<std::string>("tool");
+  const auto errorsOnly = args.get<bool>("errorsOnly");
+
+  auto items = std::vector<Json>{};
+  for (auto it = log.entries().rbegin(); it != log.entries().rend(); ++it)
+  {
+    const auto& entry = *it;
+    if (!allSessions && entry.sessionId != context.session().id)
+    {
+      continue;
+    }
+    if (toolFilter && entry.tool != *toolFilter)
+    {
+      continue;
+    }
+    if (errorsOnly && entry.ok)
+    {
+      continue;
+    }
+
+    auto item = toJson(entry);
+    if (request.value().detail == Detail::Summary)
+    {
+      item.erase("arguments");
+    }
+    items.push_back(std::move(item));
+  }
+
+  return makePage(items, request.value(), lastSeq);
+}
+
+} // namespace
+
+Json documentSummary(
+  ServerState& server, const DocumentInfo& document, const Session& session)
+{
+  const auto& map = document.document->map();
+  const auto active = server.defaultDocument(session);
+  return Json{
+    {"id", document.id},
+    {"title", document.windowTitle},
+    {"path", map.persistent() ? Json(map.path().string()) : Json(nullptr)},
+    {"game", map.gameInfo().gameConfig.name},
+    {"format", mdl::formatName(map.worldNode().mapFormat())},
+    {"modified", map.modified()},
+    {"focused", document.focused},
+    {"active", active && active->id == document.id},
+  };
+}
+
+Json editorStatus(ServerState& server, const Session& session)
+{
+  auto documents = Json::array();
+  for (const auto& document : server.host.documents())
+  {
+    documents.push_back(documentSummary(server, document, session));
+  }
+
+  const auto active = server.defaultDocument(session);
+  auto status = Json{
+    {"version", server.host.applicationVersion()},
+    {"protocolVersion", session.protocolVersion},
+    {"sessions", server.sessions.size()},
+    {"documents", std::move(documents)},
+    {"activeDocument", active ? Json(active->id) : Json(nullptr)},
+    {"locks",
+     Json{
+       {"alignmentLock", pref(Preferences::AlignmentLock)},
+       {"uvLock", pref(Preferences::UvLock)},
+     }},
+  };
+
+  if (active)
+  {
+    auto& document = *active->document;
+    auto& map = document.map();
+    auto& state = server.documentState(document);
+    const auto toolName = server.host.currentToolName(document);
+
+    status["tool"] = toolName ? Json(*toolName) : Json(nullptr);
+    status["grid"] = Json{
+      {"size", map.grid().actualSize()},
+      {"visible", map.grid().visible()},
+      {"snap", map.grid().snap()},
+    };
+    status["compileRunning"] = server.host.isCompileRunning(document);
+    status["transaction"] =
+      state.transaction
+        ? Json{{"name", state.transaction->name}, {"owner", state.transaction->clientName}}
+        : Json(nullptr);
+    status["selection"] = selectionSummary(map, state.ids, 20);
+  }
+  else
+  {
+    status["tool"] = nullptr;
+    status["grid"] = nullptr;
+    status["compileRunning"] = false;
+    status["transaction"] = nullptr;
+    status["selection"] = nullptr;
+  }
+
+  const auto& activity = server.activity;
+  status["agentActivity"] = Json{
+    {"state",
+     activity.state == ServerActivity::State::Idle      ? "idle"
+     : activity.state == ServerActivity::State::Running ? "running"
+                                                        : "waitingForUser"},
+    {"tool", activity.toolTitle},
+  };
+  return status;
+}
+
+void registerSessionTools(ToolRegistry& registry)
+{
+  registry.add(
+    ToolDef{"editor_status"}
+      .title("Editor Status")
+      .description(
+        "Returns the editor state: version, open documents, the active document (the one "
+        "tools act on by default), current tool, grid, alignment/UV locks, selection, "
+        "whether a compile is running, and any open agent transaction. Call this first "
+        "to "
+        "orient yourself. Example: {}")
+      .input(object({}))
+      .output(object({
+        field("version", string()).required(),
+        field("protocolVersion", string()),
+        field("sessions", integer()).describe("Number of connected MCP clients"),
+        field("documents", array(documentSummarySchema())).required(),
+        field("activeDocument", any()).describe("Handle of the active document or null"),
+        field("tool", any()).describe("Name of the active editor tool or null"),
+        field("grid", any()).describe("{size, visible, snap} or null"),
+        field(
+          "locks",
+          object({field("alignmentLock", boolean()), field("uvLock", boolean())})),
+        field("compileRunning", boolean()),
+        field("transaction", any())
+          .describe("{name, owner} of the open agent transaction"),
+        field("selection", any()).describe("Selection summary of the active document"),
+        field("agentActivity", any()),
+      }))
+      .mutation(Mutation::None)
+      .idempotent()
+      .handler(editorStatusTool));
+
+  registry.add(
+    ToolDef{"document_list"}
+      .title("List Documents")
+      .description(
+        "Lists the open documents (one per editor window) with handle, path, game, "
+        "format, modified flag and which one is active. Example: {}")
+      .input(object({}))
+      .output(object({
+        field("documents", array(documentSummarySchema())).required(),
+        field("activeDocument", any()).describe("Handle of the active document or null"),
+      }))
+      .mutation(Mutation::None)
+      .idempotent()
+      .handler(documentListTool));
+
+  registry.add(
+    ToolDef{"document_activate"}
+      .title("Activate Document")
+      .description(
+        "Chooses the document that this session's tools act on by default (without a "
+        "'document' argument). It does not change the focused window. Without it, tools "
+        "act on the focused window. Example: {\"document\": \"doc:2\"}")
+      .input(object({
+        field("document", documentId()).required().describe("Handle from document_list"),
+      }))
+      .output(object({
+        field("activeDocument", string()).required(),
+        field("document", documentSummarySchema()).required(),
+      }))
+      .mutation(Mutation::None)
+      .idempotent()
+      .handler(documentActivateTool));
+
+  registry.add(
+    ToolDef{"session_log"}
+      .title("Session Log")
+      .description(
+        "Returns the agent calls performed so far, newest first: tool, time, duration, "
+        "success or error code, undo step and change counts. detail 'full' includes the "
+        "arguments. Example: {\"scope\": \"all\", \"errorsOnly\": true, \"limit\": 20}")
+      .input(object({
+        field("scope", enumOf({"session", "all"}).defaultsTo("session"))
+          .describe("'session': calls of this client; 'all': calls of all clients"),
+        field("tool", string()).describe("Only calls of this tool"),
+        field("errorsOnly", boolean().defaultsTo(false)).describe("Only failed calls"),
+      }))
+      .output(object({
+        field("items", array(any())).required(),
+        field("total", integer()).required(),
+        field("nextCursor", any()),
+      }))
+      .mutation(Mutation::None)
+      .paginated()
+      .handler(sessionLogTool));
+}
+
+} // namespace tb::mcp

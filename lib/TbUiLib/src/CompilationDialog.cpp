@@ -179,6 +179,11 @@ void CompilationDialog::createGui()
   connect(m_closeButton, &QPushButton::clicked, this, &CompilationDialog::close);
 }
 
+bool CompilationDialog::compilationRunning() const
+{
+  return m_run.running();
+}
+
 void CompilationDialog::keyPressEvent(QKeyEvent* event)
 {
   // Dismissing the dialog with Escape doesn't invoke CompilationDialog::closeEvent, so

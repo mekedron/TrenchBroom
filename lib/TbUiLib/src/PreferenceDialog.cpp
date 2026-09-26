@@ -41,6 +41,7 @@
 #include "ui/DialogButtonLayout.h"
 #include "ui/GamesPreferencePane.h"
 #include "ui/KeyboardPreferencePane.h"
+#include "ui/McpPreferencePane.h"
 #include "ui/MousePreferencePane.h"
 #include "ui/PreferencePane.h"
 #include "ui/ViewPreferencePane.h"
@@ -67,7 +68,8 @@ enum class PreferenceDialog::PrefPane
   Mouse = 3,
   Keyboard = 4,
   Update = 5,
-  Last = 5
+  Mcp = 6,
+  Last = 6
 } PrefPane;
 
 
@@ -143,6 +145,7 @@ void PreferenceDialog::createGui()
   const auto mouseImage = loadSVGIcon("MousePreferences.svg");
   const auto keyboardImage = loadSVGIcon("KeyboardPreferences.svg");
   const auto updateImage = loadSVGIcon("UpdatePreferences.svg");
+  const auto mcpImage = loadSVGIcon("McpPreferences.svg");
 
   m_toolBar = new QToolBar{};
   m_toolBar->setFloatable(false);
@@ -155,6 +158,7 @@ void PreferenceDialog::createGui()
   m_toolBar->addAction(
     keyboardImage, "Keyboard", [&]() { switchToPane(PrefPane::Keyboard); });
   m_toolBar->addAction(updateImage, "Update", [&]() { switchToPane(PrefPane::Update); });
+  m_toolBar->addAction(mcpImage, "AI Agents", [&]() { switchToPane(PrefPane::Mcp); });
 
   // Don't display tooltips for pane switcher buttons...
   for (auto* button : m_toolBar->findChildren<QToolButton*>())
@@ -169,6 +173,7 @@ void PreferenceDialog::createGui()
   m_stackedWidget->addWidget(new MousePreferencePane{});
   m_stackedWidget->addWidget(new KeyboardPreferencePane{m_appController, m_document});
   m_stackedWidget->addWidget(new UpdatePreferencePane{m_appController});
+  m_stackedWidget->addWidget(new McpPreferencePane{m_appController});
 
   m_buttonBox = new QDialogButtonBox{
     PreferenceManager::instance().saveInstantly()

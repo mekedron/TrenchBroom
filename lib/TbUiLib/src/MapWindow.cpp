@@ -96,6 +96,7 @@
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindowManager.h"
+#include "ui/McpStatusIndicator.h"
 #include "ui/ObjExportDialog.h"
 #include "ui/QPathUtils.h"
 #include "ui/QStringUtils.h"
@@ -528,6 +529,7 @@ void MapWindow::createStatusBar()
   m_statusBarLabel = new QLabel{};
   statusBar()->addWidget(m_statusBarLabel, 1);
   statusBar()->addWidget(m_appController.updater().createUpdateIndicator());
+  statusBar()->addWidget(new McpStatusIndicator{m_appController.mcpServerController()});
 }
 
 namespace
@@ -2205,6 +2207,11 @@ bool MapWindow::closeCompileDialog()
   }
 
   return false;
+}
+
+bool MapWindow::compilationRunning() const
+{
+  return m_compilationDialog && m_compilationDialog->compilationRunning();
 }
 
 void MapWindow::showLaunchEngineDialog()

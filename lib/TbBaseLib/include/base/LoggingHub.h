@@ -37,6 +37,7 @@ private:
   Logger* m_targetLogger = nullptr;
 
 public:
+  Logger* targetLogger() const;
   void setTargetLogger(Logger* targetLogger);
 
 private:
