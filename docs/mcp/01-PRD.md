@@ -126,6 +126,11 @@ The TrenchBroom MCP Server gives an AI agent the same abilities a human level de
 - A log of all agent calls is available in the editor console and in a separate file.
 - The user can review which changes the agent made during a session.
 
+### 7.7. Maintainability as a fork
+
+- The MCP server is maintained in a fork of TrenchBroom and is regularly synced with upstream.
+- It lives in its own libraries and files. Changes to original TrenchBroom files are limited to critical fixes and small, unavoidable hooks, so that syncing with upstream causes few or no merge conflicts.
+
 ## 8. Phases
 
 | Phase | Scope | Done when |

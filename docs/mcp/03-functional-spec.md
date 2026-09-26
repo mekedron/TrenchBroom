@@ -233,10 +233,12 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 
 | Tool | What it does | Key inputs | Returns | Priority |
 |---|---|---|---|---|
+| `compile_tools_get` / `compile_tools_set` | Compile tool paths of the current game (e.g. Half-Life csg/bsp/vis/rad, Quake qbsp/vis/light, Quake 3 q3map2), checked for existence | Tool paths | Tools | v1 |
+| `compile_presets_list` | Built-in tool chains per game family (fast, normal, full quality) that export the map, compile it and copy the result into the game's `maps` folder | — | Presets | v1 |
 | `compile_profiles_list` | Lists compile profiles with their tasks | — | Profiles | v1 |
 | `compile_profile_save` / `compile_profile_delete` | Creates or edits a profile (tasks: export map, run tool, launch engine, copy, rename, delete files) | Profile | Profile | v1 |
-| `compile_run` | Runs a profile in the background; "test" mode only prints what would run | Profile, test mode | Run ID | v1 |
-| `compile_status` | Progress, current task, exit codes, full or tail of the log, detected leaks and errors | Run ID | Status, log | v1 |
+| `compile_run` | Runs a profile or preset in the background; "test" mode only prints what would run | Profile or preset, test mode | Run ID | v1 |
+| `compile_status` | Progress, current task, exit codes, full or tail of the log, parsed errors and warnings, detected leaks, and the path of the compiled file | Run ID | Status, log, output path | v1 |
 | `compile_cancel` | Stops a running compile | Run ID | — | v1 |
 | `engine_profiles_list` / `engine_profile_save` | Lists or edits game engine profiles | Profile | Profiles | v1 |
 | `engine_launch` | Launches the game engine with the current map | Engine profile, parameters | Result | v1 |
@@ -257,7 +259,7 @@ The camera tools in the first table drive the **user's** editor views. Agent vis
 | `view_layout_set` | Sets the layout (1–4 panes) and maximized view | Layout | — | v2 |
 | `grid_get` / `grid_set` | Grid size, show and snap | Size, flags | Grid | MVP |
 
-### 17.1. Agent vision (offscreen snapshots)
+### 17.1. Agent vision and editor console
 
 The agent needs to check its work visually. Snapshots render offscreen from cameras the agent owns, with their own visibility settings. They never move the user's camera, never change the user's filters or hidden objects, never open a visible window, and never wait for the user to finish an interaction.
 
@@ -272,7 +274,16 @@ The agent needs to check its work visually. Snapshots render offscreen from came
 
 Framing helpers for agent cameras: frame objects or a box, look from a point at a target, orbit a target, stand at a player's eye height inside a room.
 
-Snapshots are read-only: they do not enter the undo history. A 1024×768 snapshot of a 5,000-brush map renders in under 500 ms, and the editor stays responsive while it renders.
+The agent also reads the editor console, where the editor reports errors (missing materials, failed model loads, invalid map data) and other useful messages:
+
+| Tool | What it does | Key inputs | Returns | Priority |
+|---|---|---|---|---|
+| `console_read` | Console messages with level, time, text and document; filter by minimum level, text and document; cursor to fetch only newer messages | Filters, cursor | Messages (paginated) | v1 |
+| `console_clear` | Clears the console buffer and the editor's console view | — | Result | v1 |
+
+Every call result lists console warnings and errors logged while the call ran.
+
+Snapshots and console reads are read-only: they do not enter the undo history. A 1024×768 snapshot of a 5,000-brush map renders in under 500 ms, and the editor stays responsive while it renders.
 
 ## 18. Generic editor actions
 
@@ -321,7 +332,7 @@ Resources let the agent read data without calling a tool, and subscribe to chang
 | Entity definitions | All classes of the current game/mod | On reload |
 | Materials | Material list | On reload |
 | Compile log | Output of the running or last compile | Streaming |
-| Editor console | Editor log messages | Streaming |
+| Editor console | All editor log messages with level and time | On new messages |
 | User manual | TrenchBroom manual, by section | Static |
 | Agent guide | How to use this server well: coordinate conventions, typical sizes (player height, door size, step height per game), workflow tips | Static |
 
