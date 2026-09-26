@@ -34,6 +34,11 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityCreateTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityPropertyTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.cpp
@@ -86,6 +91,9 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityPropertyTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h

@@ -24,8 +24,10 @@
 #include "mcp/Json.h"
 
 #include "vm/bbox.h"
+#include "vm/ray.h"
 #include "vm/vec.h"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,6 +37,8 @@ namespace tb::mdl
 {
 class Brush;
 class BrushBuilder;
+class BrushNode;
+class EntityNode;
 class Map;
 class Node;
 } // namespace tb::mdl
@@ -55,6 +59,46 @@ class IdRegistry;
  * degenerate (e.g. flat). Used by space_check, map_plan_view and opening_cut.
  */
 bool intersectsInterior(const mdl::Brush& brush, const vm::bbox3d& box);
+
+/** The brush entity that owns the given node, or nullptr (world brushes). */
+const mdl::EntityNode* owningBrushEntity(const mdl::Node& node);
+
+/** Classification of brushes by their owning entity. */
+enum class BrushClass
+{
+  /** World brushes and brushes of func_group / func_detail* entities. */
+  Solid,
+  /** Brushes of other brush entities (doors, platforms, ...). */
+  Entity,
+  /** Brushes of trigger_* entities. */
+  Trigger,
+};
+
+BrushClass classifyBrush(const mdl::BrushNode& brushNode);
+
+/** Whether the node is an entity without children (a point entity). */
+bool isPointEntity(const mdl::Node& node);
+
+struct RayHit
+{
+  double distance;
+  vm::vec3d point;
+  mdl::Node* node;
+  std::optional<size_t> faceIndex;
+};
+
+/**
+ * Casts the ray against brushes, patches and point entities accepted by the given
+ * predicate. Like the editor's picking, brush faces are only hit from the front, so a ray
+ * starting inside a brush does not hit that brush, and a ray starting inside the bounds
+ * of a point entity does not hit that entity. Returns the hits sorted by distance. Used
+ * by ray_pick, space_check and entity placement.
+ */
+std::vector<RayHit> castRay(
+  mdl::Map& map,
+  const vm::ray3d& ray,
+  const std::function<bool(const mdl::Node&)>& accept,
+  std::optional<double> maxDistance = std::nullopt);
 
 /** A brush builder that uses the map format, world bounds and the game's face defaults.
  */

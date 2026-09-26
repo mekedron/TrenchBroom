@@ -155,8 +155,3 @@ The TrenchBroom MCP Server gives an AI agent the same abilities a human level de
 ## 10. Open questions
 
 - Do we ship a high-level "construction kit" (room, corridor, stairs, door with trigger), or does the agent build everything from primitives?
-
-**Decided (2026-09-26):**
-
-- No human review or confirmation step. The agent edits the live map directly, and every operation is allowed by default; the agent asks the user itself when it wants to.
-- The agent may change anything the editor can change, including mods, WAD lists, game paths, profiles and preferences.

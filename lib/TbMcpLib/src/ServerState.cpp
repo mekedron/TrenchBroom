@@ -51,6 +51,7 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
     infoDidChange();
     didChange(DocumentAspect::Summary);
     didChange(DocumentAspect::Selection);
+    didChange(DocumentAspect::EntityDefinitions);
   });
 
   m_notifierConnection +=
@@ -68,6 +69,7 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
     infoDidChange();
     // issues depend on the entity definitions
     didChange(DocumentAspect::Summary);
+    didChange(DocumentAspect::EntityDefinitions);
   });
   m_notifierConnection += document.materialCollectionsDidChangeNotifier.connect(
     this, &DocumentState::infoDidChange);
@@ -403,7 +405,7 @@ void ServerState::documentAspectDidChange(
     scheduleDocumentUpdate(document, aspect);
   }
 
-  if (aspect != DocumentAspect::Summary)
+  if (aspect != DocumentAspect::Summary && aspect != DocumentAspect::EntityDefinitions)
   {
     // the editor status lists the modified flag and the selection of the documents
     scheduleResourceUpdate(EditorStatusUri);
@@ -422,6 +424,8 @@ std::string ServerState::documentResourceUri(
       return "summary";
     case DocumentAspect::Selection:
       return "selection";
+    case DocumentAspect::EntityDefinitions:
+      return "entity-definitions";
     case DocumentAspect::Status:
       break;
     }

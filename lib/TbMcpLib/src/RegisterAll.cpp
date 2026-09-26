@@ -23,6 +23,9 @@
 #include "mcp/Resources.h"
 #include "mcp/tools/BrushEditTools.h"
 #include "mcp/tools/DocumentTools.h"
+#include "mcp/tools/EntityClassTools.h"
+#include "mcp/tools/EntityCreateTools.h"
+#include "mcp/tools/EntityPropertyTools.h"
 #include "mcp/tools/GameTools.h"
 #include "mcp/tools/GeometryTools.h"
 #include "mcp/tools/HistoryTools.h"
@@ -51,6 +54,9 @@ void registerAll(McpServer& server)
   registerBrushEditTools(server.tools());
   registerViewTools(server.tools());
   registerMaterialTools(server.tools());
+  registerEntityClassTools(server.tools());
+  registerEntityCreateTools(server.tools());
+  registerEntityPropertyTools(server.tools());
   registerResources(server);
 }
 

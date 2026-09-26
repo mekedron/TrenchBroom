@@ -10,6 +10,9 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityCreateTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityPropertyTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Errors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryTools.cpp

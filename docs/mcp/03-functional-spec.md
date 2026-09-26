@@ -208,8 +208,8 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 |---|---|---|---|---|
 | `clipboard_copy` / `clipboard_cut` | Copies or cuts objects or faces as map text; returns the text too | Objects/faces | Text | v1 |
 | `clipboard_paste` | Pastes map text at the original position or at a given point; face text applies attributes to selected faces | Text, position mode | New IDs | v1 |
-| `map_import` | **New feature.** Imports all or part of another map file (by layer, group, classname or region) into the current map at a position, converting the format | File, filter, position, target layer | New IDs | v1 |
-| `prefab_save` / `prefab_list` / `prefab_insert` | **New feature.** Saves selected objects as a named reusable fragment in a user prefab folder; lists and inserts them | Name, objects / prefab, position, rotation | IDs | v2 |
+| `map_import` | Imports all or part of another map file (by layer, group, classname or region) into the current map at a position, converting the format | File, filter, position, target layer | New IDs | v1 |
+| `prefab_save` / `prefab_list` / `prefab_insert` | Saves selected objects as a named reusable fragment in a user prefab folder; lists and inserts them | Name, objects / prefab, position, rotation | IDs | v2 |
 
 ## 14. History
 
@@ -227,7 +227,7 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 | `issue_fix` | Applies a quick fix to one or many issues | Issues, fix | Change report | MVP |
 | `issue_hide` / `issue_show` | Hides or shows issues | Issues | — | v1 |
 | `validators_list` / `validators_set` | Lists validators and turns them on or off | Validators | Validators | v1 |
-| `map_check` | **New.** Extra agent-oriented checks beyond validators: entities stuck in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms | Checks | Findings | v1 |
+| `map_check` | Extra agent-oriented checks beyond validators: entities stuck in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms | Checks | Findings | v1 |
 
 ## 16. Compile, run and debug
 
@@ -242,20 +242,37 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 | `engine_launch` | Launches the game engine with the current map | Engine profile, parameters | Result | v1 |
 | `pointfile_load` / `pointfile_unload` | Loads a leak point file; returns the leak path as points | File (default next to map) | Path points | v1 |
 | `portalfile_load` / `portalfile_unload` | Loads a portal file | File | Portal count | v1 |
-| `leak_locate` | **New.** Summarizes where a leak goes: the entity it starts from and the brushes closest to the path where the gap likely is | — | Findings | v2 |
+| `leak_locate` | Summarizes where a leak goes: the entity it starts from and the brushes closest to the path where the gap likely is | — | Findings | v2 |
 
 ## 17. Views, camera and images
+
+The camera tools in the first table drive the **user's** editor views. Agent vision (17.1) uses separate agent cameras and never changes what the user sees.
 
 | Tool | What it does | Key inputs | Returns | Priority |
 |---|---|---|---|---|
 | `camera_get` / `camera_set` | Reads or sets the 3D camera position and direction | Position, look-at or angles | Camera | v1 |
 | `camera_focus` | Focuses the camera on objects | Objects | Camera | v1 |
 | `camera_step_pointfile` | Moves the camera to the next/previous leak point | Direction | Camera | v1 |
-| `view_snapshot` | **New feature.** Renders a view (3D or 2D XY/XZ/YZ) to an image, from the current camera or a given one, with chosen size and render options | View, camera, size, options | Image | v1 |
-| `view_snapshots_around` | **New.** Several snapshots around objects (e.g. 4 angles + top) for the agent to "look at" its work | Objects, count | Images | v2 |
 | `view_options_get` / `view_options_set` | Face render mode, shading, fog, edges, entity display, link display mode, show/hide by tag or entity class | Options | Options | v1 |
 | `view_layout_set` | Sets the layout (1–4 panes) and maximized view | Layout | — | v2 |
 | `grid_get` / `grid_set` | Grid size, show and snap | Size, flags | Grid | MVP |
+
+### 17.1. Agent vision (offscreen snapshots)
+
+The agent needs to check its work visually. Snapshots render offscreen from cameras the agent owns, with their own visibility settings. They never move the user's camera, never change the user's filters or hidden objects, never open a visible window, and never wait for the user to finish an interaction.
+
+| Tool | What it does | Key inputs | Returns | Priority |
+|---|---|---|---|---|
+| `agent_camera_set` / `agent_camera_get` / `agent_camera_list` | Named cameras owned by the agent session: perspective (position, look-at or angles, FOV) or orthographic (top/front/side, center, zoom) | Name, camera | Camera | v1 |
+| `view_snapshot` | Renders an image from an agent camera or an inline camera, 3D or 2D, with its own options: face mode, shading, fog, edges; show/hide by tag (triggers, clip, hint…), entity class, point entities, models; include hidden objects; isolate or highlight objects; bounding boxes, classnames, entity links, leak path, grid, axes | Camera, size, options | Image | v1 |
+| `view_snapshots_around` | Several images in one call around objects or a region (e.g. 4 sides + top), labelled | Objects or box, views | Images | v1 |
+| `map_plan_view` (image form) | Top-down orthographic render of a region at a height slice, entities marked | Region, height | Image | v1 |
+| `view_snapshot_compare` | The same camera before and after a change, side by side, with a changed-pixel mask | Camera, states | Images | v1 |
+| `view_snapshot_user` | Captures what the user currently sees in an editor view (read-only) | View | Image | v1 |
+
+Framing helpers for agent cameras: frame objects or a box, look from a point at a target, orbit a target, stand at a player's eye height inside a room.
+
+Snapshots are read-only: they do not enter the undo history. A 1024×768 snapshot of a 5,000-brush map renders in under 500 ms, and the editor stays responsive while it renders.
 
 ## 18. Generic editor actions
 
@@ -348,4 +365,4 @@ Ready-made instructions a user can pick in their AI client.
 | Issue Browser | §15 | Full |
 | Preferences | §4, §16, §19 | Full read and write |
 | Any remaining menu or shortcut action | §18 | Generic fallback |
-| **New:** screenshots, map import, prefabs, extra checks, leak locating, plan view | §5, §13, §15, §16, §17 | Not in the editor today |
+| Capabilities without an editor equivalent: agent vision (offscreen snapshots, agent cameras), map import, prefabs, extra checks, leak locating, plan view | §5, §13, §15, §16, §17 | MCP-only |

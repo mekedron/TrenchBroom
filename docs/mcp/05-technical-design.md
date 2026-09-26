@@ -85,7 +85,8 @@ lib/TbMcpLib/
     CallLog.h               in-memory ring buffer + JSONL sink interface
     tools/                  (headers expose only `void register<Domain>Tools(ToolRegistry&)`)
       SessionTools.h  HistoryTools.h  DocumentTools.h  GameTools.h  SceneTools.h
-      SelectionTools.h  GeometryTools.h  TransformTools.h  EntityTools.h  MaterialTools.h
+      SelectionTools.h  GeometryTools.h  TransformTools.h  EntityClassTools.h
+      EntityCreateTools.h  EntityPropertyTools.h  MaterialTools.h
       OrganizationTools.h  ClipboardTools.h  ValidationTools.h  CompileTools.h
       ViewTools.h  ActionTools.h  PreferenceTools.h  KnowledgeTools.h
     Resources.h  Prompts.h  RegisterAll.h
@@ -311,7 +312,7 @@ class Scheduler { public: virtual void post(std::function<void()>) = 0;
 enum class BusyState { Idle, Busy };
 struct DocumentInfo { std::string id; ui::MapDocument* document; std::string windowTitle; bool focused; };
 
-class McpHost {  // implemented by ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E11)
+class McpHost {  // implemented by ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E12)
 public:
   virtual std::vector<DocumentInfo> documents() = 0;
   virtual BusyState busyState(ui::MapDocument&) = 0;
@@ -432,7 +433,7 @@ A failed call rolls back only itself (nested `cancelTransaction`). `transaction_
   `contract_pre(m_transactionStack.empty())`; the UI already disables undo then.)
 - A session DELETE, a disconnect, **Stop agent**, or closing the document → rollback.
 - The status bar shows "AI transaction open: <name>". Human edits made meanwhile become part of the agent
-  transaction. This is documented in the manual section (E10.5) and is accepted behavior.
+  transaction. This is documented in the manual section (E11.5) and is accepted behavior.
 - **TbMdlLib change (E1.16):** add `size_t CommandProcessor::transactionDepth() const` (plus a
   `Map` passthrough), used by the busy gate in §4.1.
 
@@ -520,8 +521,9 @@ They get no transaction. They must honor `ctx.dryRun()` by validating and descri
 - Common argument names: `ids` (objects), `faces`, `document`, `dryRun`, `cursor`, `limit`, `fields`, `detail`.
   Coordinates are `position`/`min`/`max`/`center`/`vector`, angles are `angle`/`angles` (degrees), and every length
   is in map units.
-- Resource URIs: `trenchbroom://editor/status`, `trenchbroom://documents/{doc}/info|summary|selection|issues`,
-  `trenchbroom://games/{game}/config|entity-definitions|materials`, `trenchbroom://compile/{run}/log`,
+- Resource URIs: `trenchbroom://editor/status`,
+  `trenchbroom://documents/{doc}/info|summary|selection|entity-definitions|issues`,
+  `trenchbroom://games/{game}/config|materials`, `trenchbroom://compile/{run}/log`,
   `trenchbroom://console`, `trenchbroom://manual/{section}`, `trenchbroom://guide`.
 - Prompt names: `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
   `compile_and_debug`, `explain_map`, `explain_entity`, `cleanup_map`.
@@ -656,7 +658,7 @@ public:
 
 It uses the existing `lib/TbMdlLib/test-utils` helpers (`MapFixture`, `QuakeFixtureConfig`,
 `Quake2FixtureConfig`, `TestFactory.h`, `Matchers.h`) and `lib/TbAppLib/test-utils/MapDocumentFixture`.
-Fixture maps live in `lib/TbMcpLib/test/fixture/test/mcp/`. Scenario tests (E10.4) are scripted
+Fixture maps live in `lib/TbMcpLib/test/fixture/test/mcp/`. Scenario tests (E11.4) are scripted
 sequences in `tst_Scenarios.cpp` (S1–S3, S7 without compile) that run in CI.
 
 ### 9.2 `TbUiLibTest` (Qt, existing `RunAllTests.cpp` QApplication)
@@ -685,17 +687,19 @@ sequences in `tst_Scenarios.cpp` (S1–S3, S7 without compile) that run in CI.
 | `SelectionTools.cpp` | `selection_*`, `select_*` | E3 |
 | `GeometryTools.cpp` | `brush_create_*`, `room_create`, `opening_cut`, `brush_clip`, `face_extrude*`, `vertices_*`, `vertex_add`, `csg_*` | E4 |
 | `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/array/delete`, `command_repeat*` | E4 |
-| `EntityTools.cpp` | all `entity_*` | E5 |
+| `EntityClassTools.cpp` | `entity_classes_list`, `entity_class_describe`, `entity_model_info` | E5 |
+| `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes` | E5 |
+| `EntityPropertyTools.cpp` | `entity_properties_set`, `entity_property_remove/rename`, `entity_spawnflags_set`, `entity_defaults_apply`, `entity_links_get`, `entity_link`, `entity_color_set` | E5 |
 | `MaterialTools.cpp` | `materials_list`, `material_*`, `face_attributes_*`, `uv_*`, `locks_*`, `tags_list`, `tag_*` | E6 |
 | `OrganizationTools.cpp` | `layers_list`, `layer_*`, `objects_move_to_layer`, `group_*`, `groups_merge`, `linked_group_*`, `visibility_set` | E7 |
-| `ClipboardTools.cpp` | `clipboard_*`, `map_import` (prefabs in E11) | E7 |
+| `ClipboardTools.cpp` | `clipboard_*`, `map_import` (prefabs in E12) | E7 |
 | `ValidationTools.cpp` | `issues_list`, `issue_*`, `validators_*`, `map_check` | E8 |
 | `CompileTools.cpp` | `compile_*`, `engine_*`, `pointfile_*`, `portalfile_*` | E8 |
 | `ViewTools.cpp` | `camera_*`, `view_*`, `grid_get/set` | E4 (grid), E9 |
 | `ActionTools.cpp` | `actions_list`, `action_invoke` | E9 |
 | `PreferenceTools.cpp` | `preferences_get/set` | E9 |
 | `KnowledgeTools.cpp` | `manual_search`, `manual_section` | E9 |
-| `Resources.cpp`, `Prompts.cpp` | all resources (§7.1) and prompts | E3/E8/E10 |
+| `Resources.cpp`, `Prompts.cpp` | all resources (§7.1) and prompts | E3/E8/E11 |
 
 Shared building blocks go in `src/tools/ToolUtils.{h,cpp}`: object serialization (`serializeNode(node,
 fields, detail)`), face serialization, game-aware validation helpers (X14), and the `room_create`/`array` math. They
@@ -706,12 +710,32 @@ Notes on specific domains:
 - **Geometry creation** uses `mdl::BrushBuilder` and `mdl::addNodes(map, {{parentForNodes(map), nodes}})`. Shapes
   call `ui::DrawShapeToolExtension::createBrushes(bounds, DrawShapeToolParameters)` from TbAppLib (the exact code the
   Shape tool uses), with the parameters built from tool arguments.
+- **Entities** look classes up in the document's `EntityDefinitionManager`, so FGD, DEF and ENT definitions
+  behave the same. `src/tools/EntityUtils` holds the shared parts: property type names and definition JSON,
+  value validation (X14: `UNKNOWN_CLASSNAME`, `UNKNOWN_PROPERTY`, `INVALID_PROPERTY_VALUE`, `INVALID_CHOICE`,
+  `UNKNOWN_FLAGS`, `READ_ONLY_PROPERTY` warnings that never block; keys starting with `_` and well-known keys
+  such as `origin`, `angle` and `target` are not reported as unknown), flag lookup by name, bit (`bit8`) or value,
+  and entity targeting. Entity tools take `ids` of entities, `world` (worldspawn) or brushes (meaning their
+  entity); without ids they use the entities of the selection and fail with `NO_SELECTION` when nothing is
+  selected (the editor would target worldspawn). `withEntities` selects exactly the targets before calling the
+  `Map_Entities` functions, which act on `selection().allEntities()`; worldspawn runs separately because the
+  editor drops it from mixed selections. Entities of unknown classes are still created (with a warning).
+  `entity_create_point` snaps to the grid, and `dropToFloor` casts five vertical rays (bounds center and inset
+  corners, starting at the height of the bounds center) against visible solid and brush-entity brushes and
+  patches (not triggers), placing the bounds on the highest hit; afterwards it warns with
+  `ENTITY_OVERLAPS_BRUSHES` if the bounds intersect brushes (exact test, `GeometryUtils::intersectsInterior`).
+  `entity_move_brushes` to `world` is the editor's Make Structural (smart tags such as detail are turned off).
+  `entity_links_get` without ids lists the whole map (spec §10), not the selection. `entity_link` reuses the
+  target's name or generates `<classname>_<n>`, unique among all link values. `entity_color_set` converts to the
+  property's color range from the definition and defaults to the class's first color property, else `_color`.
+  The entity definitions resource is per document (`documents/{doc}/entity-definitions`), because the
+  definitions depend on the document's mods and chosen definition file; it is updated when they are reloaded.
 - **Transforms** go through `withTargets` + `translateSelection`/`rotateSelection`/`scaleSelection`/
   `shearSelection`/`flipSelection` so that texture lock, entity angle updates, and repeat stack semantics match the editor.
 - **ActionTools**: `ActionHost` enumerates `ActionManager::visitMainMenu`, `visitMapViewActions`, and
   `MapDocumentActionCache` tag/entity actions. The path is the action's preference path. `enabled`/`checked` are evaluated
   with an `ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
-  `QtMcpHost`. It is checked by the E9.10 coverage test, and each entry points to the matching semantic tool.
+  `QtMcpHost`. It is checked by the E9.8 coverage test, and each entry points to the matching semantic tool.
 
 ---
 
@@ -737,13 +761,13 @@ an epic follow the listed order, so each commit builds and tests on its own.
 
 **E2** DocumentTools + GameTools (`DocumentHost`, `PreferenceHost` for game paths), document/game resources,
 progress for open/reload. **E3** SceneTools, SelectionTools, subscribable status/summary/selection resources.
-**E4** GeometryTools + TransformTools + grid/locks. **E5** EntityTools + the entity-definitions resource.
+**E4** GeometryTools + TransformTools + grid/locks. **E5** EntityClassTools, EntityCreateTools, EntityPropertyTools + the entity-definitions resource.
 **E6** MaterialTools + the materials resource. **E7** OrganizationTools + ClipboardTools (`map_import` parses the
 file with `mdl::MapReader` into nodes, filters them, converts the format, and adds them through the paste path).
 **E8** ValidationTools + CompileTools (`CompileHost` over `CompilationRunner`; tests use the existing `CmdTool`
-stub like `tst_CompilationRunner.cpp`). **E9** ViewTools, `McpSnapshotRenderer`, ActionTools, PreferenceTools,
-KnowledgeTools, coverage check. **E10** agent guide text, descriptions review, prompts, scenario tests, manual section.
-**E11** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument` instances owned by the host) plus a
+stub like `tst_CompilationRunner.cpp`). **E9** ViewTools, ActionTools, PreferenceTools,
+KnowledgeTools, coverage check. **E10** `McpSnapshotRenderer` and agent cameras (offscreen agent vision). **E11** agent guide text, descriptions review, prompts, scenario tests, manual section.
+**E12** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument` instances owned by the host) plus a
 `--headless-mcp` stdio mode in `TrenchBroomMcp` that links the core directly. Tools need no changes, which is the
 payoff of the host seam.
 
@@ -811,7 +835,7 @@ They are binding for later epics in the same way as the rest of this document.
 - **`session_log`** lists newest first; cursors are tied to the last log sequence number, so a page
   requested after new calls were logged is marked `stale`.
 - **Resources in E1:** `trenchbroom://editor/status` (subscribable; updated when documents open, close
-  or change focus) and `trenchbroom://guide` (a first version of the agent guide; E10 replaces it).
+  or change focus) and `trenchbroom://guide` (a first version of the agent guide; E11 replaces it).
 - `CallLog` also provides `JsonlFileSink` (rotation at 10 MB with `.1`, `.2`, ... suffixes).
 
 ### 13.2 TbMdlLib / TbBaseLib / TbAppLib additions

@@ -23,9 +23,11 @@
 #include "mcp/McpServer.h"
 #include "mcp/McpToolFixture.h"
 #include "mcp/ServerState.h"
+#include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mdl/BrushNode.h"
+#include "mdl/EntityDefinitionManager.h"
 #include "mdl/Grid.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
@@ -93,6 +95,8 @@ TEST_CASE("Resources")
   const auto statusUri = std::string{"trenchbroom://editor/status"};
   const auto summaryUri = "trenchbroom://documents/" + documentId + "/summary";
   const auto selectionUri = "trenchbroom://documents/" + documentId + "/selection";
+  const auto entityDefinitionsUri =
+    "trenchbroom://documents/" + documentId + "/entity-definitions";
 
   SECTION("resources/list lists the document resources")
   {
@@ -105,6 +109,7 @@ TEST_CASE("Resources")
     CHECK(countOf(uris, summaryUri) == 1);
     CHECK(countOf(uris, selectionUri) == 1);
     CHECK(countOf(uris, "trenchbroom://documents/" + documentId + "/info") == 1);
+    CHECK(countOf(uris, entityDefinitionsUri) == 1);
 
     const auto templates = fixture.rpc("resources/templates/list");
     auto uriTemplates = std::vector<std::string>{};
@@ -114,6 +119,23 @@ TEST_CASE("Resources")
     }
     CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/summary") == 1);
     CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/selection") == 1);
+    CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/entity-definitions") == 1);
+  }
+
+  SECTION("entity definitions")
+  {
+    const auto fgd = getFixtureRoot() / "games" / "Quake" / "Quake.fgd";
+    fixture.call(
+      "entity_definitions_set", Json{{"type", "external"}, {"path", fgd.string()}});
+    REQUIRE(!map.entityDefinitionManager().definitions().empty());
+
+    auto expected = entityDefinitionsResource(map);
+    expected["document"] = documentId;
+    const auto resource = readResource(fixture, entityDefinitionsUri);
+    CHECK(resource == expected);
+    CHECK(resource["spec"] == "external:" + fgd.string());
+    CHECK(resource["count"] == map.entityDefinitionManager().definitions().size());
+    CHECK(resource["classes"].size() == resource["count"]);
   }
 
   SECTION("map summary")
@@ -145,7 +167,7 @@ TEST_CASE("Resources")
   {
     auto notifications = std::make_shared<CapturingNotificationStream>();
     REQUIRE(fixture.server().openNotificationStream(fixture.sessionId(), notifications));
-    for (const auto& uri : {statusUri, summaryUri, selectionUri})
+    for (const auto& uri : {statusUri, summaryUri, selectionUri, entityDefinitionsUri})
     {
       REQUIRE(
         fixture.rpc("resources/subscribe", Json{{"uri", uri}})["result"].is_object());
@@ -218,6 +240,21 @@ TEST_CASE("Resources")
       fixture.scheduler().runPending();
       CHECK(countOf(updatedUris(*notifications), statusUri) == 1);
       fixture.call("transaction_rollback");
+    }
+
+    SECTION("entity definition changes update the entity definitions")
+    {
+      fixture.call(
+        "entity_definitions_set", Json{{"type", "builtin"}, {"path", "Quoth2.fgd"}});
+      fixture.scheduler().runPending();
+      CHECK(countOf(updatedUris(*notifications), entityDefinitionsUri) == 1);
+
+      // map changes do not change the definitions
+      notifications->notifications.clear();
+      auto* brushNode = mdl::createBrushNode(map);
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {brushNode}}});
+      fixture.scheduler().runPending();
+      CHECK(countOf(updatedUris(*notifications), entityDefinitionsUri) == 0);
     }
 
     SECTION("unsubscribed resources are not notified")

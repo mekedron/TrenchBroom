@@ -32,7 +32,7 @@ The `TrenchBroomMcp` executable sits next to the TrenchBroom executable. It find
 claude mcp add --scope user trenchbroom -- /path/to/TrenchBroomMcp
 ```
 
-Until the bridge starts lazily (task E10.6), it launches TrenchBroom as soon as the client starts, even before any tool call. Add `--no-launch` if you only want to connect to an editor you opened yourself:
+The bridge launches TrenchBroom as soon as the client starts, even before any tool call. Add `--no-launch` if you only want to connect to an editor you opened yourself:
 
 ```bash
 claude mcp add --scope user trenchbroom -- /path/to/TrenchBroomMcp --no-launch

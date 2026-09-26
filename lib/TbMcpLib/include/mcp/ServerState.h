@@ -78,6 +78,11 @@ enum class DocumentAspect
    */
   Selection,
   /**
+   * trenchbroom://documents/{doc}/entity-definitions: the document's entity definitions
+   * were loaded, reloaded or replaced.
+   */
+  EntityDefinitions,
+  /**
    * Only trenchbroom://editor/status: the grid changed. (Info and selection changes
    * update the editor status, too.)
    */

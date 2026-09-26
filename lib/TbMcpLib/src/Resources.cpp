@@ -23,6 +23,7 @@
 #include "mcp/ResourceRegistry.h"
 #include "mcp/ServerState.h"
 #include "mcp/tools/DocumentTools.h"
+#include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/GameTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
@@ -67,6 +68,17 @@ Understanding the map
   call is an undo step, like selecting in the editor.
 - Subscribe to trenchbroom://documents/{doc}/summary and .../selection to learn about
   changes the user makes; updates are coalesced.
+
+Entities
+- Find a class with entity_classes_list (prefix such as "monster_", group, search),
+  then read entity_class_describe for its size, model, properties, choices and
+  spawnflags before placing it.
+- Place point entities with entity_create_point; dropToFloor puts them on the floor
+  below. Set spawnflags by name with entity_spawnflags_set, and connect entities
+  (target / targetname) with entity_link.
+- Unknown classes, unknown property keys and invalid values are reported as warnings;
+  they never block a call.
+- trenchbroom://documents/{doc}/entity-definitions lists all classes of a document.
 
 Results
 - Modifying calls return 'changes' (created / modified / removed ids), 'selection',
@@ -184,6 +196,26 @@ void registerResources(McpServer& server)
       return selectionDetails(map, state.documentState(*document.document).ids, 100);
     }),
     documentLister(DocumentAspect::Selection, "selection", "Selection"),
+  });
+
+  resources.addTemplate(ResourceTemplateDef{
+    "trenchbroom://documents/{doc}/entity-definitions",
+    "entity-definitions",
+    "Entity Definitions",
+    "The entity classes an open document can use, from its current definition file "
+    "(which depends on the document's mods and chosen FGD/DEF/ENT file): spec, count, "
+    "and per class name, type, group, first description line, size (point classes), "
+    "property keys and spawnflag names ({doc} is a handle such as doc:1). Use "
+    "entity_class_describe for the details of a class. Subscribe to get notified when "
+    "the definitions are reloaded or replaced.",
+    "application/json",
+    documentReader([](ServerState&, const DocumentInfo& document, Session&) {
+      auto result = entityDefinitionsResource(document.document->map());
+      result["document"] = document.id;
+      return result;
+    }),
+    documentLister(
+      DocumentAspect::EntityDefinitions, "entity-definitions", "Entity Definitions"),
   });
 
   resources.addTemplate(ResourceTemplateDef{

@@ -73,47 +73,6 @@ constexpr auto SupportTolerance = 1.0;
 
 constexpr auto MaxPlanCells = size_t(200);
 
-// Classification of brushes by their owning entity
-
-enum class BrushClass
-{
-  /** World brushes and brushes of func_group / func_detail* entities. */
-  Solid,
-  /** Brushes of other brush entities (doors, platforms, ...). */
-  Entity,
-  /** Brushes of trigger_* entities. */
-  Trigger,
-};
-
-const mdl::EntityNode* owningBrushEntity(const mdl::Node& node)
-{
-  return dynamic_cast<const mdl::EntityNode*>(mdl::findContainingEntity(&node));
-}
-
-BrushClass classifyBrush(const mdl::BrushNode& brushNode)
-{
-  if (const auto* entityNode = owningBrushEntity(brushNode))
-  {
-    const auto& classname = entityNode->entity().classname();
-    if (classname.starts_with("trigger_"))
-    {
-      return BrushClass::Trigger;
-    }
-    if (classname == "func_group" || classname.starts_with("func_detail"))
-    {
-      return BrushClass::Solid;
-    }
-    return BrushClass::Entity;
-  }
-  return BrushClass::Solid;
-}
-
-bool isPointEntity(const mdl::Node& node)
-{
-  const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(&node);
-  return entityNode && !entityNode->hasChildren();
-}
-
 /** Brush entities are in the node tree, too, but they are represented by their brushes.
  */
 bool isContainer(const mdl::Node& node)
@@ -181,86 +140,6 @@ vm::bbox3d shrink(const vm::bbox3d& box, const double amount)
 vm::bbox3d intersection(const vm::bbox3d& lhs, const vm::bbox3d& rhs)
 {
   return vm::bbox3d{vm::max(lhs.min, rhs.min), vm::min(lhs.max, rhs.max)};
-}
-
-// Ray casting
-
-struct RayHit
-{
-  double distance;
-  vm::vec3d point;
-  mdl::Node* node;
-  std::optional<size_t> faceIndex;
-};
-
-/**
- * Casts the ray against brushes, patches and point entities accepted by the given
- * predicate. Like the editor's picking, brush faces are only hit from the front, so a ray
- * starting inside a brush does not hit that brush, and a ray starting inside the bounds
- * of a point entity does not hit that entity. Returns the hits sorted by distance.
- */
-std::vector<RayHit> castRay(
-  mdl::Map& map,
-  const vm::ray3d& ray,
-  const std::function<bool(const mdl::Node&)>& accept,
-  const std::optional<double> maxDistance = std::nullopt)
-{
-  auto hits = std::vector<RayHit>{};
-  const auto addHit = [&](
-                        const double distance,
-                        mdl::Node* node,
-                        const std::optional<size_t> faceIndex = std::nullopt) {
-    if (!maxDistance || distance <= *maxDistance)
-    {
-      hits.push_back({distance, vm::point_at_distance(ray, distance), node, faceIndex});
-    }
-  };
-
-  for (auto* node : map.worldNode().nodeTree().find_intersectors(ray))
-  {
-    if (!accept(*node))
-    {
-      continue;
-    }
-
-    if (auto* brushNode = dynamic_cast<mdl::BrushNode*>(node))
-    {
-      const auto& brush = brushNode->brush();
-      for (size_t i = 0; i < brush.faceCount(); ++i)
-      {
-        if (const auto distance = brush.face(i).intersectWithRay(ray))
-        {
-          // a convex brush has at most one front facing hit
-          addHit(*distance, brushNode, i);
-          break;
-        }
-      }
-    }
-    else if (isPointEntity(*node))
-    {
-      const auto& bounds = node->logicalBounds();
-      if (!bounds.contains(ray.origin))
-      {
-        if (const auto distance = vm::intersect_ray_bbox(ray, bounds))
-        {
-          addHit(*distance, node);
-        }
-      }
-    }
-    else if (auto* patchNode = dynamic_cast<mdl::PatchNode*>(node))
-    {
-      auto pickResult = mdl::PickResult{};
-      patchNode->pick(map.editorContext(), ray, pickResult);
-      for (const auto& hit : pickResult.all())
-      {
-        addHit(hit.distance(), patchNode);
-      }
-    }
-  }
-
-  std::ranges::sort(
-    hits, [](const auto& lhs, const auto& rhs) { return lhs.distance < rhs.distance; });
-  return hits;
 }
 
 Json hitJson(CallContext& context, const RayHit& hit)
