@@ -64,6 +64,26 @@ Result<std::vector<mdl::Node*>, ToolError> resolveTargets(
 Result<mdl::BrushFaceHandle, ToolError> resolveFace(
   CallContext& context, std::string_view id);
 
+/**
+ * The `ids` parameter of face tools: face ids such as `brush:1042/face:3`, and ids of
+ * brushes, groups and entities, which stand for all faces of the brushes they contain.
+ */
+schema::Field faceTargetsField(
+  std::string description =
+    "Face ids ('brush:1042/face:3') and brush, group or entity ids (all faces of their "
+    "brushes). Default: the selected faces, or all faces of the selected objects");
+
+/**
+ * Resolves the faces a face tool acts on: the faces named by the given argument (see
+ * faceTargetsField), or else the selected faces, or else all faces of the brushes in
+ * the selection. The result has no duplicates and keeps the order of the ids. Fails
+ * with NO_SELECTION if this yields no face (e.g. only point entities), with
+ * OBJECT_NOT_FOUND / INVALID_ARGUMENT for bad ids, and with OBJECT_NOT_EDITABLE for
+ * faces that cannot be selected (hidden, locked, in a closed group).
+ */
+Result<std::vector<mdl::BrushFaceHandle>, ToolError> resolveFaceTargets(
+  CallContext& context, const Args& args, std::string_view key = "ids");
+
 enum class SelectionAfter
 {
   /** Restore the selection the human had before the call. */
@@ -83,5 +103,15 @@ ToolResult withTargets(
   const std::vector<mdl::Node*>& targets,
   const std::function<ToolResult()>& function,
   SelectionAfter after = SelectionAfter::Restore);
+
+/**
+ * Like withTargets for faces: selects exactly the given faces, runs the function (the
+ * Map_Brushes functions act on `selection().allBrushFaces()`), and restores the previous
+ * selection. The selection changes are part of the call's undo step.
+ */
+ToolResult withFaces(
+  CallContext& context,
+  const std::vector<mdl::BrushFaceHandle>& faces,
+  const std::function<ToolResult()>& function);
 
 } // namespace tb::mcp

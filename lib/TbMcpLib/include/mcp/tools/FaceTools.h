@@ -19,28 +19,14 @@
 
 #pragma once
 
-#include "mcp/Json.h"
-
-namespace tb::mdl
-{
-class Map;
-}
-
 namespace tb::mcp
 {
 class ToolRegistry;
 
 /**
- * Registers the material tools: materials_list, material_apply, material_set_current,
- * material_replace, material_preview, locks_get and locks_set.
+ * Registers the face tools: face_attributes_get, face_attributes_set,
+ * face_attributes_copy, uv_align and uv_nudge.
  */
-void registerMaterialTools(ToolRegistry& registry);
-
-/**
- * The content of the trenchbroom://documents/{doc}/materials resource: the material
- * collections ({path, materialCount}) and the loaded materials ({name, collection,
- * width, height}, sorted by name; sizes are null while an image is not loaded yet).
- */
-Json materialsResource(const mdl::Map& map);
+void registerFaceTools(ToolRegistry& registry);
 
 } // namespace tb::mcp

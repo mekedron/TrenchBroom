@@ -20,6 +20,8 @@
 #include "mcp/ServerState.h"
 
 #include "base/PreferenceManager.h"
+#include "gl/MaterialManager.h"
+#include "gl/ResourceId.h"
 #include "mcp/CallRunner.h"
 #include "mcp/JsonRpc.h"
 #include "mcp/Scheduler.h"
@@ -52,6 +54,7 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
     didChange(DocumentAspect::Summary);
     didChange(DocumentAspect::Selection);
     didChange(DocumentAspect::EntityDefinitions);
+    didChange(DocumentAspect::Materials);
   });
 
   m_notifierConnection +=
@@ -71,8 +74,21 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
     didChange(DocumentAspect::Summary);
     didChange(DocumentAspect::EntityDefinitions);
   });
-  m_notifierConnection += document.materialCollectionsDidChangeNotifier.connect(
-    this, &DocumentState::infoDidChange);
+  m_notifierConnection += document.materialCollectionsDidChangeNotifier.connect([&]() {
+    infoDidChange();
+    didChange(DocumentAspect::Materials);
+  });
+  // the materials resource lists the image sizes, which are known once loaded
+  m_notifierConnection += document.resourcesWereProcessedNotifier.connect(
+    [&](const std::vector<gl::ResourceId>& resourceIds) {
+      if (!document.map()
+             .materialManager()
+             .findMaterialsByTextureResourceId(resourceIds)
+             .empty())
+      {
+        didChange(DocumentAspect::Materials);
+      }
+    });
   m_notifierConnection +=
     document.nodesDidChangeNotifier.connect(this, &DocumentState::nodesDidChange);
 
@@ -405,7 +421,9 @@ void ServerState::documentAspectDidChange(
     scheduleDocumentUpdate(document, aspect);
   }
 
-  if (aspect != DocumentAspect::Summary && aspect != DocumentAspect::EntityDefinitions)
+  if (
+    aspect != DocumentAspect::Summary && aspect != DocumentAspect::EntityDefinitions
+    && aspect != DocumentAspect::Materials)
   {
     // the editor status lists the modified flag and the selection of the documents
     scheduleResourceUpdate(EditorStatusUri);
@@ -426,6 +444,8 @@ std::string ServerState::documentResourceUri(
       return "selection";
     case DocumentAspect::EntityDefinitions:
       return "entity-definitions";
+    case DocumentAspect::Materials:
+      return "materials";
     case DocumentAspect::Status:
       break;
     }

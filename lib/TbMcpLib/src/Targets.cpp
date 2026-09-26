@@ -27,6 +27,7 @@
 #include "mdl/Map.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
+#include "mdl/NodeQueries.h"
 #include "mdl/Selection.h"
 
 #include <algorithm>
@@ -39,6 +40,73 @@ namespace
 bool isObject(const ObjectKind kind)
 {
   return kind != ObjectKind::World && kind != ObjectKind::Layer;
+}
+
+ToolResult withSelection(
+  CallContext& context,
+  const bool alreadySelected,
+  const std::function<void()>& select,
+  const std::function<ToolResult()>& function,
+  const SelectionAfter after)
+{
+  auto& map = context.map();
+  auto& ids = context.ids();
+
+  // remember the selection by id, since nodes may be removed by the operation
+  auto savedNodes = std::vector<std::string>{};
+  auto savedFaces = std::vector<ObjectRef>{};
+  const auto& selection = map.selection();
+  for (const auto* node : selection.nodes)
+  {
+    savedNodes.push_back(ids.format(*node));
+  }
+  for (const auto& handle : selection.brushFaces)
+  {
+    if (auto ref = parseObjectRef(ids.formatFace(*handle.node(), handle.faceIndex())))
+    {
+      savedFaces.push_back(*ref);
+    }
+  }
+
+  if (!alreadySelected)
+  {
+    select();
+  }
+
+  auto result = function();
+
+  if (after == SelectionAfter::Restore && !alreadySelected)
+  {
+    mdl::deselectAll(map);
+
+    auto nodes = std::vector<mdl::Node*>{};
+    for (const auto& id : savedNodes)
+    {
+      if (auto node = ids.resolve(id); node.is_success())
+      {
+        nodes.push_back(node.value());
+      }
+    }
+    if (!nodes.empty())
+    {
+      mdl::selectNodes(map, nodes);
+    }
+
+    auto faces = std::vector<mdl::BrushFaceHandle>{};
+    for (const auto& ref : savedFaces)
+    {
+      if (auto node = ids.resolve(ref); node.is_success())
+      {
+        faces.emplace_back(static_cast<mdl::BrushNode*>(node.value()), *ref.faceIndex);
+      }
+    }
+    if (!faces.empty())
+    {
+      mdl::selectBrushFaces(map, faces);
+    }
+  }
+
+  return result;
 }
 
 } // namespace
@@ -137,6 +205,101 @@ Result<mdl::BrushFaceHandle, ToolError> resolveFace(
          });
 }
 
+schema::Field faceTargetsField(std::string description)
+{
+  using namespace schema;
+  return field(
+           "ids",
+           array(objectId({ObjectKind::Brush, ObjectKind::Group, ObjectKind::Entity}))
+             .nonEmpty())
+    .describe(std::move(description));
+}
+
+Result<std::vector<mdl::BrushFaceHandle>, ToolError> resolveFaceTargets(
+  CallContext& context, const Args& args, const std::string_view key)
+{
+  auto& map = context.map();
+  auto& ids = context.ids();
+  const auto& editorContext = map.editorContext();
+
+  auto faces = std::vector<mdl::BrushFaceHandle>{};
+  const auto addFace = [&](const mdl::BrushFaceHandle& handle) {
+    if (std::ranges::find(faces, handle) == faces.end())
+    {
+      faces.push_back(handle);
+    }
+  };
+
+  if (const auto explicitIds = args.getOptional<std::vector<std::string>>(key))
+  {
+    for (const auto& id : *explicitIds)
+    {
+      const auto ref = parseObjectRef(id);
+      if (!ref)
+      {
+        return makeError(ErrorCode::InvalidArgument, "'" + id + "' is not a valid id.");
+      }
+
+      auto node = ids.resolve(*ref);
+      if (node.is_error())
+      {
+        return errorOf(node);
+      }
+
+      if (ref->faceIndex)
+      {
+        const auto handle = mdl::BrushFaceHandle{
+          static_cast<mdl::BrushNode*>(node.value()), *ref->faceIndex};
+        if (!editorContext.selectable(*handle.node(), handle.face()))
+        {
+          return makeError(
+            ErrorCode::ObjectNotEditable,
+            "Face " + id
+              + " cannot be edited: its brush is hidden, locked, or inside a closed "
+                "group.",
+            "Show or unlock its layer (layer_set_state), or open its group "
+            "(group_open).",
+            {id});
+        }
+        addFace(handle);
+      }
+      else
+      {
+        const auto nodeFaces = mdl::collectBrushFaces(
+          std::vector{node.value()}, [&](const auto& brushNode, const auto& face) {
+            return editorContext.selectable(brushNode, face);
+          });
+        if (nodeFaces.empty())
+        {
+          return makeError(
+            ErrorCode::ObjectNotEditable,
+            "Object " + id + " has no editable brush faces.",
+            "Pass brushes, faces, or groups and brush entities that contain visible, "
+            "unlocked brushes.",
+            {id});
+        }
+        for (const auto& handle : nodeFaces)
+        {
+          addFace(handle);
+        }
+      }
+    }
+    return faces;
+  }
+
+  const auto& selection = map.selection();
+  faces = selection.hasBrushFaces() ? selection.brushFaces : selection.allBrushFaces();
+  if (faces.empty())
+  {
+    return makeError(
+      ErrorCode::NoSelection,
+      "No " + std::string{key} + " were given and no brush faces are selected.",
+      "Pass face or brush ids in '" + std::string{key}
+        + "', or select brushes or faces first.");
+  }
+  return faces;
+}
+
 ToolResult withTargets(
   CallContext& context,
   const std::vector<mdl::Node*>& targets,
@@ -144,66 +307,38 @@ ToolResult withTargets(
   const SelectionAfter after)
 {
   auto& map = context.map();
-  auto& ids = context.ids();
-
-  // remember the selection by id, since nodes may be removed by the operation
-  auto savedNodes = std::vector<std::string>{};
-  auto savedFaces = std::vector<ObjectRef>{};
   const auto& selection = map.selection();
-  for (const auto* node : selection.nodes)
-  {
-    savedNodes.push_back(ids.format(*node));
-  }
-  for (const auto& handle : selection.brushFaces)
-  {
-    if (auto ref = parseObjectRef(ids.formatFace(*handle.node(), handle.faceIndex())))
-    {
-      savedFaces.push_back(*ref);
-    }
-  }
-
   const auto alreadySelected =
     std::ranges::is_permutation(selection.nodes, targets) && selection.brushFaces.empty();
-  if (!alreadySelected)
-  {
-    mdl::deselectAll(map);
-    mdl::selectNodes(map, targets);
-  }
+  return withSelection(
+    context,
+    alreadySelected,
+    [&]() {
+      mdl::deselectAll(map);
+      mdl::selectNodes(map, targets);
+    },
+    function,
+    after);
+}
 
-  auto result = function();
-
-  if (after == SelectionAfter::Restore && !alreadySelected)
-  {
-    mdl::deselectAll(map);
-
-    auto nodes = std::vector<mdl::Node*>{};
-    for (const auto& id : savedNodes)
-    {
-      if (auto node = ids.resolve(id); node.is_success())
-      {
-        nodes.push_back(node.value());
-      }
-    }
-    if (!nodes.empty())
-    {
-      mdl::selectNodes(map, nodes);
-    }
-
-    auto faces = std::vector<mdl::BrushFaceHandle>{};
-    for (const auto& ref : savedFaces)
-    {
-      if (auto node = ids.resolve(ref); node.is_success())
-      {
-        faces.emplace_back(static_cast<mdl::BrushNode*>(node.value()), *ref.faceIndex);
-      }
-    }
-    if (!faces.empty())
-    {
+ToolResult withFaces(
+  CallContext& context,
+  const std::vector<mdl::BrushFaceHandle>& faces,
+  const std::function<ToolResult()>& function)
+{
+  auto& map = context.map();
+  const auto& selection = map.selection();
+  const auto alreadySelected =
+    selection.nodes.empty() && std::ranges::is_permutation(selection.brushFaces, faces);
+  return withSelection(
+    context,
+    alreadySelected,
+    [&]() {
+      mdl::deselectAll(map);
       mdl::selectBrushFaces(map, faces);
-    }
-  }
-
-  return result;
+    },
+    function,
+    SelectionAfter::Restore);
 }
 
 } // namespace tb::mcp

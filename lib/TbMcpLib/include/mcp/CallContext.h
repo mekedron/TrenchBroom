@@ -27,6 +27,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb
@@ -69,6 +70,7 @@ private:
   bool m_dryRun;
   ProgressFn m_progress;
   std::vector<Warning> m_warnings;
+  std::vector<Json> m_content;
   const ScopedLogCapture* m_logCapture = nullptr;
   std::optional<std::string> m_undoStep;
   bool m_cancelled = false;
@@ -105,6 +107,14 @@ public:
   void warn(
     std::string code, std::string message, std::vector<std::string> objectIds = {});
   const std::vector<Warning>& warnings() const;
+
+  /**
+   * Adds an image to the CallToolResult's `content`, after the text block that holds the
+   * structured result. `data` are the raw bytes of the image, e.g. a PNG file.
+   */
+  void addImage(std::string_view data, std::string mimeType);
+  /** The content blocks added with addImage. */
+  const std::vector<Json>& content() const;
 
   /** Emits `notifications/progress` if the client asked for progress. */
   void progress(double progress, std::optional<double> total, const std::string& message);

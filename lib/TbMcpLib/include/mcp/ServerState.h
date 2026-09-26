@@ -83,6 +83,11 @@ enum class DocumentAspect
    */
   EntityDefinitions,
   /**
+   * trenchbroom://documents/{doc}/materials: the document's material collections were
+   * loaded, reloaded or replaced, or material images finished loading.
+   */
+  Materials,
+  /**
    * Only trenchbroom://editor/status: the grid changed. (Info and selection changes
    * update the editor status, too.)
    */

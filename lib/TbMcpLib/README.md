@@ -8,6 +8,11 @@ indicator) lives in `TbUiLib` (`McpServerController`, `McpTcpTransport`, `QtMcpH
 
 The design is described in `docs/mcp/05-technical-design.md`.
 
+This code is maintained in a fork of TrenchBroom. Keep MCP code in this library and in new
+`Mcp*` files; change original TrenchBroom files only when there is no other way, and add
+tests in new files of `TbMcpLibTest`, never in existing upstream test files (see the root
+`CLAUDE.md`).
+
 ## Protocol
 
 - `JsonRpc`, `ProtocolVersion`: JSON-RPC 2.0 messages and MCP revision negotiation
@@ -45,10 +50,11 @@ The design is described in `docs/mcp/05-technical-design.md`.
      (see `document_open`).
 3. Change the map only through the `mdl::` free functions (`Map_*.h`). Use
    `resolveTargets` / `withTargets` (`Targets.h`) for tools that act on "ids or the
-   current selection", `context.ids()` to format and resolve object ids, and return
+   current selection" (`faceTargetsField` / `resolveFaceTargets` / `withFaces` for tools
+   that act on brush faces), `context.ids()` to format and resolve object ids, and return
    `makeError(ErrorCode::..., message, hint, objectIds)` on failure. If a `Map_*`
    function returns false, return `context.operationFailed(...)`, which includes what
-   the editor logged.
+   the editor logged. `context.addImage(bytes, "image/png")` adds an image to the result.
 4. Add a `SECTION` to the domain's test case in `test/src/tst_<Domain>Tools.cpp` using
    `McpToolFixture`: success, invalid input, dry run, explicit ids vs. selection.
 

@@ -147,6 +147,14 @@ void registerTestTools(McpServer& server)
                          return Json{{"wouldDo", context.dryRun()}};
                        }));
 
+  server.tools().add(ToolDef{"test_image"}
+                       .title("Image")
+                       .documentUse(DocumentUse::None)
+                       .handler([](CallContext& context, const Args&) -> ToolResult {
+                         context.addImage("abc", "image/png");
+                         return Json{{"width", 1}};
+                       }));
+
   server.tools().add(
     ToolDef{"test_read"}
       .title("Read")
@@ -269,6 +277,18 @@ TEST_CASE("CallRunner")
     const auto result = fixture.call("test_read");
     CHECK(result["document"] == fixture.documentId(document));
     CHECK(result["warnings"][0]["code"] == "TEST_WARNING");
+  }
+
+  SECTION("images follow the text content")
+  {
+    const auto result = fixture.callRaw("test_image");
+    CHECK(result["isError"] == false);
+    REQUIRE(result["content"].size() == 2);
+    CHECK(result["content"][0]["type"] == "text");
+    CHECK(
+      result["content"][1]
+      == Json{{"type", "image"}, {"data", "YWJj"}, {"mimeType", "image/png"}});
+    CHECK(result["structuredContent"] == Json{{"width", 1}});
   }
 
   SECTION("notes from prepareForAgentEdit become warnings")

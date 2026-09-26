@@ -1,29 +1,29 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-26 · Status: Accepted (E1.1), implemented for E1–E3 (see §13) · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-27 · Status: implemented for E1–E5; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
-This is the engineering blueprint for the MCP server. Every decision below is final unless a later
-design note replaces it. Implementation agents follow it literally. When the code disagrees
-with this document, fix the code or update this document in the same change.
+This is the engineering blueprint of the MCP server. It describes the current design and
+implementation. When the code and this document disagree, fix the code or update this document in the
+same change.
 
 ---
 
-## 0. Summary of decisions
+## 0. Summary
 
-| Topic | Decision |
+| Topic | Design |
 |---|---|
-| Core library | New Qt-free static library `lib/TbMcpLib`, namespace `tb::mcp`, headers in `include/mcp/`. It contains JSON-RPC, MCP lifecycle, the HTTP/SSE protocol state machine, the registries, the call runner, the ID registry, and **all** tool implementations. |
-| Editor glue | `lib/TbUiLib` gets `Mcp*` classes: TCP transport on `QTcpServer`, `QtMcpHost` (implements the core's host interface), Qt scheduler, preferences pane, status bar indicator. |
-| stdio | New executable `app/TrenchBroomMcp`: a stdio ↔ Streamable HTTP proxy (Qt Core + Network). |
+| Core library | Qt-free static library `lib/TbMcpLib`, namespace `tb::mcp`, headers in `include/mcp/`. It contains JSON-RPC, the MCP lifecycle, the HTTP/SSE protocol state machine, the registries, the call runner, the ID registry, and **all** tool implementations. |
+| Editor glue | `lib/TbUiLib`: `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`. |
+| stdio | Executable `app/TrenchBroomMcp`: a stdio ↔ Streamable HTTP proxy (Qt Core + Network). |
 | JSON | nlohmann/json 3.12.0 via CPM (`cmake/dependencies/nlohmann_json.cmake`). |
-| Protocol | MCP revision `2025-11-25`. Also accepts `2025-06-18` and `2025-03-26`. Streamable HTTP on `127.0.0.1:47100` (configurable), endpoint `/mcp`. |
-| Threading | Single-threaded. All networking and all tool execution run on the Qt main thread's event loop. Map-modifying calls wait while the human is busy. |
-| Object IDs | Process-unique `Node::runtimeId()` (a new small TbMdlLib addition) rendered as `brush:1042`. The IDs survive undo/redo. Linked-group re-cloning is handled with an alias table. |
-| Atomicity | Each modifying call runs in a `Oneshot` transaction named `AI: <Tool title>`. On failure or dry run the transaction is cancelled. Explicit agent transactions are `LongRunning` and nest the per-call ones. |
-| Change report | Collected from `MapDocument` notifiers during the call, then reduced to net created/modified/removed sets plus the selection and the issues the call introduced. |
+| Protocol | MCP revision `2025-11-25`; also accepts `2025-06-18` and `2025-03-26`. Streamable HTTP on `127.0.0.1:47100` (configurable), endpoint `/mcp`. |
+| Threading | Single-threaded. All networking and all tool execution run on the Qt main thread's event loop. Modifying calls wait while the human is busy. |
+| Object IDs | Process-unique `Node::runtimeId()` rendered as `brush:1042`. IDs survive undo/redo; linked-group re-cloning is handled with an alias table. |
+| Atomicity | Each map-modifying call runs in a `Oneshot` transaction named `AI: <Tool title>`, cancelled on failure or dry run. Explicit agent transactions are `LongRunning` and nest the per-call ones. |
+| Change report | Collected from `MapDocument` notifiers during the call, reduced to net created/modified/removed sets plus the selection and the issues the call introduced. |
 | Errors | Tool failures are `CallToolResult{isError:true}` with a structured `error` object (`code`, `message`, `objectIds`, `hint`). JSON-RPC errors are used only for protocol faults. |
-| Schemas | A small C++ builder DSL produces both the JSON Schema that `tools/list` publishes and the validator/decoder the call uses. There is one source of truth. |
-| Tests | `TbMcpLibTest` (Catch2), headless over `MapDocumentFixture` with a `FakeHost` and an in-process client. Transport tests go in `TbUiLibTest`. |
+| Schemas | A C++ builder DSL produces both the JSON Schema that `tools/list` publishes and the validator/decoder of the call. One source of truth. |
+| Tests | `TbMcpLibTest` (Catch2), headless over `MapDocumentFixture` with `FakeHost`, `FakeScheduler` and an in-process client (`McpToolFixture`). Qt transport and host tests are in `TbUiLibTest`. |
 
 ---
 
@@ -34,86 +34,89 @@ with this document, fix the code or update this document in the same change.
 ```
 app/TrenchBroom ──► TbUiLib ──► TbMcpLib ──► TbAppLib ──► TbMdlLib, TbRenderLib, TbPreferencesLib, ...
                         │            └──────► nlohmann_json (PUBLIC)
-                        └──► Qt6::Network (already PUBLIC in TbUiLib)
-app/TrenchBroomMcp ──► TbMcpLib (only the Qt-free HttpParser/SseParser/JsonRpc parts are used) + Qt6::Core + Qt6::Network
+                        └──► Qt6::Network
+app/TrenchBroomMcp ──► TbMcpLib (Qt-free HttpParser/SseParser/JsonRpc parts) + Qt6::Core + Qt6::Network
 ```
 
-`TbMcpLib` must link no `Qt6::` target. This is enforced the same way `TbAppLib` enforces it,
-by not linking Qt. It depends on `TbAppLib` because tools operate on `ui::MapDocument`. That
-class owns the `mdl::Map`, re-emits every `Map` notifier, and survives `reload()` (which
-replaces the `Map`). Tools reach the map through `document.map()`, and mutations go through
-the `mdl::` free functions in `Map_*.h`.
+`TbMcpLib` links no `Qt6::` target, like `TbAppLib`. It depends on `TbAppLib` because tools operate on
+`ui::MapDocument`, which owns the `mdl::Map`, re-emits every `Map` notifier, and survives `reload()`
+(which replaces the `Map`). Tools reach the map through `document.map()`; mutations go through the
+`mdl::` free functions in `Map_*.h`.
 
 ### 1.2 `lib/TbMcpLib`
 
-This mirrors `lib/TbAppLib`: a `STATIC` library, `FILE_SET headers` with
-`BASE_DIRS include`, `PRIVATE CompilerConfig PrecompileStdHeaders`, and `add_subdirectory(test)`
-and `add_subdirectory(test-utils)`. The directory layout is flat, like `mdl/` and `ui/`:
+A `STATIC` library like `lib/TbAppLib`: `FILE_SET headers` with `BASE_DIRS include`, `PRIVATE CompilerConfig
+PrecompileStdHeaders fmt::fmt-header-only miniz` (miniz writes the PNG images of `material_preview`), `PUBLIC nlohmann_json::nlohmann_json KdLib TbAppLib TbBaseLib
+TbMdlLib VmLib`, plus `add_subdirectory(test-utils)` and `add_subdirectory(test)`.
 
 ```
 lib/TbMcpLib/
-  CMakeLists.txt            add_library(TbMcpLib STATIC); PUBLIC: nlohmann_json::nlohmann_json, TbAppLib, TbBaseLib, TbMdlLib, KdLib, VmLib
-  README.md
-  resources/agent-guide.md  embedded at build time (configure_file -> generated AgentGuide.h raw string)
+  CMakeLists.txt
+  README.md                 overview and the "adding a tool" checklist
   include/mcp/
     Json.h                  `using Json = nlohmann::ordered_json;` helpers, number rounding
-    JsonVm.h                to/from JSON for vm::vec3d, vm::bbox3d, vm::plane3d, Color
-    JsonRpc.h               Message variant (Request/Notification/Response/Error), parse/serialize, error codes
+    JsonVm.h                JSON conversion for vm::vec3d, vm::bbox3d, vm::plane3d, Color
+    JsonRpc.h               message variant (Request/Notification/Response/Error), parse/serialize, error codes
     ProtocolVersion.h       supported revisions, negotiation
-    Endpoint.h              transport-facing interface of McpServer (post, notification stream, delete session)
+    Endpoint.h              transport-facing interface of McpServer (§3.2)
     McpServer.h             protocol engine: sessions, lifecycle, method dispatch (transport-neutral)
-    ServerState.h           shared state (host, registries, sessions, per-document state, call runner) seen by tools
-    Session.h               per-client state: id, version, capabilities, subscriptions, agent transaction, outbound queue
+    ServerState.h           state shared with tools: host, scheduler, options, registries, sessions,
+                            DocumentState per document, CallRunner, ServerActivity
+    Session.h               per-client state: id, version, capabilities, subscriptions, active document, streams
     HttpParser.h            incremental HTTP/1.1 request parser (Content-Length bodies only)
-    HttpResponse.h          response/SSE frame serialization
+    HttpResponse.h          response and SSE frame serialization
     StreamableHttp.h        Streamable HTTP state machine over an abstract HttpConnection
-    SseParser.h             incremental SSE parser (used by the stdio bridge and tests)
-    Host.h                  abstract McpHost + sub-interfaces (documents, busy state, actions, views, compile, prefs)
+    SseParser.h             incremental SSE parser (stdio bridge, tests)
+    Host.h                  McpHost, DocumentHost (§4.3)
     Scheduler.h             abstract Scheduler (post, postDelayed, now)
-    Schema.h                schema builder DSL + validator/decoder
+    Schema.h                schema builder DSL + validator/decoder (§7.2)
     Args.h                  typed access to validated arguments
-    ToolRegistry.h          ToolDef, registry, tools/list paging
+    ToolRegistry.h          ToolDef, Mutation, DocumentUse, registry, tools/list paging
     ResourceRegistry.h      static resources, templates, subscriptions
     PromptRegistry.h        prompts/list, prompts/get
-    CallContext.h           everything a handler sees (document, ids, args, report, progress, warnings)
-    CallRunner.h            busy wait, transaction wrapping, dry run, error mapping, logging
+    CallContext.h           everything a handler sees (§7.2)
+    CallRunner.h            call queue, busy gate, transactions, dry run, error mapping, logging
     ChangeCollector.h       notifier-based change report
+    LogCapture.h            LogMessage, CapturingLogger, ScopedLogCapture, collectCachedMessages
     ObjectIds.h             IdRegistry, ObjectRef parsing/formatting, face refs
-    Targets.h               resolve "ids or current selection", select-then-act helper
-    Errors.h                ToolError, ErrorCode, warnings
-    Pagination.h            cursor/limit/fields/detail helpers
-    CallLog.h               in-memory ring buffer + JSONL sink interface
-    tools/                  (headers expose only `void register<Domain>Tools(ToolRegistry&)`)
-      SessionTools.h  HistoryTools.h  DocumentTools.h  GameTools.h  SceneTools.h
-      SelectionTools.h  GeometryTools.h  TransformTools.h  EntityClassTools.h
-      EntityCreateTools.h  EntityPropertyTools.h  MaterialTools.h
-      OrganizationTools.h  ClipboardTools.h  ValidationTools.h  CompileTools.h
-      ViewTools.h  ActionTools.h  PreferenceTools.h  KnowledgeTools.h
-    Resources.h  Prompts.h  RegisterAll.h
-  src/                      same names, .cpp (tools in src/tools/)
-  test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/ copied like TbAppLibTest incl. games/)
-  test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture, TestClient, JSON matchers
+    Targets.h               idsField, resolveTargets, resolveFace, withTargets; face targets (§6.4)
+    Errors.h                ToolError, ErrorCode, Warning, makeError
+    Pagination.h            cursor/limit/fields/detail helpers, selectFields, base64
+    CallLog.h               in-memory ring buffer, sinks, JsonlFileSink
+    Resources.h             registerResources (§8)
+    RegisterAll.h           registerAll(McpServer&): every register<Domain>Tools + registerResources
+    tools/<Domain>Tools.h   `void register<Domain>Tools(ToolRegistry&)` plus helpers shared with resources
+  src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
+  test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/)
+  test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture
 ```
 
-Add `add_subdirectory(TbMcpLib)` to `lib/CMakeLists.txt` (alphabetically, i.e. before `TbMdlLib`).
-The test target copies `fixture/`, `games`, and `games-testing` exactly like
-`lib/TbAppLib/test/CMakeLists.txt`. It links `Catch2::Catch2WithMain TbMcpLib TbMcpTestUtilsLib
-TbAppTestUtilsLib TbMdlTestUtilsLib TbBaseTestUtilsLib` and calls `catch_discover_tests(TbMcpLibTest)`.
+`lib/CMakeLists.txt` adds `TbMcpLib` before `TbMdlLib`. The test target copies `fixture/` to
+`<bin>/fixture/test` and the `games` and `games-testing` resources to `<bin>/fixture/games`, like
+`TbAppLibTest`. It links `Catch2::Catch2WithMain TbMcpLib TbMcpTestUtilsLib TbAppTestUtilsLib
+TbBaseTestUtilsLib TbFsTestUtilsLib TbMdlTestUtilsLib` and calls `catch_discover_tests(TbMcpLibTest)`.
 
-### 1.3 Additions to `lib/TbUiLib` (namespace `tb::ui`)
+### 1.3 `lib/TbUiLib` (namespace `tb::ui`)
 
 | File | Responsibility |
 |---|---|
-| `McpServerController.{h,cpp}` | Owned by `AppController` (`std::unique_ptr`). Creates `mcp::McpServer` with all registries, the `QtMcpHost`, and `McpTcpTransport`. Starts and stops on preference changes and at app start/quit. Writes and removes the discovery file. Exposes Qt signals for the UI: `clientsChanged`, `activityChanged(QString)`. |
-| `McpTcpTransport.{h,cpp}` | `QTcpServer` + one `QTcpSocket` per connection, adapted to `mcp::HttpConnection`. Byte I/O only; all HTTP/MCP logic stays in the core. |
-| `QtMcpHost.{h,cpp}` | Implements `mcp::McpHost` with `AppController`, `MapWindowManager`, `MapWindow::toolBox()`, `ActionManager`, `CompilationRunner`, `GameEngineProfileManager`, `PreferenceManager`, and the offscreen snapshot renderer. |
+| `McpServerController.{h,cpp}` | Owned by `AppController` (destroyed first in its destructor). Creates `mcp::McpServer` (with `registerAll`), `QtMcpHost`, `QtScheduler` and `McpTcpTransport` when enabled and destroys them when disabled. Watches all `MCP/*` preferences: bind address, port or token changes restart the server; the busy timeout is applied with `McpServer::setOptions`; `MCP/Log to file` toggles the JSONL sink. `setForceEnabled(true)` implements `--mcp-server`. Writes and removes the discovery file (§3.4). `stopAgents()` → `McpServer::stopAgents` + close all connections. Signals `clientsChanged(int)`, `activityChanged(QString)`, `statusChanged()`. |
+| `McpTcpTransport.{h,cpp}` | Adapts `StreamableHttpServer` to `QTcpServer`/`QTcpSocket` (§3.3). Byte I/O only. |
+| `QtMcpHost.{h,cpp}` | Implements `mcp::McpHost` and `mcp::DocumentHost` over `AppController`, `MapWindowManager` and `MapWindow::toolBox()` (§4.3). |
 | `QtScheduler.{h,cpp}` | `mcp::Scheduler` via `QTimer::singleShot` on the main thread. |
-| `McpSnapshotRenderer.{h,cpp}` | (E9) Renders `MapRenderer` into a `QOpenGLFramebufferObject` using the shared GL context and returns PNG bytes. |
-| `McpStatusIndicator.{h,cpp}` | Status bar widget, added in `MapWindow::createStatusBar()` next to the update indicator. Shows "AI: n clients · <current tool> / waiting for you / idle" and a **Stop agent** button. |
-| `McpPreferencePane.{h,cpp}` | New "AI Agents (MCP)" pane in `PreferenceDialog`: enable, port, bind address, access token (required only for non-loopback binding), log-to-file, busy-wait timeout. |
+| `McpStatusIndicator.{h,cpp}` | Status bar widget next to the update indicator (`MapWindow::createStatusBar()`): "AI: n clients · <current tool> / waiting for you / idle", and a **Stop agent** button. |
+| `McpPreferencePane.{h,cpp}` | "AI Agents (MCP)" pane in `PreferenceDialog` (icon `McpPreferences.svg`): enable, port, bind address, access token (required only for non-loopback binding), log to file, busy-wait timeout. |
 
-Preferences go in `lib/TbPreferencesLib/include/prefs/Preferences.h`, following the
-existing `inline auto X = Preference<T>{...}` style:
+Supporting editor APIs:
+
+- `MapWindowManager`: signals `mapWindowWillClose(MapWindow*)` (emitted in `removeMapWindow` before the
+  window and its document are deleted) and `mapWindowsDidChange()` (window created or closed, focus order
+  changed, document created or loaded into an existing window); public `addMapWindow`, `createMapWindow`
+  and `shouldCreateWindowForDocument`.
+- `MapWindow::closeWithoutConfirmation()` and `MapWindow::compilationRunning()` (forwards to the
+  compilation dialog).
+
+Preferences (`lib/TbPreferencesLib/include/prefs/Preferences.h`):
 
 ```cpp
 inline auto McpServerEnabled     = Preference<bool>{"MCP/Enabled", false};
@@ -124,271 +127,294 @@ inline auto McpLogToFile         = Preference<bool>{"MCP/Log to file", true};
 inline auto McpBusyWaitTimeoutMs = Preference<int>{"MCP/Busy wait timeout", 30000};
 ```
 
-`app/TrenchBroom/src/Main.cpp` gets a `--mcp-server` option (`QCommandLineOption`). It enables
-the server for this process only, whatever the preference says. The stdio bridge uses it when
-it launches the editor.
+`app/TrenchBroom/src/Main.cpp` has a `--mcp-server` option that enables the server for this process
+regardless of the preference. The stdio bridge passes it when it launches the editor.
 
 ### 1.4 `app/TrenchBroomMcp`
 
-This follows `app/CmdTool` / `app/DumpShortcuts`: `add_executable(TrenchBroomMcp)`,
-`EMBED_UTF8_MANIFEST`, links `CompilerConfig Qt6::Core Qt6::Network TbMcpLib`, and is added to
-`app/CMakeLists.txt`. Packaging installs it next to the `TrenchBroom` executable. On macOS it goes
-into `TrenchBroom.app/Contents/MacOS/`. `add_dependencies(TrenchBroom TrenchBroomMcp)` keeps
-them in sync. Behavior is described in §3.5.
+Like `app/CmdTool`: `add_executable(TrenchBroomMcp)`, `EMBED_UTF8_MANIFEST`, links `CompilerConfig Qt6::Core
+Qt6::Network TbMcpLib`. `app/CMakeLists.txt` adds it before `TrenchBroom`, which copies the bridge next to
+the editor after building (into `TrenchBroom.app/Contents/MacOS/` on macOS) and installs it. Behavior: §3.5.
+
+### 1.5 Build note
+
+An existing build tree must be configured with `-DFETCHCONTENT_UPDATES_DISCONNECTED=ON` before re-running
+CMake; otherwise the git update step of the patched dependencies (assimp, cpptrace, miniz) re-runs and
+re-applying their patches fails.
 
 ---
 
 ## 2. JSON library
 
-**Decision: nlohmann/json v3.12.0, fetched with CPM.** Add
-`cmake/dependencies/nlohmann_json.cmake`:
+nlohmann/json v3.12.0, fetched with CPM in `cmake/dependencies/nlohmann_json.cmake` (included from
+`cmake/Dependencies.cmake`); header-only, so no `suppress_dependency_warnings` or `apply_sanitizer_options`:
 
 ```cmake
 CPMAddPackage(
   URI "gh:nlohmann/json#v3.12.0"
-  OPTIONS
-    "JSON_BuildTests OFF"
-    "JSON_Install OFF"
-    "JSON_ImplicitConversions OFF"
+  OPTIONS "JSON_BuildTests OFF" "JSON_Install OFF" "JSON_ImplicitConversions OFF"
 )
 ```
 
-Include it in `cmake/Dependencies.cmake`, alphabetically after `miniz.cmake`. It is header-only,
-so it needs no `suppress_dependency_warnings` or `apply_sanitizer_options`, like `ctre.cmake`.
+Why: the core must be Qt-free (the `TbAppLib` rule and the headless mode), so `QJsonDocument` is out.
+nlohmann is header-only, MIT, CMake-native, supports C++20, and has `ordered_json`: ordered keys make
+responses deterministic and readable, and golden tests stable. Serialization cost is dominated by traversal.
+`JSON_ImplicitConversions OFF` forces explicit `get<T>()` and avoids silent coercion in argument handling.
 
-Why:
-
-- The core must be Qt-free (the `TbAppLib` rule, and the v2 headless mode), so `QJsonDocument` is out. The repository has no JSON library today. `UpdateLib` uses Qt JSON, and that is fine for UI code.
-- nlohmann is header-only, MIT, CMake-native, supports C++20, and has an `ordered_json`. Ordered keys make responses deterministic and readable for models, and make golden tests stable.
-- Performance is enough. `map_tree` for 5,000 brushes serializes a few MB well under the 200 ms budget. The cost is dominated by traversal, not by JSON.
-- `JSON_ImplicitConversions OFF` forces explicit `get<T>()`, which avoids silent type coercion bugs in argument handling.
-
-Conventions: `using Json = nlohmann::ordered_json` everywhere. Vectors are `[x, y, z]`. Boxes
-are `{"min":[..],"max":[..]}`. Output doubles are rounded to 6 decimals (`mcp::roundForOutput`), so
-agents see `64` rather than `63.99999999997`.
+Conventions: `using Json = nlohmann::ordered_json`. Vectors are `[x, y, z]`, boxes `{"min":[..],"max":[..]}`.
+Output doubles are rounded to 6 decimals (`mcp::roundForOutput`), so agents see `64`, not `63.99999999997`.
 
 ---
 
 ## 3. Transport
 
-### 3.1 Protocol revisions
+### 3.1 Protocol revisions and capabilities
 
-`ProtocolVersion.h` lists `2025-11-25` (preferred), `2025-06-18`, and `2025-03-26`. On `initialize`,
-if the client's `protocolVersion` is supported it is echoed back; otherwise the server answers
-`2025-11-25`. JSON-RPC batch arrays are accepted only on sessions that negotiated `2025-03-26`;
-otherwise the server returns `-32600`. Features that depend on the version, such as
-`structuredContent`/`outputSchema` (2025-06-18+), are gated in `Session`.
+`ProtocolVersion.h` lists `2025-11-25` (preferred), `2025-06-18` and `2025-03-26`. On `initialize` a
+supported `protocolVersion` is echoed back; otherwise the server answers `2025-11-25`. JSON-RPC batch arrays
+are accepted only on `2025-03-26` sessions (otherwise `-32600`). For `2025-03-26` sessions,
+`structuredContent`, `outputSchema` and titles are omitted; the JSON is in the text block.
 
-Server capabilities: `tools{listChanged:true}`, `resources{subscribe:true, listChanged:true}`,
+Capabilities: `tools{listChanged:true}`, `resources{subscribe:true, listChanged:true}`,
 `prompts{listChanged:false}`, `logging{}`. `serverInfo = {name:"trenchbroom", title:"TrenchBroom",
-version:<app version>}`. `instructions` is a short string that points to the agent guide resource.
+version:<app version>}`. `instructions` points to the agent guide resource.
 
-### 3.2 Streamable HTTP (`StreamableHttp.h`, core)
+### 3.2 Endpoint and Streamable HTTP (core)
 
-The server has one endpoint, `http://<bind>:<port>/mcp`. The state machine consumes parsed
-`HttpRequest`s from an `HttpConnection` interface (`write(bytes)`, `close()`, `id()`), so
-it is fully unit-testable without sockets.
+`Endpoint.h` is the transport-facing interface of `McpServer`:
+`post(sessionId?, body, shared_ptr<RequestStream>) -> PostResult{Accepted|Pending|BadRequest|SessionNotFound,
+newSessionId, body}`, `sessionProtocolVersion`, `openNotificationStream`, `deleteSession`. The server may
+complete a `RequestStream` before `post` returns; transports buffer output until then so that the
+`Mcp-Session-Id` header of a new session can be sent. The server holds only weak references to streams; a
+dropped connection discards late output.
 
-- **POST** with a JSON-RPC body. Requests must send `Accept: application/json, text/event-stream`.
+`StreamableHttpServer(Endpoint&, Config{bindAddress, accessToken, maxBodySize, path})` drives connections
+through `HttpConnection{write, close}` with `openConnection`, `feed`, `connectionClosed`, `sendKeepAlives`
+and `closeAllConnections`. It is fully unit-testable without sockets. One endpoint: `http://<bind>:<port>/mcp`.
+
+- **POST** with a JSON-RPC body and `Accept: application/json, text/event-stream`.
   - Only notifications or responses: `202 Accepted`, no body.
-  - Requests: the server replies `Content-Type: application/json` with the single response once it is ready.
-    It switches to `text/event-stream` only when the call emits progress notifications (it has a
-    `progressToken`) or is asynchronous (compile, open). Then it streams the notifications and the final response, and closes the stream.
-    The response is deferred: the connection stays open while the call waits in the busy queue.
-- **GET** with `Accept: text/event-stream`: opens the session's standalone SSE stream for server
-  notifications (`resources/updated`, `tools/list_changed`, `notifications/message`). There is one per
-  session; a second GET replaces the first. A `: keepalive` comment is sent every 15 s.
-- **DELETE**: terminates the session (rolls back its open agent transaction, drops subscriptions).
-- **Sessions**: `initialize` creates a session and returns `Mcp-Session-Id` (128-bit random hex, from
-  `base/Uuid.h`). Every later request must carry it; an unknown id gets `404`, a missing one `400`.
-  After initialization the `MCP-Protocol-Version` header must match the negotiated version; if it is
-  absent the server assumes the negotiated one (as the spec allows).
-- **Resumability**: SSE events carry `id: <session-seq>`. `Last-Event-ID` replay is **not**
-  supported (a reconnecting client simply re-reads resources); this is stated in the guide.
-- **Security**: reject any request whose `Origin` header is present and is not `http://localhost*` /
-  `http://127.0.0.1*` (`403`). Reject a `Host` header that does not match the bind address or `localhost` (DNS
-  rebinding). When bound to a non-loopback address, require `Authorization: Bearer <McpServerAccessToken>`,
-  and refuse to start when the token is empty. On loopback there is no auth. This matches PRD §7.1:
-  full access, and the transport default is the only limit.
-- **HTTP subset** (`HttpParser.h`): HTTP/1.1, `Content-Length` request bodies (reject chunked
-  request bodies with `411`), a 16 MiB body limit, keep-alive. SSE responses use
-  `Transfer-Encoding: chunked`. The parser is incremental, so a request split across TCP reads works.
+  - Requests: `Content-Type: application/json` with the single response once it is ready. The response
+    switches to `text/event-stream` when the call emits progress (it has a `progressToken`) or is
+    asynchronous; then it streams the notifications and the final response and closes. The connection
+    stays open while the call waits in the busy queue.
+- **GET** with `Accept: text/event-stream`: the session's standalone SSE stream for server notifications
+  (`resources/updated`, `tools/list_changed`, `notifications/message`). One per session. A `: keepalive`
+  comment is sent every 15 s.
+- **DELETE**: terminates the session (rolls back its agent transaction, drops subscriptions). A second GET or
+  a DELETE ends the session's previous stream.
+- **Sessions**: `initialize` creates a session and returns `Mcp-Session-Id` (128-bit random hex). Later
+  requests must carry it: unknown id → `404`, missing → `400`. `MCP-Protocol-Version` must match the
+  negotiated version; if absent the negotiated one is assumed.
+- **SSE frames** carry `event: message` and `id: <seq>`; the POST and GET streams of a session share one
+  sequence. `Last-Event-ID` replay is not supported (a reconnecting client re-reads resources).
+- **Security**: `403` for an `Origin` that is present and not `http://localhost*` / `http://127.0.0.1*`.
+  The `Host` header must match the bind address or `localhost` (DNS rebinding); a missing `Host` is `400`;
+  a wildcard bind (`0.0.0.0`) skips the Host check. A non-loopback bind requires `Authorization: Bearer
+  <McpServerAccessToken>` and refuses to start with an empty token. Loopback has no auth (PRD §7.1).
+- **HTTP subset** (`HttpParser.h`): HTTP/1.1, `Content-Length` bodies (chunked request bodies → `411`),
+  16 MiB body limit, 64 KiB header limit, keep-alive, incremental parsing. SSE responses use
+  `Transfer-Encoding: chunked`. Wrong `Content-Type` → `415`; GET without an acceptable `Accept` → `406`.
+  Transport-level errors carry JSON-RPC bodies.
 
-**Why not QHttpServer:** it is a separate Qt module that is not in our `find_package(Qt6 ...)` list
-and is missing from some distro Qt builds. We need a small subset of HTTP, and keeping it in the
-Qt-free core makes it testable and reusable in headless mode.
+QHttpServer is not used: it is a separate Qt module missing from some distro builds, and keeping the small
+HTTP subset in the Qt-free core makes it testable and reusable in headless mode.
 
-### 3.3 Qt adapter (`McpTcpTransport`, TbUiLib)
+### 3.3 Qt adapter (`McpTcpTransport`)
 
-`QTcpServer::listen(QHostAddress(bindAddress), port)` runs on the main thread. On each `readyRead`
-it calls `conn.feed(socket->readAll())` and the core parser handles the rest. There are no extra
-threads. If the port is taken, the server logs an error to the console, the status indicator shows
-"MCP: port 47100 in use", and nothing else happens (the editor keeps working).
+`McpTcpTransport(Endpoint&, Config)` offers `listen(bind, port, token)`, `serverPort`, `errorString`,
+`closeAllConnections` and the signal `connectionCountChanged`. `QTcpServer` runs on the main thread; each
+`readyRead` feeds the socket's bytes to the core. If the port is taken, the error is logged, the status
+indicator shows it, and the editor keeps working.
 
 ### 3.4 Discovery file
 
-While the server listens, `McpServerController` writes `<SystemPaths::userDataDirectory()>/mcp-server.json`:
-`{"port":47100,"bind":"127.0.0.1","pid":1234,"version":"2026.1"}`. It deletes the file on stop and quit.
-The bridge uses this file to find the editor.
+While listening, `McpServerController` atomically writes `<user data folder>/mcp-server.json`:
+`{"port":47100,"bind":"127.0.0.1","pid":1234,"version":"2026.1"}`, and removes it on stop and quit. The
+folder is `EnvironmentConfig::userDataFolderPath` (the same as `SystemPaths::userDataDirectory()` in
+production, a temporary directory in tests). A killed editor leaves a stale file; the bridge tolerates it.
 
 ### 3.5 stdio bridge (`TrenchBroomMcp`)
 
-- Reads newline-delimited JSON-RPC from stdin on a `std::thread` (portable, because `QSocketNotifier`
-  cannot read stdin on Windows). Each line is handed to the main thread with `QMetaObject::invokeMethod`.
-- Forwards each message as an HTTP POST with `QNetworkAccessManager`. It remembers `Mcp-Session-Id` from
-  the `initialize` response and adds `MCP-Protocol-Version` afterwards. JSON responses go to stdout
-  as one line. SSE responses are parsed with `mcp::SseParser`, and each `data:` event becomes one line
-  on stdout.
-- After `notifications/initialized` it opens the GET stream and forwards its events, reconnecting with
-  backoff (1 s, 2 s, 5 s).
-- **Editor not running** (no discovery file, or the connection is refused): it launches the sibling
-  `TrenchBroom` executable with `--mcp-server` (detached, via `QProcess::startDetached`) and polls the
-  discovery file every 250 ms for up to 30 s. After that it answers pending requests with JSON-RPC error
-  `-32000 "TrenchBroom did not start"`.
-- CLI: `TrenchBroomMcp [--port N] [--no-launch] [--editor PATH]`. It logs to stderr only, because
-  stdout is protocol.
-- The bridge does not interpret MCP beyond the session headers, so new tools need no bridge changes.
+- Reads newline-delimited JSON-RPC from stdin on a `std::thread` (`QSocketNotifier` cannot read stdin on
+  Windows) and hands each line to the main thread with `QMetaObject::invokeMethod`. Lines that are not
+  valid JSON are answered with `-32700` by the bridge itself.
+- Forwards each message as an HTTP POST (`QNetworkAccessManager`), remembers `Mcp-Session-Id` and sends
+  `MCP-Protocol-Version`. JSON responses go to stdout as one line; SSE responses are parsed with
+  `mcp::SseParser` and each `data:` event becomes one line.
+- After `notifications/initialized` it opens the GET stream and forwards its events, reconnecting after
+  1 s, 2 s, 5 s.
+- It finds the editor through the discovery file in the directory of `SystemPaths::userDataDirectory()`
+  (`~/.TrenchBroom` on Linux, the application data location elsewhere; portable mode is not handled).
+- **Editor not running** (no discovery file, or connection refused): it launches the sibling `TrenchBroom`
+  executable with `--mcp-server` (`QProcess::startDetached`) and polls every 250 ms for up to 30 s for a new
+  or changed discovery file (so a stale file is ignored). Then pending requests get `-32000 "TrenchBroom did
+  not start"`.
+- CLI: `TrenchBroomMcp [--port N] [--no-launch] [--editor PATH]`. Logs go to stderr only.
+- The bridge does not interpret MCP beyond the session headers, so tools need no bridge changes.
 
 ### 3.6 Multiple clients
 
-Each `initialize` creates an independent `Session`. Notifications fan out to every session
-subscribed to the resource (`resources/updated`) or to all sessions (`list_changed`). Tool calls from all
-sessions go through one FIFO call queue (see §4), so edits never interleave. Each session has
-its own active document (default: the focused window) and its own agent transaction.
+Each `initialize` creates an independent `Session`. Notifications fan out to every session subscribed to
+the resource (`resources/updated`) or to all sessions (`list_changed`). Tool calls from all sessions share
+one FIFO call queue (§4.1), so edits never interleave. Each session has its own active document (default:
+the focused window) and its own agent transaction.
 
 ---
 
 ## 4. Threading and dispatch
 
-**Everything runs on the Qt main thread.** `QTcpServer` callbacks, parsing, dispatch, tool
-handlers, and notifier callbacks all run in the GUI event loop. Therefore:
-
-- No locks are needed around `Map`/`MapDocument` (which are not thread-safe).
-- A handler must not block. The budget is < 100 ms for simple edits; long work is asynchronous (below).
+Everything runs on the Qt main thread: socket callbacks, parsing, dispatch, handlers and notifier
+callbacks. No locks are needed around `Map`/`MapDocument`. Handlers must not block (budget < 100 ms for
+simple edits); long work is asynchronous (§4.2).
 
 ### 4.1 Call queue and the "human busy" gate (spec X13)
 
-`CallRunner` keeps one FIFO of pending `tools/call`s. Read-only tools (`readOnlyHint`)
-bypass the queue and run immediately; reading an intermediate drag state is harmless. For a
-modifying call:
+Arguments are validated before a call is queued, so invalid calls fail immediately even while the human is
+busy. Read-only tools (`Mutation::None`) bypass the queue and run immediately. `CallRunner` keeps one FIFO
+of modifying calls:
 
-1. `host.busyState(document)` is checked. It returns `Busy` when any of these is true:
-   - `MapWindow::toolBox().dragging()` (mouse drag or gesture tracker active; `ToolBox::dragging()`
-     returns `m_gestureTracker != nullptr`);
-   - `QApplication::activeModalWidget() != nullptr` (a modal dialog is open, e.g. Compile, Preferences);
-   - `map.commandProcessor().transactionDepth() > agentDepth(document)`. The human has a transaction
-     open: drag tools such as move/rotate/vertex open `LongRunning` transactions for the gesture.
-     `agentDepth` is the depth the MCP server itself opened.
-2. While the state is `Busy`, the call stays queued, and the scheduler re-checks every 50 ms. The status
-   bar shows "AI waiting for you…". After `McpBusyWaitTimeoutMs` the call fails with `BUSY_TIMEOUT`.
-3. When the human is not busy but a **modal tool owns the selection** (`ToolBox::selectionOwnedByTool()`,
-   e.g. vertex or clip tool active), `host.prepareForAgentEdit()` deactivates the current tool (as
-   Escape would) and adds the note `"deactivated tool: Vertex Tool"` to the result warnings. Waiting
-   for an idle modal tool could stall forever, and its handles would become stale after our edit anyway.
+1. The document is busy when `host.busyState(document)` returns `Busy` (`QtMcpHost`: a modal widget is
+   open — `QApplication::activeModalWidget()` — or the window's `ToolBox::dragging()`), or when
+   `map.transactionDepth()` exceeds the depth the server itself opened (the human has a transaction open,
+   e.g. a drag gesture).
+2. While busy, the call stays queued and is re-checked every 50 ms; the status bar shows "AI waiting for
+   you…". After `McpBusyWaitTimeoutMs` the call fails with `BUSY_TIMEOUT`.
+3. When idle, `host.prepareForAgentEdit()` deactivates the current tool if it owns the selection
+   (`selectionOwnedByTool()`), or is a node handle tool (vertex/edge/face) or the clip tool, as Escape would.
+   The note (e.g. "deactivated tool: Vertex Tool") becomes a warning with code `EDITOR_STATE_CHANGED`.
 
-`notifications/cancelled` removes a still-queued call; an executing synchronous call cannot be
-interrupted, and its result is dropped. **Stop agent** (status bar): clear the queue, cancel asynchronous
-operations, cancel every open agent transaction, and close all sessions (sockets closed; clients
-must re-initialize).
+`notifications/cancelled` removes a queued call; a running synchronous call cannot be interrupted and its
+result is dropped. **Stop agent** clears the queue, abandons asynchronous calls, rolls back every agent
+transaction, and closes all sessions (clients must re-initialize).
 
 ### 4.2 Asynchronous tools
 
-Long operations (`document_open` of big maps is still synchronous for MVP; `compile_run`,
-`entity_definitions_reload`, `materials_reload`, later `map_import` of large files) use
-`ToolDef::asyncHandler(ctx, args, Completion)`. The handler starts the work (e.g. `CompilationRunner`
-on its existing `QProcess` signals via the host), returns immediately, and calls `completion(result)`
-later on the main thread. `ctx.progress(fraction, message)` emits `notifications/progress` when the client
-sent a `progressToken`. Compile runs return a `run:<n>` handle immediately (`compile_run` is
-fire-and-poll with `compile_status`), so no MCP request stays open for minutes.
+`ToolDef::asyncHandler(fn)` with `fn(CallContext&, const Args&, ToolCompletion)` is only for
+`Mutation::External` tools. They go through the queue, and the queue waits until the call completes. The
+handler continues in steps scheduled with `CallContext::defer`, checks `CallContext::cancelled()` between
+them, and calls the completion once. `ctx.progress(progress, total, message)` emits `notifications/progress`
+when the client sent a `progressToken`.
 
-### 4.3 Abstract seams (for tests and headless mode)
+- `notifications/cancelled` for a running asynchronous call sets the cancelled flag (cooperative).
+- Closing the session or **Stop agent** abandons the call with `CANCELLED` and drops its pending steps.
+- If the target document closes meanwhile, the call fails with `DOCUMENT_NOT_FOUND`.
+- An exception in a step becomes `INTERNAL_ERROR`.
+
+`document_open`, `entity_definitions_reload` and `materials_reload` are asynchronous: they emit progress,
+then load or reload in a deferred step, so a cancellation sent meanwhile is honored; the load itself is
+synchronous. Compilation (E7) returns a `run:<n>` handle immediately and is polled with `compile_status`, so
+no request stays open for minutes.
+
+### 4.3 Host seam (`Host.h`)
 
 ```cpp
 namespace tb::mcp {
-class Scheduler { public: virtual void post(std::function<void()>) = 0;
-  virtual void postDelayed(std::chrono::milliseconds, std::function<void()>) = 0;
-  virtual std::chrono::steady_clock::time_point now() const = 0; virtual ~Scheduler(); };
-
 enum class BusyState { Idle, Busy };
 struct DocumentInfo { std::string id; ui::MapDocument* document; std::string windowTitle; bool focused; };
+struct OpenedDocument { DocumentInfo document; std::vector<LogMessage> messages; };
 
-class McpHost {  // implemented by ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E12)
+class DocumentHost {
+  virtual std::optional<DocumentInfo> documentToReplace() = 0;  // single-window mode, else nullopt
+  virtual Result<OpenedDocument> createDocument(const mdl::GameInfo&, mdl::MapFormat) = 0;
+  virtual Result<OpenedDocument> loadDocument(const mdl::GameInfo&, mdl::MapFormat /*Unknown = detect*/,
+                                              const std::filesystem::path&) = 0;
+  virtual void closeDocument(ui::MapDocument&) = 0;  // no questions; object stays alive until the event loop
+  virtual std::vector<std::filesystem::path> recentDocuments() = 0;
+};
+
+class McpHost {  // ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E14)
 public:
-  virtual std::vector<DocumentInfo> documents() = 0;
+  Notifier<ui::MapDocument&> documentWillCloseNotifier;    // before a document is destroyed
+  Notifier<> documentsDidChangeNotifier;                   // open, close, focus change
+  Notifier<ui::MapDocument&> currentToolDidChangeNotifier; // active tool of a document's window
+  virtual std::string applicationVersion() const = 0;
+  virtual std::vector<DocumentInfo> documents() = 0;       // window order
   virtual BusyState busyState(ui::MapDocument&) = 0;
-  virtual std::vector<std::string> prepareForAgentEdit(ui::MapDocument&) = 0;   // returns notes
-  virtual DocumentHost& documentHost() = 0;   // new/open/save-as dialogs-free, close, revert, recent
-  virtual ActionHost& actionHost() = 0;       // list/invoke ActionManager actions (E9)
-  virtual ViewHost& viewHost() = 0;           // camera, view options, layout, snapshots (E9)
-  virtual CompileHost& compileHost() = 0;     // profiles, runs, engines (E8)
-  virtual PreferenceHost& preferenceHost() = 0; // all preferences incl. game paths (E2/E9)
-  virtual const mdl::GameManager& gameManager() = 0;
-  virtual std::filesystem::path manualDirectory() = 0;
-  virtual ~McpHost();
+  virtual std::vector<std::string> prepareForAgentEdit(ui::MapDocument&) = 0;  // returns notes
+  virtual std::optional<std::string> currentToolName(ui::MapDocument&) = 0;
+  virtual bool isCompileRunning(ui::MapDocument&) = 0;
+  virtual DocumentHost& documentHost() = 0;
+  virtual mdl::GameManager& gameManager() = 0;
 };
 }
 ```
 
-Sub-interfaces are added in the epic that needs them. `FakeHost` returns `Unsupported` for any it
-does not implement, which maps to error `UNSUPPORTED_IN_HOST`.
+Game and format detection (`readMapHeader`) happens in the core. Game paths are set with `setPref` on the
+game's `gamePathPreference` directly (Qt-free; open documents react through their preference observer).
+
+`QtMcpHost`:
+- Document handles `doc:<n>` follow window open order. `mapWindowWillClose` → `documentWillCloseNotifier`,
+  `mapWindowsDidChange` → `documentsDidChangeNotifier`, each window's `ToolBox`
+  `toolActivatedNotifier`/`toolDeactivatedNotifier` → `currentToolDidChangeNotifier`.
+- Creates documents with `MapDocument::createDocument/loadDocument` and shows them with
+  `MapWindowManager::createMapWindow`; in single-window mode the top window's document is recreated in
+  place. `closeDocument` calls `MapWindow::closeWithoutConfirmation()`. Agent-created documents do not close
+  the welcome window. `isCompileRunning` asks `MapWindow::compilationRunning()`.
+
+`FakeHost` implements both interfaces with its own task and resource managers and a `GameManager` with the
+games "Test", "Quake" and "Quake 2" (the real configurations from the fixture's `games/` folder, game paths
+in `test/mdl/Game/`). `singleWindow` simulates single-window mode, `recentDocumentList` is the recent list,
+and closed documents stay alive.
+
+Further sub-interfaces are added by the epics that need them: `CompileHost` (E7, over `CompilationRunner`),
+`ViewHost`, `ActionHost`, `PreferenceHost` (E11), the snapshot renderer (E12). A host that does not
+implement a capability maps to `UNSUPPORTED_IN_HOST`.
+
+### 4.4 Server state
+
+`ServerState` holds everything tools may need; handlers reach it through `CallContext::server()` and tests
+through `McpServer::state()`. It creates a `DocumentState` (`IdRegistry`, open `AgentTransaction`, resource
+change hooks) for every open document whenever the document list changes, so subscriptions work before any
+tool touched a document, and drops it on `documentWillCloseNotifier`.
 
 ---
 
 ## 5. Stable object IDs
 
-### 5.1 Findings in the code
+### 5.1 Facts in the model
 
-- **Node pointers survive undo/redo.** `AddRemoveNodesCommand` keeps the removed `Node*`s (owned by
-  the command) and re-adds the *same pointers* on undo; it swaps `m_nodesToAdd/m_nodesToRemove`.
-  `ReparentNodesCommand` moves the same pointers. `SwapNodeContentsCommand` swaps `NodeContents`
-  (entity/brush/group/patch values) *inside* the same `Node*`. Selection, visibility, and lock commands do not
-  touch identity.
-- **Removed nodes are freed later.** When the redo stack is cleared or a command is dropped, its
-  `AddRemoveNodesCommand` destructor deletes the nodes it holds. There is no notification for this, so a new node can get
-  a recycled address. **Raw pointers are therefore not safe as IDs.**
-- **Linked groups re-clone children.** `UpdateLinkedGroupsHelper::doReplaceChildren` replaces all
-  children of each *target* linked group with fresh clones (`Node::replaceChildren`). It fires
-  `nodesWereRemoved(old)` followed by `nodesWereAdded(new)`; undo swaps the old pointers back. The clones keep
-  the source's `Object::linkId()`.
-- **Existing persistent ids are not general.** `LayerNode`/`GroupNode::persistentId()` (assigned by
-  `WorldNode`, saved as `_tb_id`) exist only for layers and groups. `Object::linkId()` is a UUID for
-  brushes/entities/groups/patches, but it is **shared by corresponding objects in linked groups** and
-  copied by `clone()` (`cloneLinkId`), so it is not unique.
-- `Map::reload()` builds a completely new `Map`, and `MapDocument::setMap` replaces it (followed by
-  `documentWasLoadedNotifier`).
+- **Node pointers survive undo/redo.** `AddRemoveNodesCommand` keeps removed `Node*`s and re-adds the same
+  pointers on undo; `ReparentNodesCommand` moves the same pointers; `SwapNodeContentsCommand` swaps contents
+  inside the same `Node*`. Selection, visibility and lock commands do not touch identity.
+- **Removed nodes are freed later** without notification (when the redo stack is cleared), so addresses
+  can be recycled. Raw pointers are not safe as IDs.
+- **Linked groups re-clone children.** `UpdateLinkedGroupsHelper::doReplaceChildren` replaces all children
+  of each target linked group with fresh clones (`nodesWereRemoved(old)`, then `nodesWereAdded(new)`); the
+  clones keep the source's `Object::linkId()`.
+- **Persistent ids are not general.** `persistentId()` exists only for layers and groups. `linkId()` is
+  shared by corresponding objects in linked groups and copied by `clone()`.
+- `Map::reload()` builds a new `Map`; `MapDocument::setMap` replaces it (then `documentWasLoadedNotifier`).
 
-### 5.2 Decision
+### 5.2 Design
 
-1. **TbMdlLib change (E1.15):** add `IdType Node::runtimeId() const`. It is assigned in `Node::Node()`
-   from a `static std::atomic<IdType>` counter starting at 1. It is never copied (clones are new nodes,
-   and the private copy constructor also draws a fresh id), never persisted, and never reused within the
-   process. It is atomic because map parsing may construct nodes on `task_manager` worker threads. Add a test in `tst_Node.cpp`.
-2. **External ID format:** `<kind>:<runtimeId>`, where kind ∈ `world | layer | group | entity | brush | patch`,
-   e.g. `brush:1042`. The world is also addressable as `world`, and the default layer as `layer:default`.
-   Faces are `brush:1042/face:3`: the index into `BrushNode::brush().faces()`. Other handles are `doc:<n>`
-   (documents, assigned by the host per `MapDocument*`), `run:<n>` (compile runs), and
-   `issue:<runtimeId>:<issueType>:<k>` (issues).
-3. **`IdRegistry` (one per `MapDocument`)** maps `runtimeId → Node*` for nodes currently in the tree.
-   - Build: a full tree walk on attach and on `documentWasLoadedNotifier`.
-   - `nodesWereAdded`: register the nodes and all descendants. `nodesWereRemoved`: unregister the nodes
-     and descendants (so a pointer is never dereferenced after it could have been freed).
-   - Resolving an id that is not registered gives `OBJECT_NOT_FOUND`. The message says that the object
-     may have been deleted and that `undo` may restore it. Because undo re-adds the same `Node*` with the same
-     `runtimeId`, the old id becomes valid again automatically.
-   - **Linked-group aliasing:** within one notifier burst (removed followed by added under the same
-     parent), for every added node whose `(parent GroupNode*, path-of-linkIds)` matches a node just
-     removed, record `alias[newRuntimeId] = canonicalId(oldNode)`. `formatId(node)` emits the canonical
-     (first-seen) id, and `resolve()` follows aliases. From the agent's point of view, a brush inside a
-     linked copy keeps its id when another copy is edited. The change collector reports such a node as
-     **modified**, not as removed+added.
-   - **Reload/revert:** node IDs do not survive. Layers and groups are remapped by `persistentId()`
-     (exact), and all other old ids resolve to `OBJECT_NOT_FOUND` with hint "document was reloaded".
-     `document_revert` returns `"idsInvalidated": true`.
-4. **Faces:** a face index is valid until the brush's geometry changes. Every brush payload returns
-   faces with `index`, `normal`, `center`, and `material`, so agents can re-resolve. Tools that take faces also
-   accept `{"brush":"brush:1042","normal":[0,0,1]}` (the face whose normal is within 0.001 of the given one).
-   The change report lists geometry-changed brushes under `modified`; the guide says to re-read faces then.
-5. Every object payload also exposes `persistentId` (layers/groups) and `linkId` (for linked-group reasoning).
+1. `IdType Node::runtimeId() const` (TbMdlLib) is assigned in `Node::Node()` from a
+   `static std::atomic<IdType>` counter starting at 1 (atomic because parsing may construct nodes on worker
+   threads). It is never copied (the private copy constructor also draws a fresh id), never persisted, and
+   never reused within the process.
+2. **Format** `<kind>:<runtimeId>`, kind ∈ `world | layer | group | entity | brush | patch`, e.g.
+   `brush:1042`. The world is always `world` and the default layer always `layer:default` (canonical, also
+   accepted on input). Faces are `brush:1042/face:3`, the index into `BrushNode::brush().faces()`; a face id
+   resolves to its brush, and `resolveFace` (`Targets.h`) returns the `BrushFaceHandle`. Other handles:
+   `doc:<n>` (documents), `run:<n>` (compile runs, E7), `issue:<runtimeId>:<issueType>:<k>` (issues, E10).
+3. **`IdRegistry`** (one per `MapDocument`) maps `runtimeId → Node*` for nodes currently in the tree.
+   - Built by a full tree walk on attach and on `documentWasLoadedNotifier`; `nodesWereAdded` registers nodes
+     and descendants, `nodesWereRemoved` unregisters them, so a pointer is never dereferenced after it could
+     have been freed.
+   - An unregistered id gives `OBJECT_NOT_FOUND`, saying the object may have been deleted and `undo` may
+     restore it. Undo re-adds the same `Node*`, so the old id becomes valid again.
+   - **Linked-group aliasing:** within one notifier burst (removed, then added under the same parent), an
+     added node whose `(parent GroupNode*, path of linkIds)` matches a removed node gets
+     `alias[newRuntimeId] = canonicalId(oldNode)`. `formatId` emits the canonical id and `resolve` follows
+     aliases, so a brush in a linked copy keeps its id when another copy is edited. The change collector
+     reports it as modified.
+   - **Reload/revert:** the registry keeps the persistent id of every layer and group it has seen; old
+     layer/group ids resolve to the node with the same persistent id. Other ids fail with "document was
+     reloaded". `document_revert` returns `"idsInvalidated": true`.
+4. **Faces:** a face index is valid until the brush's geometry changes. Brush payloads list faces with
+   `index`, `normal`, `center` and `material`; the change report lists geometry-changed brushes under
+   `modified`, and the guide says to re-read faces then.
+5. `object_get` exposes `persistentId` (layers/groups) and `linkId` (linked-group reasoning).
 
 ---
 
@@ -396,74 +422,77 @@ does not implement, which maps to error `UNSUPPORTED_IN_HOST`.
 
 ### 6.1 Per-call transaction (`CallRunner`)
 
-For a tool with `mutation == Mutation::Map`:
+For `Mutation::Map` tools with `transactional(true)` (the default):
 
 ```
-collector.attach(document)                          // §6.3
+collector.attach(document)                                   // §6.3
 map.startTransaction("AI: " + def.title, TransactionScope::Oneshot)
-status = handler(ctx, args)                         // uses Map_* free functions
-if (!status || ctx.dryRun()) map.cancelTransaction();       // rollback + pop, no undo entry
-else if (!map.commitTransaction()) status = error(OPERATION_FAILED, "linked group update failed")
-report = collector.finish()
+status = handler(ctx, args)                                  // Map_* free functions
+report = collector.finish()                                  // before any rollback, so dry runs get it
+if (!status || ctx.dryRun()) map.cancelTransaction();        // rollback, no undo entry
+else commit with command collation disabled                  // failure → OPERATION_FAILED
 ```
 
-- `Map_*` functions open their own `Transaction`s (e.g. `"Create Brush"`). They nest inside ours, and
-  committing a nested transaction folds it into the parent, so the undo menu shows exactly one
-  `AI: Create box brush` entry (X2). If a call changes nothing, the empty transaction stores nothing, and the
-  result says `"undoStep": null`.
-- Handlers signal failure by returning `ToolError`. A `false` returned by any `Map_*` call is turned into
-  `OPERATION_FAILED` with the messages captured from the document logger during the call.
-  `ScopedLogCapture` re-targets the document's `LoggingHub` to a capturing logger that forwards to the
-  original target. This needs a new `LoggingHub::targetLogger()` getter in TbBaseLib, added in E1.16.
-- Exceptions are caught in `CallRunner`, which cancels the transaction and returns `INTERNAL_ERROR`. A server
+- `Map_*` functions open their own transactions, which nest and fold into ours: the undo menu shows exactly
+  one `AI: <title>` entry (X2). Collation is disabled while committing because `CommandProcessor` would
+  otherwise merge two consecutive agent calls whose first commands collate.
+- `undoStep` is reported only if the transaction actually stored a command (observed through
+  `transactionDoneNotifier`); calls that change nothing report `null`.
+- Handlers fail by returning `ToolError`. When a `Map_*` call returns `false`, `ctx.operationFailed(...)`
+  builds `OPERATION_FAILED` with the messages the document logged during the call. `ScopedLogCapture`
+  (`LogCapture.h`) re-targets the document's `LoggingHub` to a capturing logger that forwards to the original
+  target (`LoggingHub::targetLogger()`, `MapDocument::targetLogger()`); `ctx.loggedProblems()` returns the
+  warnings and errors. `collectCachedMessages(document)` reads the messages a document without a target
+  logger has cached, and caches them again for its console.
+- Exceptions are caught, the transaction is cancelled, and the call returns `INTERNAL_ERROR`. A server
   failure never crashes the editor (PRD 7.4).
-- `Oneshot` makes the intermediate state unobservable. Since we are synchronous, no repaint happens
-  between do and rollback, so a dry run is invisible on screen.
+- `Oneshot` makes the intermediate state unobservable; since everything is synchronous, no repaint happens
+  between do and rollback, so a dry run is invisible.
+
+Tools that manage the history themselves (`undo`, `redo`, `transaction_*`, `command_repeat`) are
+`Mutation::Map` + `transactional(false)`: they go through the busy gate and get a change report, but honor
+`dryRun` themselves. `CallContext::setUndoStep()` names the undo step they created.
 
 ### 6.2 Explicit agent transactions (X3)
 
-`transaction_begin{name}` calls `map.startTransaction("AI: " + name, LongRunning)` and stores
-`{document, depthAtBegin}` in the `Session`. Later calls nest their `Oneshot` transactions inside it.
-A failed call rolls back only itself (nested `cancelTransaction`). `transaction_commit` → `commitTransaction()`.
-`transaction_rollback` → `cancelTransaction()`. Rules:
+`transaction_begin{name}` calls `map.startTransaction("AI: " + name, LongRunning)` and stores it in the
+document's `DocumentState` with its owning session. Later calls nest their `Oneshot` transactions; a failed
+call rolls back only itself. `transaction_commit` → `commitTransaction()`, `transaction_rollback` →
+`cancelTransaction()`. Rules:
 
-- At most one agent transaction per document. Another session's modifying call on that document fails
-  with `TRANSACTION_ACTIVE`, and the error names the owning client.
-- `undo`/`redo` while one is open → `TRANSACTION_ACTIVE`. (`CommandProcessor::undo()` has a
-  `contract_pre(m_transactionStack.empty())`; the UI already disables undo then.)
-- A session DELETE, a disconnect, **Stop agent**, or closing the document → rollback.
+- At most one agent transaction per document. Another session's modifying call on that document fails with
+  `TRANSACTION_ACTIVE`, naming the owning client.
+- `undo`/`redo` while one is open → `TRANSACTION_ACTIVE` (`CommandProcessor::undo()` requires an empty
+  transaction stack).
+- Session DELETE, disconnect, **Stop agent**, or closing the document → rollback.
 - The status bar shows "AI transaction open: <name>". Human edits made meanwhile become part of the agent
-  transaction. This is documented in the manual section (E11.5) and is accepted behavior.
-- **TbMdlLib change (E1.16):** add `size_t CommandProcessor::transactionDepth() const` (plus a
-  `Map` passthrough), used by the busy gate in §4.1.
+  transaction; the manual section (E13.5) documents this.
 
 ### 6.3 Change report (`ChangeCollector`, X5)
 
-The collector subscribes to the `MapDocument` notifiers for the duration of one call:
-
 | Notifier | Action |
 |---|---|
-| `nodesWereAddedNotifier` | add the nodes and descendants to `added` |
-| `nodesWillBeRemovedNotifier` | format their ids *before* removal (canonical ids) |
+| `nodesWereAddedNotifier` | add nodes and descendants to `added` |
+| `nodesWillBeRemovedNotifier` | format their ids before removal (canonical ids) |
 | `nodesWereRemovedNotifier` | add them to `removed` |
-| `nodesWillChangeNotifier` | snapshot the issue signatures of those nodes (for "introduced issues") |
+| `nodesWillChangeNotifier` | snapshot the issue signatures of those nodes |
 | `nodesDidChangeNotifier` | add them to `changed` |
-| `nodeVisibilityDidChangeNotifier`, `nodeLockingDidChangeNotifier` | add them to `changed` (field `stateOnly`) |
-| `selectionDidChangeNotifier` | mark the selection as dirty |
+| `nodeVisibilityDidChangeNotifier`, `nodeLockingDidChangeNotifier` | add them to `changed` (`stateOnly`) |
+| `selectionDidChangeNotifier` | mark the selection dirty |
 | `currentLayerDidChangeNotifier`, `groupWasOpened/ClosedNotifier` | record `context` changes |
 
-Reduction: `created = added − removed`, `removed = removed − added` (minus linked aliases), and
-`modified = (changed ∪ aliased) − created − removed`. Parents whose child sets changed are included in `modified`.
-Issues introduced: for `created ∪ modified` nodes, compute `node->issues(world.validators)` after the call,
-minus the signatures `(type, description)` captured before the change. A dry run produces the same report
-from the rolled-back execution. Its ids for created objects are marked `"ephemeral": true`, because they will
-not exist.
+Reduction: `created = added − removed`, `removed = removed − added` (minus linked aliases),
+`modified = (changed ∪ aliased) − created − removed`, including parents whose child sets changed. Issues
+introduced: for `created ∪ modified`, `node->issues(validators)` after the call minus the `(type,
+description)` signatures captured before. A dry run's report comes from the rolled-back execution and
+excludes linked-group propagation (performed by `Map::commitTransaction`); if it created objects,
+`changes.ephemeral` is `true` because those ids will not exist.
 
-Result envelope for every modifying tool (tool-specific data goes under `result`):
+Result envelope of modifying tools (tool data under `result`):
 
 ```json
 {
-  "ok": true, "dryRun": false, "undoStep": "AI: Create box brush",
+  "ok": true, "dryRun": false, "undoStep": "AI: Create Box Brush",
   "result": { "brush": "brush:1042" },
   "changes": { "created": ["brush:1042"], "modified": ["layer:3"], "removed": [] },
   "selection": { "mode": "objects", "count": 1, "ids": ["brush:1042"], "truncated": false },
@@ -473,681 +502,574 @@ Result envelope for every modifying tool (tool-specific data goes under `result`
 }
 ```
 
-Change lists are capped at 500 ids each with `"truncated": true` plus counts, so bulk edits cannot flood the context.
+`Mutation::External` tools omit `changes`, `selection` and `issuesIntroduced`. Read-only tools return the
+handler's JSON as `structuredContent` (plus `warnings` if any). Change lists are capped at 500 ids each
+(`truncated: true` plus counts).
 
-### 6.4 Selection-independence (X7) — "select, act, restore"
+### 6.4 Selection independence (X7): select, act, restore
 
-Almost every `Map_*` mutator operates on the **current selection** (`translateSelection`,
-`setEntityProperty`, `setBrushFaceAttributes`, `csgHollow`, `groupSelectedNodes`, …). `Targets.h` therefore provides:
+Most `Map_*` mutators act on the current selection. `Targets.h`:
 
 ```cpp
-Result<void> withTargets(CallContext& ctx, const TargetSpec& spec,
-                         const std::function<Result<void>(const ResolvedTargets&)>& fn,
-                         SelectionAfter after = SelectionAfter::Restore);
+schema::Field idsField(std::vector<ObjectKind> kinds = {}, std::string description = ...);
+Result<std::vector<mdl::Node*>, ToolError> resolveTargets(CallContext&, const Args&,
+                                                          std::string_view key = "ids",
+                                                          const std::vector<ObjectKind>& kinds = {});
+Result<mdl::BrushFaceHandle, ToolError> resolveFace(CallContext&, std::string_view id);
+ToolResult withTargets(CallContext&, const std::vector<mdl::Node*>& targets,
+                       const std::function<ToolResult()>& fn,
+                       SelectionAfter after = SelectionAfter::Restore);
+
+schema::Field faceTargetsField(std::string description = ...);
+Result<std::vector<mdl::BrushFaceHandle>, ToolError> resolveFaceTargets(CallContext&, const Args&,
+                                                                        std::string_view key = "ids");
+ToolResult withFaces(CallContext&, const std::vector<mdl::BrushFaceHandle>& faces,
+                     const std::function<ToolResult()>& fn);
 ```
 
-Inside the call transaction it saves the selection (nodes or faces), selects the targets (`deselectAll`
-+ `selectNodes`/`selectBrushFaces`), runs `fn`, and restores the saved selection, dropping removed nodes. The
-exceptions are tools whose editor counterpart leaves new objects selected: create, duplicate, paste, import,
-and group. They use `SelectionAfter::Result`. The selection commands are part of the same undo step. With no
-ids given, it uses the current selection and returns `NO_SELECTION` if it is empty. Targets that are not
-editable (`EditorContext::selectable()` false: hidden, locked layer, or inside a closed group) fail with
-`OBJECT_NOT_EDITABLE`. The hint names the fix: `layer_set_state` unlock/show, or `group_open`.
+`resolveTargets` uses the given ids or, without ids, the current selection (`NO_SELECTION` if empty).
+Non-editable targets (hidden, locked, inside a closed group) fail with `OBJECT_NOT_EDITABLE`; the hint names
+the fix (`layer_set_state` unlock/show, or `group_open`). An explicit id of the wrong kind fails schema
+validation (`INVALID_ARGUMENT`); a selection of the wrong kinds gives `WRONG_OBJECT_KIND`.
+
+`withTargets` saves the selection, selects exactly the targets, runs `fn`, and restores the saved selection
+(dropping removed nodes), all inside the call transaction. Tools whose editor counterpart leaves results
+selected use `SelectionAfter::Result`: creation, duplicate, array, clip, extrude-to-new, all `csg_*`, and
+(later) paste, import and group.
+
+Face tools take `faceTargetsField()` ids: face ids (`brush:12/face:3`) and brush, group or entity ids, which
+stand for all faces of the brushes they contain. `resolveFaceTargets` returns them without duplicates in id
+order; without ids it uses the selected faces, else all faces of the selected objects (`NO_SELECTION` if that
+yields no face). Faces that cannot be selected fail with `OBJECT_NOT_EDITABLE`. `withFaces` selects exactly
+these faces (the `Map_Brushes` UV functions act on `selection().allBrushFaces()`), runs `fn` and restores the
+saved selection, sharing the save/restore code with `withTargets`.
 
 ### 6.5 Non-map mutations
 
-`Mutation::External` tools (save, preferences, grid, camera, compile, game path) are not undoable.
-They get no transaction. They must honor `ctx.dryRun()` by validating and describing
-(`"wouldDo": "overwrite /maps/a.map"`) without side effects. `Mutation::None` tools are read-only.
+`Mutation::External` tools (save, game path, grid, locks, and later camera, preferences, compile) are not
+undoable and get no transaction. They honor `ctx.dryRun()` by validating and describing the effect (e.g.
+`"wouldDo": "overwrite /maps/a.map"`) without side effects.
 
-### 6.6 Required pre-fixes in TbMdlLib (E1.18)
+### 6.6 TbMdlLib and TbBaseLib support
 
-- `CommandProcessor::executeAndStoreCommand` clears the redo stack even inside a transaction. A dry run
-  or a failed call would then silently destroy the human's redo history. Move `m_redoStack.clear()` to the
-  point where a command or transaction is stored on the top-level undo stack (`pushToUndoStack`), and add
-  tests in `tst_CommandProcessor.cpp`.
-- `Map::canRedoCommand()` returns `undoCommandName() != nullptr` (a bug). Fix it to use `redoCommandName()`
-  (needed by `history_get`/`redo`, E1.23).
+- `Node::runtimeId()` (§5.2).
+- `CommandProcessor::transactionDepth()` and `Map::transactionDepth()` (busy gate).
+- `CommandProcessor::undoCommandNames()` / `redoCommandNames()`, most recent first (`history_get`,
+  `undo`/`redo`).
+- The redo stack is cleared only when a command or transaction reaches the top-level undo stack
+  (`storeCommand` / `createAndStoreTransaction`), so rolling back a transaction (dry run, failed call) keeps
+  the human's redo history.
+- `Map::canRedoCommand()` checks `redoCommandName()`.
+- `LoggingHub::targetLogger()` (§6.1).
+- `csgHollow(Map&, std::optional<double> thickness = std::nullopt)`: thickness defaults to the grid size;
+  ≤ 0 fails.
 
 ---
 
-## 7. Tool definition DSL, errors, pagination, naming
+## 7. Tool definitions, errors, pagination, naming
 
 ### 7.1 Naming
 
-- Tool names are the spec's names verbatim: `snake_case`, `domain_verb[_object]`, regex `^[a-z][a-z0-9_]{0,63}$`.
-- `title` is short Title Case ("Create Box Brush"). It is used for the undo name `AI: <title>`, the status bar,
+- Tool names are the spec's names verbatim: `snake_case`, `domain_verb[_object]`, `^[a-z][a-z0-9_]{0,63}$`.
+- `title` is short Title Case ("Create Box Brush"), used for the undo name `AI: <title>`, the status bar
   and the call log.
-- Common argument names: `ids` (objects), `faces`, `document`, `dryRun`, `cursor`, `limit`, `fields`, `detail`.
-  Coordinates are `position`/`min`/`max`/`center`/`vector`, angles are `angle`/`angles` (degrees), and every length
-  is in map units.
-- Resource URIs: `trenchbroom://editor/status`,
-  `trenchbroom://documents/{doc}/info|summary|selection|entity-definitions|issues`,
-  `trenchbroom://games/{game}/config|materials`, `trenchbroom://compile/{run}/log`,
-  `trenchbroom://console`, `trenchbroom://manual/{section}`, `trenchbroom://guide`.
-- Prompt names: `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
+- Common argument names: `ids`, `faces`, `document`, `dryRun`, `cursor`, `limit`, `fields`, `detail`.
+  Coordinates are `position`/`min`/`max`/`center`/`vector`; angles `angle`/`angles` in degrees; lengths in
+  map units. All paths are absolute.
+- Prompt names (E13): `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
   `compile_and_debug`, `explain_map`, `explain_entity`, `cleanup_map`.
 
-### 7.2 Schema builder (`Schema.h`)
+### 7.2 `ToolDef` and the schema builder (`ToolRegistry.h`, `Schema.h`)
 
-A tiny value-type DSL builds a `SchemaNode` tree. It serves both as the JSON Schema published in
-`tools/list` (`toJsonSchema()`) and as the validator/decoder for incoming arguments (`validate(Json) ->
-Result<Json, SchemaErrors>`, which fills in defaults). There is no generic JSON-Schema validator, because we
-only accept what we declare.
+A value-type DSL builds a schema tree that is both the JSON Schema published in `tools/list` and the
+validator/decoder of incoming arguments (fills in defaults, rejects unknown properties with the list of
+allowed ones). There is no generic JSON Schema validator: we accept only what we declare.
 
 ```cpp
 using namespace tb::mcp::schema;
 
-void registerGeometryTools(ToolRegistry& r)
+void registerGeometryTools(ToolRegistry& registry)
 {
-  r.add(ToolDef{"brush_create_box"}
+  registry.add(ToolDef{"brush_create_box"}
     .title("Create Box Brush")
-    .description("Creates a cuboid brush spanning min..max (map units, Z up). "
-                 "Goes to the current layer or open group. Example: "
+    .description("Creates a cuboid brush spanning min..max (map units, Z up). Example: "
                  "{\"min\":[0,0,0],\"max\":[256,256,16],\"material\":\"base_floor\"}")
     .input(object({
       field("min", vec3()).required().describe("Minimum corner"),
       field("max", vec3()).required().describe("Maximum corner; each component > min"),
       field("material", string()).describe("Material name; default: current material"),
     }))
-    .output(object({ field("brush", objectId({ObjectKind::Brush})) }))
-    .mutation(Mutation::Map)          // adds `dryRun` + `document` automatically
-    .handler(createBox));
-}
-
-ToolResult createBox(CallContext& ctx, const Args& a)
-{
-  const auto box = vm::bbox3d{a.get<vm::vec3d>("min"), a.get<vm::vec3d>("max")};
-  ...
-  return ToolResult{Json{{"brush", ctx.ids().format(*brushNode)}}};
+    .output(object({field("brush", objectId({ObjectKind::Brush}))}))
+    .mutation(Mutation::Map)          // injects `dryRun` and `document`
+    .handler(createBox));             // ToolResult createBox(CallContext&, const Args&)
 }
 ```
 
-Primitives: `boolean() integer() number() string() enumOf({...}) array(T) object({...}) oneOf({...})
-vec3() vec2() box() color() objectId(kinds) faceRef() documentId()`, with modifiers `.required()
-.defaultValue(j) .min(x) .max(x) .minItems(n) .pattern(re) .describe(s)`. `ToolDef` also sets the MCP
-annotations: `readOnlyHint` (Mutation::None), `destructiveHint` (delete/close/overwrite tools),
-`idempotentHint`, and `openWorldHint` (compile/engine/file tools). `Args::get<T>` uses `JsonVm.h`
-converters. A handler never sees an unvalidated value.
-
-Standard injected parameters:
-- `Mutation::Map`/`External`: `document?: string`, `dryRun?: boolean = false`.
-- List tools (`.paginated()`): `cursor?: string`, `limit?: integer = 100 (1..1000)`, `fields?: string[]`,
-  `detail?: "summary"|"full" = "summary"`.
+- Schemas: `any() boolean() integer() number() string() enumOf({...}) array(T) object({...}) oneOf({...})
+  vec3() vec2() box() angle() objectId(kinds) documentId()`; modifiers `describe defaultsTo min max minSize
+  maxSize nonEmpty matching withFormat withCheck allowAdditionalProperties`; fields `field(name, schema)
+  .required() .describe() .defaultsTo()`. Published output schemas do not contain
+  `additionalProperties: false`.
+- `ToolDef`: `title description input output mutation documentUse transactional paginated destructive
+  idempotent openWorld handler asyncHandler`. Annotations: `readOnlyHint` (Mutation::None),
+  `destructiveHint`, `idempotentHint`, `openWorldHint`.
+- `Mutation`: `None` (read-only, runs immediately), `Map` (one transaction, busy gate), `External`
+  (non-undoable side effects, busy gate).
+- `DocumentUse`: `None` (no `document` parameter), `Optional`, `Required` (`NO_DOCUMENT` without a target
+  document). Default: `Required` for `Mutation::Map`, `None` otherwise.
+- Injected parameters: `document?` for `DocumentUse != None`; `dryRun? = false` for `Map`/`External`;
+  for `.paginated()`: `cursor?`, `limit? = 100 (1..1000)`, `fields?`, `detail? = "summary"|"full"`.
+- `CallContext`: `server() host() session() tool() hasDocument() documentInfo() document() map()
+  documentState() ids() dryRun() warn() warnings() addImage() progress() setUndoStep() loggedProblems()
+  cancelled() defer() operationFailed()`. `addImage(bytes, mimeType)` appends an MCP `image` content block
+  (base64) after the text block that holds the structured result (`material_preview`). `Args::get<T>` uses the `JsonVm.h` converters; a handler never sees an
+  unvalidated value.
 
 ### 7.3 Errors (`Errors.h`, X9)
 
 ```cpp
 struct ToolError {
   ErrorCode code;                     // serialized as UPPER_SNAKE string
-  std::string message;                // what went wrong, in one sentence
+  std::string message;                // one sentence
   std::vector<std::string> objectIds; // involved objects
-  std::string hint;                   // concrete next step, e.g. tool name + argument
-  Json details = Json::object();      // e.g. schema error path
+  std::string hint;                   // concrete next step
+  Json details = Json::object();      // e.g. schema error path, editorMessages
 };
-using ToolResult = Result<Json, ToolError>;  // kdl::result like the rest of the codebase
+struct Warning { std::string code; std::string message; std::vector<std::string> objectIds; };
+using ToolResult = Result<Json, ToolError>;
 ```
 
-Codes: `INVALID_ARGUMENT`, `OBJECT_NOT_FOUND`, `WRONG_OBJECT_KIND`, `OBJECT_NOT_EDITABLE`,
-`NO_SELECTION`, `NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`,
-`OPERATION_FAILED`, `TRANSACTION_ACTIVE`, `NO_TRANSACTION`, `BUSY_TIMEOUT`, `CANCELLED`,
-`UNSAVED_CHANGES`, `FILE_EXISTS`, `IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`,
-`DRY_RUN_UNSUPPORTED`, `INTERNAL_ERROR`.
+Codes: `INVALID_ARGUMENT`, `OBJECT_NOT_FOUND`, `WRONG_OBJECT_KIND`, `OBJECT_NOT_EDITABLE`, `NO_SELECTION`,
+`NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`, `OPERATION_FAILED`,
+`TRANSACTION_ACTIVE`, `NO_TRANSACTION`, `BUSY_TIMEOUT`, `CANCELLED`, `UNSAVED_CHANGES`, `FILE_EXISTS`,
+`IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`, `DRY_RUN_UNSUPPORTED`, `INTERNAL_ERROR`.
 
 Mapping to MCP:
-- Tool failures, **including argument validation failures**, are returned as `CallToolResult` with `isError: true`,
-  `structuredContent: {"ok":false,"error":{...}}`, and a text block such as
-  `"INVALID_GEOMETRY: brush:12 would become non-convex. Hint: use a smaller offset."`. This follows the
-  2025-11-25 guidance that input errors are tool errors, so the model can self-correct.
-- JSON-RPC errors only for protocol faults: `-32700` parse, `-32600` invalid request, `-32601` unknown method,
-  `-32602` unknown tool / bad `params` shape, `-32603` internal, `-32002` resource not found.
-- Warnings (X14: unknown classname, property not in the definition, missing material) never fail a call. They
-  go to `warnings: [{code, message, objectIds}]`.
+- Tool failures, including argument validation failures, are `CallToolResult` with `isError: true`,
+  `structuredContent: {"ok":false,"error":{...}}` and a text block such as `"INVALID_GEOMETRY: brush:12 would
+  become non-convex. Hint: use a smaller offset."`, so the model can self-correct.
+- JSON-RPC errors only for protocol faults: `-32700` parse, `-32600` invalid request, `-32601` unknown
+  method, `-32602` unknown tool / bad `params`, `-32603` internal, `-32002` resource not found.
+- Warnings (X14) never fail a call; they go to `warnings: [{code, message, objectIds}]`. Codes are
+  UPPER_SNAKE strings defined by the tools (§10).
 
 ### 7.4 Pagination and fields (X10)
 
 - `cursor` is opaque: base64 of `{"o":<offset>,"m":<modificationCount>}`. If the document's
-  `modificationCount` changed since the cursor was issued, the page is still served, with `"stale": true`.
+  `modificationCount` changed since the cursor was issued, the page is still served with `"stale": true`.
 - A list response is `{"items":[...], "total":N, "nextCursor":"..."|null}`.
-- `fields` selects top-level keys and dotted paths (`"faces.material"`). `detail:"summary"` returns the
-  documented compact shape per tool. `tools/list` itself returns all tools on one page (about 200 tools), while
-  `resources/list` pages at 100.
+- `fields` selects top-level keys and dotted paths (`"faces.material"`). `detail:"summary"` returns each
+  tool's compact shape.
+- `tools/list` pages at 1,000 (in practice one page); `resources/list` and `prompts/list` page at 100.
 
 ---
 
-## 8. Session log and observability
+## 8. Resources and notifications (`Resources.cpp`)
 
-`CallLog` records every call: `{seq, time, session, client, tool, argsDigest, durationMs, ok,
-errorCode, undoStep, changes counts}`. Arguments are kept in full up to 4 KB, then truncated. It is a ring
-buffer of 5,000 entries, used by `session_log`. Sinks: (1) the document console through the document logger,
-at info level, as `[AI] brush_create_box ok 3 ms (+1 brush)`; (2) when `McpLogToFile` is set, JSONL at
-`<userDataDirectory>/mcp-logs/<yyyyMMdd-HHmmss>-<pid>.jsonl`, rotated at 10 MB. The protocol trace
-(raw JSON-RPC) is logged only at debug level.
+| URI | Content | Updated when |
+|---|---|---|
+| `trenchbroom://editor/status` | editor status | documents open/close/focus change; info or selection changes, grid, tool changes, lock preferences (`AlignmentLock`, `UvLock`), agent transactions opening or closing |
+| `trenchbroom://documents/{doc}/info` | `documentInfo()` | save, load, modified flag flips, mods, entity definitions, materials or worldspawn change |
+| `trenchbroom://documents/{doc}/summary` | `mapSummary()` (= `map_summary`) | nodes added/removed/changed, visibility, locking, current layer, grid, entity definitions, reload |
+| `trenchbroom://documents/{doc}/selection` | `selectionDetails()`, ≤ 100 items | selection changes, changes of selected nodes |
+| `trenchbroom://documents/{doc}/entity-definitions` | all classes of the document (per document: definitions depend on its mods and definition file) | definitions reloaded |
+| `trenchbroom://documents/{doc}/materials` | `materialsResource()`: collections `{path, materialCount}` and loaded materials `{name, collection, width, height}` (no usage counts, which change on every edit) | material collections changed, document loaded, material images processed |
+| `trenchbroom://games/{game}/config` | `gameConfigJson()`; `{game}` percent-encoded; listed for games of open documents | `game_set_path` |
+| `trenchbroom://guide` | agent guide (`AgentGuide` raw string in `Resources.cpp`) | static |
 
----
+Templates are listed once per open document. `DocumentState` reports `DocumentAspect::{Info, Summary,
+Selection, EntityDefinitions, Materials, Status}` changes. Info notifications and document open/close are immediate; all other updates go
+through `ServerState::scheduleResourceUpdate` / `scheduleDocumentUpdate`, coalesced into one
+`notifications/resources/updated` per resource and scheduler turn. Nothing is recorded while no session has
+subscriptions (the hooks run on every map change, e.g. during drags).
 
-## 9. Testing strategy
-
-### 9.1 `TbMcpLibTest` (headless, no Qt)
-
-| Test file | Covers |
-|---|---|
-| `tst_JsonRpc.cpp` | parse/serialize, ids (string/number), batch gating, error codes |
-| `tst_McpServer.cpp` | initialize/version negotiation, capability gating, ping, `notifications/initialized` ordering, cancellation, progress |
-| `tst_HttpParser.cpp`, `tst_StreamableHttp.cpp`, `tst_SseParser.cpp` | split packets, limits, 202/400/404/403, sessions, SSE framing, Origin/Host checks — over a `FakeHttpConnection` |
-| `tst_Schema.cpp` | builder → JSON Schema golden output; validation errors with paths; defaults |
-| `tst_ToolRegistry.cpp`, `tst_ResourceRegistry.cpp`, `tst_PromptRegistry.cpp` | listing, paging, dispatch, subscriptions |
-| `tst_ObjectIds.cpp` | id format/parse; delete→undo→same id; redo; linked-group edit keeps ids (aliasing); reload invalidation, layer/group remap |
-| `tst_CallRunner.cpp` | one undo step named `AI: …`; rollback on failure leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace, **redo stack preserved**; explicit transactions and nesting; busy gate with `FakeHost` + `FakeScheduler`; timeout |
-| `tst_ChangeCollector.cpp` | created/modified/removed reduction, introduced issues |
-| `tst_<Domain>Tools.cpp` | one test case per tool file, one `SECTION` per tool (AGENTS.md: one test case per unit, sections per function): happy path, invalid input, dry run, explicit ids vs selection |
-
-Fixture (`TbMcpTestUtilsLib`):
-
-```cpp
-class McpToolFixture {       // wraps ui::MapDocumentFixture + FakeHost + FakeScheduler + registries
-public:
-  ui::MapDocument& create(mdl::MapFixtureConfig = mdl::QuakeFixtureConfig);
-  ui::MapDocument& load(const std::filesystem::path&, mdl::MapFixtureConfig = {});
-  Json call(std::string_view tool, Json args);              // returns structuredContent, CHECKs !isError
-  ToolError callExpectingError(std::string_view tool, Json args);
-  Json rpc(Json request);                                   // raw JSON-RPC through McpServer
-  mdl::Node* node(std::string_view id);                     // resolve for assertions
-};
-```
-
-It uses the existing `lib/TbMdlLib/test-utils` helpers (`MapFixture`, `QuakeFixtureConfig`,
-`Quake2FixtureConfig`, `TestFactory.h`, `Matchers.h`) and `lib/TbAppLib/test-utils/MapDocumentFixture`.
-Fixture maps live in `lib/TbMcpLib/test/fixture/test/mcp/`. Scenario tests (E11.4) are scripted
-sequences in `tst_Scenarios.cpp` (S1–S3, S7 without compile) that run in CI.
-
-### 9.2 `TbUiLibTest` (Qt, existing `RunAllTests.cpp` QApplication)
-
-- `tst_McpTcpTransport.cpp`: listen on port 0, drive it with `QTcpSocket`/`QNetworkAccessManager`, wait with `QTest::qWaitFor`.
-- `tst_QtMcpHost.cpp`: with a `MapWindow` (as `tst_MapWindow.cpp` does): document listing, busy detection (simulate `ToolBox` drag through `startMouseDrag`), `prepareForAgentEdit`, and action enumeration.
-- `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
-
-### 9.3 Other
-
-- `app/TrenchBroomMcp` holds no logic beyond wiring; its parsers are covered in `TbMcpLibTest`.
-- Coverage: run with `-DTB_ENABLE_GCOV=1` per AGENTS.md; every tool file must cover its error branches.
-- Build and test commands: `cmake --build <build> --target TbMcpLibTest && ctest --test-dir <build>/lib/TbMcpLib/test -j`.
+Planned resources: `documents/{doc}/issues` and `compile/{run}/log` (E7),
+`manual/{section}` (E11), `console` (E12).
 
 ---
 
-## 10. Tool source layout (one file per domain)
+## 9. Call log and observability
 
-| File (`src/tools/`) | Tools | Epic |
+`CallLog` records every call: `{seq, time, session, client, tool, argsDigest, durationMs, ok, errorCode,
+undoStep, change counts}`; arguments up to 4 KB, then truncated; ring buffer of 5,000 entries. `session_log`
+lists newest first; its cursors are tied to the last log sequence number, so a page requested after new
+calls is `stale`. Sinks:
+
+1. Console: `[AI] <tool> ok 3 ms (+1 ~2 -0)` (or the error code) to the top map window's logger.
+2. `JsonlFileSink` when `McpLogToFile` is set: `<user data folder>/mcp-logs/<yyyyMMdd-HHmmss>-<pid>.jsonl`,
+   rotated at 10 MB with `.1`, `.2`, … suffixes.
+
+The raw JSON-RPC trace is logged only at debug level.
+
+---
+
+## 10. Tools
+
+### 10.1 Source layout (one file per domain, `src/tools/`)
+
+| File | Tools | Epic |
 |---|---|---|
 | `SessionTools.cpp` | `editor_status`, `document_list`, `document_activate`, `session_log` | E1 |
-| `HistoryTools.cpp` | `undo`, `redo`, `history_get`, `transaction_begin/commit/rollback` | E1 |
-| `DocumentTools.cpp` | `document_new/open/save/save_as/revert/close/recent`, `document_export_map/obj`, `autosave_list`, `map_files_list` | E2 |
-| `GameTools.cpp` | `game_list`, `game_info`, `game_set_path`, `mods_*`, `entity_definitions_*`, `materials_collections_*`, `materials_reload`, `soft_bounds_*` | E2 |
-| `SceneTools.cpp` | `map_summary`, `map_tree`, `object_get`, `objects_find`, `objects_at_point`, `ray_pick`, `space_check`, `map_plan_view`, `map_text_get`, `map_stats` | E3 |
-| `SelectionTools.cpp` | `selection_*`, `select_*` | E3 |
-| `GeometryTools.cpp` | `brush_create_*`, `room_create`, `opening_cut`, `brush_clip`, `face_extrude*`, `vertices_*`, `vertex_add`, `csg_*` | E4 |
-| `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/array/delete`, `command_repeat*` | E4 |
+| `HistoryTools.cpp` | `history_get`, `undo`, `redo`, `transaction_begin/commit/rollback` | E1 |
+| `DocumentTools.cpp` | `document_new/open/save/save_as/close/revert/recent`, `map_files_list`, `document_export_map/obj`, `autosave_list` | E2 |
+| `GameTools.cpp` | `game_list`, `game_info`, `game_set_path`, `mods_get/set`, `entity_definitions_get/set/reload`, `materials_collections_get/set`, `materials_reload`, `soft_bounds_get/set` | E2 |
+| `SceneTools.cpp` | `map_summary`, `map_tree`, `object_get`, `objects_find`, `map_text_get`, `map_stats` | E3 |
+| `SpatialTools.cpp` | `objects_at_point`, `ray_pick`, `space_check`, `map_plan_view` | E3 |
+| `SelectionTools.cpp` | `selection_get/set/clear`, `select_all`, `select_invert`, `select_by`, `select_spatial`, `select_siblings`, `select_by_line`, `select_faces_of` | E3 |
+| `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut` | E4 |
+| `BrushEditTools.cpp` | `brush_clip`, `face_extrude`, `face_extrude_new`, `vertices_move/remove/snap`, `vertex_add`, `csg_merge/subtract/intersect/hollow` | E4 |
+| `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/delete/array`, `command_repeat`, `command_repeat_clear` | E4 |
+| `ViewTools.cpp` | `grid_get/set`; E11: `camera_*`, `view_*` | E4, E11 |
+| `MaterialTools.cpp` | `materials_list`, `material_apply`, `material_set_current`, `material_replace`, `material_preview`, `locks_get/set` | E4, E6 |
+| `FaceTools.cpp` | `face_attributes_get/set/copy`, `uv_align`, `uv_nudge` | E6 |
+| `TagTools.cpp` | `tags_list`, `tag_apply`, `tag_remove` | E6 |
 | `EntityClassTools.cpp` | `entity_classes_list`, `entity_class_describe`, `entity_model_info` | E5 |
 | `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes` | E5 |
 | `EntityPropertyTools.cpp` | `entity_properties_set`, `entity_property_remove/rename`, `entity_spawnflags_set`, `entity_defaults_apply`, `entity_links_get`, `entity_link`, `entity_color_set` | E5 |
-| `MaterialTools.cpp` | `materials_list`, `material_*`, `face_attributes_*`, `uv_*`, `locks_*`, `tags_list`, `tag_*` | E6 |
-| `OrganizationTools.cpp` | `layers_list`, `layer_*`, `objects_move_to_layer`, `group_*`, `groups_merge`, `linked_group_*`, `visibility_set` | E7 |
-| `ClipboardTools.cpp` | `clipboard_*`, `map_import` (prefabs in E12) | E7 |
-| `ValidationTools.cpp` | `issues_list`, `issue_*`, `validators_*`, `map_check` | E8 |
-| `CompileTools.cpp` | `compile_*`, `engine_*`, `pointfile_*`, `portalfile_*` | E8 |
-| `ViewTools.cpp` | `camera_*`, `view_*`, `grid_get/set` | E4 (grid), E9 |
-| `ActionTools.cpp` | `actions_list`, `action_invoke` | E9 |
-| `PreferenceTools.cpp` | `preferences_get/set` | E9 |
-| `KnowledgeTools.cpp` | `manual_search`, `manual_section` | E9 |
-| `Resources.cpp`, `Prompts.cpp` | all resources (§7.1) and prompts | E3/E8/E11 |
 
-Shared building blocks go in `src/tools/ToolUtils.{h,cpp}`: object serialization (`serializeNode(node,
-fields, detail)`), face serialization, game-aware validation helpers (X14), and the `room_create`/`array` math. They
-must not grow into a second tool file. `RegisterAll.cpp` calls every `register*Tools`, and `McpServerController`
-calls `registerAll(registry)`.
+Planned files: `OrganizationTools.cpp` (`layers_list`, `layer_*`, `objects_move_to_layer`, `group_*`,
+`groups_merge`, `linked_group_*`, `visibility_set`) and `ClipboardTools.cpp` (`clipboard_*`, `map_import`)
+in E9; `CompileTools.cpp` (`compile_*`, `pointfile_*`, `portalfile_*`) in E7; `ValidationTools.cpp` (`issues_list`,
+`issue_*`, `validators_*`, `map_check`, `engine_*`) in E10; `ActionTools.cpp` (`actions_list`,
+`action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
+`manual_section`) in E11; snapshot and console tools in E12; `Prompts.cpp` in E13.
 
-Notes on specific domains:
-- **Geometry creation** uses `mdl::BrushBuilder` and `mdl::addNodes(map, {{parentForNodes(map), nodes}})`. Shapes
-  call `ui::DrawShapeToolExtension::createBrushes(bounds, DrawShapeToolParameters)` from TbAppLib (the exact code the
-  Shape tool uses), with the parameters built from tool arguments.
-- **Entities** look classes up in the document's `EntityDefinitionManager`, so FGD, DEF and ENT definitions
-  behave the same. `src/tools/EntityUtils` holds the shared parts: property type names and definition JSON,
-  value validation (X14: `UNKNOWN_CLASSNAME`, `UNKNOWN_PROPERTY`, `INVALID_PROPERTY_VALUE`, `INVALID_CHOICE`,
-  `UNKNOWN_FLAGS`, `READ_ONLY_PROPERTY` warnings that never block; keys starting with `_` and well-known keys
-  such as `origin`, `angle` and `target` are not reported as unknown), flag lookup by name, bit (`bit8`) or value,
-  and entity targeting. Entity tools take `ids` of entities, `world` (worldspawn) or brushes (meaning their
-  entity); without ids they use the entities of the selection and fail with `NO_SELECTION` when nothing is
-  selected (the editor would target worldspawn). `withEntities` selects exactly the targets before calling the
-  `Map_Entities` functions, which act on `selection().allEntities()`; worldspawn runs separately because the
-  editor drops it from mixed selections. Entities of unknown classes are still created (with a warning).
-  `entity_create_point` snaps to the grid, and `dropToFloor` casts five vertical rays (bounds center and inset
-  corners, starting at the height of the bounds center) against visible solid and brush-entity brushes and
-  patches (not triggers), placing the bounds on the highest hit; afterwards it warns with
-  `ENTITY_OVERLAPS_BRUSHES` if the bounds intersect brushes (exact test, `GeometryUtils::intersectsInterior`).
-  `entity_move_brushes` to `world` is the editor's Make Structural (smart tags such as detail are turned off).
-  `entity_links_get` without ids lists the whole map (spec §10), not the selection. `entity_link` reuses the
-  target's name or generates `<classname>_<n>`, unique among all link values. `entity_color_set` converts to the
-  property's color range from the definition and defaults to the class's first color property, else `_color`.
-  The entity definitions resource is per document (`documents/{doc}/entity-definitions`), because the
-  definitions depend on the document's mods and chosen definition file; it is updated when they are reloaded.
-- **Transforms** go through `withTargets` + `translateSelection`/`rotateSelection`/`scaleSelection`/
-  `shearSelection`/`flipSelection` so that texture lock, entity angle updates, and repeat stack semantics match the editor.
-- **ActionTools**: `ActionHost` enumerates `ActionManager::visitMainMenu`, `visitMapViewActions`, and
-  `MapDocumentActionCache` tag/entity actions. The path is the action's preference path. `enabled`/`checked` are evaluated
-  with an `ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
-  `QtMcpHost`. It is checked by the E9.8 coverage test, and each entry points to the matching semantic tool.
+Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
+shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
+`entityDefinitionsJson()`, `materialsJson()`, `softBoundsJson()` (GameTools.h); `mapSummary()`
+(SceneTools.h); `selectionDetails()` (SelectionTools.h); `materialsResource()` (MaterialTools.h).
+
+### 10.2 Shared helpers (`src/tools/`)
+
+- **`ToolUtils.{h,cpp}`**: game lookup (`findGame`, `gameNames`, `unknownGameError`, `gamePath`,
+  `isGamePathValid`), ISO times, `absolutePathArgument` (`INVALID_ARGUMENT` for relative paths),
+  `toJson(LogMessage...)`, percent-encoding, `pathExists`.
+- **`NodeJson.{h,cpp}`**: `nodeSummary` (`{id, kind, label, bounds, layer, classname | name | materials,
+  entity}`; every list item that describes an object uses it), `nodeState`, `faceJson` (every face),
+  `nodeLabel`, `nodeMaterials`, tag names, `layerIdOf`, `groupIdOf`.
+- **`GeometryUtils.{h,cpp}`**: `brushBuilder` (game face defaults), `materialArgument` (`UNKNOWN_MATERIAL`
+  warning), `checkBox`, `checkInsideWorldBounds`, `geometryError` / `geometryOperationFailed`, `addBrushes`,
+  `nodeSummaries`, `formatIds`, `warnNonIntegerVertices` (`NON_INTEGER_VERTICES`), `ScopedLockOverride`
+  (per-call `alignmentLock` / `uvLock`), `intersectsInterior` (exact brush/box overlap), `classifyBrush`,
+  `owningBrushEntity`, `isPointEntity`, `castRay`.
+- **`EntityUtils.{h,cpp}`**: definition lookup, property type names and definition JSON, color ranges, flag
+  lookup by name, bit (`bit8`) or value, value validation (`checkPropertyValue`, `validateProperty`,
+  `warnUnknownClassname`), entity targeting (`resolveEntities`, `withEntities`).
+
+### 10.3 Documents and games
+
+- `unsavedChanges: "error" | "save" | "discard"` (default `"error"` → `UNSAVED_CHANGES`) on
+  `document_close`, `document_revert`, and on `document_new` / `document_open` when they replace a document
+  (single-window mode). `"save"` fails for a never-saved document. The server does not create folders.
+- `document_new` / `document_open` make the result the session's active document. `document_new` reports the
+  game's `initialMap` template for the format (or null).
+- `document_open` reads game and format from the header comments; explicit `game` / `format` override them;
+  a missing format is detected by the loader (`formatSource: "detected"`). An already open file is returned
+  with `alreadyOpen: true`. `loadMessages` lists warnings and errors logged while loading.
+- `document_revert` reloads from disk (`idsInvalidated: true`); `document_close` refuses while a compilation
+  runs.
+- `document_save_as` accepts the document's own path without `overwrite` and warns `UNUSUAL_EXTENSION` for
+  non-`.map` paths. Exports refuse the document's own path.
+- `map_files_list` matches a case-insensitive glob (default `*.map`), optionally recursive, sorted naturally.
+  `autosave_list` lists `<map dir>/autosave/<name>.<n>.map`, newest first.
+- `game_info` without `game` describes the active document's game; smart tags are reported with name,
+  attributes and a textual definition.
+- `mods_set`, `entity_definitions_set`, `materials_collections_set` and `soft_bounds_set` are
+  `Mutation::Map` (worldspawn changes, one undo step each); reload problems become `LOAD_WARNING` /
+  `LOAD_ERROR` warnings. Unknown values are warnings: `UNKNOWN_MOD`, `DEFAULT_MOD`, `FILE_NOT_FOUND`,
+  `UNKNOWN_COLLECTION`, `BOUNDS_OUTSIDE_WORLD`.
+- `materials_collections_set` takes `wads` (ordered WAD list; WAD games only, else `UNSUPPORTED`) and/or
+  `enabled` (enabled collection paths). `entity_definitions_set` takes `type: "builtin" | "external"` and
+  `path`. `soft_bounds_*` use `mode: "game" | "unlimited" | "custom"` with `bounds`.
+
+### 10.4 Scene, spatial and selection
+
+- `map_tree` returns the flattened depth-first tree as a page; nodes at the depth limit carry `descendants`
+  counts by kind. `kinds` filters items, but containers are still traversed.
+- `object_get` takes up to 50 object or face ids (default `detail: "full"`); one unknown id fails the call,
+  listing all unknown ids. Point vs brush entity is decided by whether the entity has children.
+- `objects_find` filters are AND-combined; globs (`*`, `?`) are case-insensitive; an unknown tag is a
+  `UNKNOWN_TAG` warning. Pages carry `counts` by kind for the whole match set.
+- `map_text_get` pages by lines (`startLine`, `maxLines` ≤ 5000); a layer id stands for its contents. Line
+  numbers match the file on disk only right after loading or saving.
+- `ray_pick` has its own loop over the world octree with the editor's face and entity hit tests (`mdl::pick`
+  always applies the editor context and cannot include hidden objects). Faces are hit from the front only, so
+  a ray starting inside a brush passes through it. `from: <id>` starts at the object's bounds center and
+  ignores the object and its members. No hit is `hit: null`. Entity hits have no normal.
+- `space_check` uses `intersectsInterior`, a separating-axis test (face planes, box axes, edge × axis) on the
+  box shrunk by 0.01, because `Brush::intersects(bbox)` compares bounds only; touching surfaces do not
+  overlap. With `solidOnly` (default) `trigger_*` brushes are ignored. Floor and ceiling come from five
+  vertical rays (center and inset corners); `supportedCorners` counts corners with a surface within 1 unit.
+- `map_plan_view` (text form; the image form is E12) classifies cells at the given height: `#` solid (world,
+  `func_group`, `func_detail*`), `+` other brush entity, `t` trigger, `.` open with a floor within
+  `floorDepth` (1024) below, space for void. The grid is aligned to multiples of `cellSize`; entity chars
+  `P M I E L` in that priority. Patches count only as floor.
+- Selection-changing tools are `Mutation::Map` (selection changes are undoable commands): one undo step each,
+  dry run supported. `selection_get` is read-only and paginated. `selection_set` refuses to mix objects and
+  faces (`INVALID_ARGUMENT`), world/layer ids (`WRONG_OBJECT_KIND`, hint: `select_by` layers) and
+  non-selectable objects (`OBJECT_NOT_EDITABLE`, not checked in remove mode). `select_by` takes exactly one
+  criterion; no match is `count: 0` plus a `NO_MATCH` warning. `select_faces_of` without `ids` or `face` uses
+  the selected brushes; `coplanar` (default true) uses `collectConnectedCoplanarFaces`. Preconditions of the
+  `Map_Selection` functions are checked before calling them.
+
+### 10.5 Geometry
+
+- **Validity (E4.16).** Degenerate or non-convex results are `INVALID_GEOMETRY`; results that reach or leave
+  the world bounds are `OUT_OF_WORLD_BOUNDS` (`mdl::Brush` clips to the world bounds, so touching them counts).
+  Both name the involved ids and the editor's logged message (`details.editorMessages`). Vertex, edge and
+  face moves pre-check each brush (`canTransformVertices` etc.) to name the offending one. The editor logs
+  nothing when a brush transform fails, so transform tools compute the transformed bounds themselves.
+- **Creation** tools select their result. They build brushes with `mdl::BrushBuilder` and add them with
+  `mdl::addNodes` to the current layer or open group. `brush_create_shape` calls the editor's
+  `ui::DrawShapeTool*Extension` classes and applies `material` to the returned brushes' faces (the current
+  material is unchanged). Parameters that do not apply to the chosen shape warn `IGNORED_ARGUMENT`, so their
+  defaults are applied in code, not in the schema. The arch axis defaults to `x` (upright arch). Hollow
+  cylinder and arch thicknesses are validated; a step height ≥ the box height warns `SINGLE_STEP`. The
+  editor preference that groups shape brushes is not read; the `group` argument covers it.
+- `brush_create_hull` explains degenerate point sets (coincident, collinear, coplanar) and warns
+  `POINTS_INSIDE_HULL` for unused points.
+- `room_create`: floor and ceiling span the outer footprint, west/east walls the outer depth, south/north
+  walls fit between them; the result names each brush by role.
+- `opening_cut` subtracts the opening from each target with `Brush::subtract`, re-applies the wall's own face
+  attributes (subtract copies the cutter's attributes to coplanar faces), and uses `material` or the wall's
+  most used material inside the opening. Any invalid fragment fails the call. Without ids it cuts every
+  selectable brush the opening overlaps.
+- `brush_clip`: plane normal `cross(p1-p0, p2-p0)`; with 2 points `cross(b-a, axis)`; with `face` the face
+  normal. "Front" is where the normal points.
+- `face_extrude` groups faces by normal and extrudes each group. `face_extrude_new` reimplements the Extrude
+  tool's split (outward, or inward for negative distances) and stamp logic with mdl calls, since those are
+  file-local to `ExtrudeTool.cpp`.
+- `vertices_move` targets the selected brushes, or else every editable brush that has one of the handles;
+  positions match within 0.01.
+- Subtracting with cutters that touch nothing and intersecting disjoint brushes follow the editor (brushes are
+  removed) and warn `NOTHING_SUBTRACTED` / `EMPTY_INTERSECTION`. Other warnings: `NOTHING_CLIPPED`,
+  `VERTICES_MERGED`, `SNAP_FAILED`, `NOT_HOLLOWED`.
+
+### 10.6 Transforms, grid and locks
+
+- Transforms use `withTargets` + `translateSelection` / `rotateSelection` / `scaleSelection` /
+  `shearSelection` / `flipSelection`, so texture lock, entity angle updates and repeat semantics match the
+  editor.
+- Rotate and flip default to the exact bounds center (the editor uses its grid reference point).
+  `objects_rotate` sets the world's `updateAnglePropertyAfterTransform` for the call (`updateEntityAngles`,
+  default true) and restores it.
+- `objects_array`: `count` is the total number of instances including the originals (≤ 1024); circle arrays
+  rotate copies around the center (`rotate`, default true), and `rise` offsets each instance along the axis
+  (spiral stairs). The array is left selected; the call is one undo step and one repeatable entry.
+- `command_repeat` is `transactional(false)`: the repeat stack refuses to repeat inside a map transaction,
+  so the tool opens its own `LongRunning` command-processor transaction `AI: Repeat Last Commands`, handles
+  dry run itself (rollback; empty change report, the result lists the selection), and fails with
+  `TRANSACTION_ACTIVE` inside an agent transaction. Each agent call is one repeatable entry.
+- `grid_set` and `locks_set` are `Mutation::External` (grid on the map; locks via the `AlignmentLock` /
+  `UvLock` preferences, which `MapDocument` applies to the editor context).
+
+### 10.7 Entities
+
+- Classes are looked up in the document's `EntityDefinitionManager`, so FGD, DEF and ENT behave the same.
+- Validation (X14) produces warnings that never block: `UNKNOWN_CLASSNAME`, `UNKNOWN_PROPERTY`,
+  `INVALID_PROPERTY_VALUE`, `INVALID_CHOICE`, `UNKNOWN_FLAGS`, `READ_ONLY_PROPERTY`. Keys starting with `_` and
+  well-known keys (`origin`, `angle`, `target`, …) are not reported as unknown. Entities of unknown classes
+  are still created.
+- Targeting: `ids` of entities, `world` (worldspawn) or brushes (meaning their entity); without ids the
+  selection's entities, `NO_SELECTION` when nothing is selected. `withEntities` selects exactly the targets
+  before calling the `Map_Entities` functions (which act on `selection().allEntities()`); worldspawn runs
+  separately because the editor drops it from mixed selections.
+- `entity_create_point` snaps to the grid. `dropToFloor` casts five vertical rays (bounds center and inset
+  corners, from the height of the bounds center) against visible solid and brush-entity brushes and patches
+  (not triggers) and places the bounds on the highest hit; it warns `ENTITY_OVERLAPS_BRUSHES` if the bounds
+  intersect brushes (`intersectsInterior`).
+- `entity_move_brushes` to `world` is the editor's Make Structural (smart tags such as detail are turned off).
+- `entity_links_get` without ids lists the whole map. `entity_link` reuses the target's name or generates
+  `<classname>_<n>`, unique among all link values. `entity_color_set` converts to the property's color range
+  from the definition and defaults to the class's first color property, else `_color`.
+
+### 10.8 Materials, faces and smart tags
+
+- **Material names** are compared case-insensitively, like `MaterialManager`; a loaded material's own spelling
+  is used when it is applied. `materials_list` computes usage from the map's brush faces and patches
+  (`gl::Material::usageCount` also counts faces held by undo snapshots), filters by substring or `*`/`?` glob,
+  and lists used but unloaded materials with `includeMissing` (`missing: true`, without `__TB_empty`).
+- `material_apply` and `face_attributes_set` warn with `UNKNOWN_MATERIAL` and apply the name anyway, as the
+  editor does. `material_set_current` is `Mutation::External` (`Map::setCurrentMaterialName`).
+- **`material_replace`** takes `from`/`to` or `rules[]`; each `*`/`?` in `from` captures text that fills the
+  corresponding wildcard of `to` (`wall_old*` → `wall_new*`), `*` is greedy, and the first matching rule wins.
+  The scope is one of `scope` (`selection` | `map`), `layer` (id or name) or `ids`; the default is the
+  selection, or the map if nothing is selected (the editor's Replace Material dialog). Only the material name
+  changes (`setBrushFaceAttributes` with `materialName`), so the alignment is kept. Hidden and locked faces
+  are skipped and counted (`skippedFaces`). Targets that are not loaded are reported in `unmatched` and left
+  unchanged unless `allowMissingTargets` is set; patterns that match nothing are listed in `noMatch`. The
+  result counts faces per `{from, to}` pair. Brush faces only.
+- **`material_preview`** reads mip 0 from the texture's CPU buffers. The editor drops them after the GL
+  upload, so otherwise it rebuilds the game file system like `Map::loadMaterials` (game path, mods, WAD
+  property, palette) and calls `mdl::loadTexture`. RGB/BGR/RGBA/BGRA are box-filtered to at most `maxSize`
+  and written as PNG with miniz (`CallContext::addImage`); compressed formats fail with `UNSUPPORTED`. No GL
+  context is needed.
+- **Face attributes.** `face_attributes_get` (paginated) reports offset, scale, rotation, the UV axes, flags as
+  `{bits, names, unknownBits, fromMaterial}`, value and color, plus a `format` block (map format, Valve or
+  Standard UVs, whether the format saves surface attributes and colors, the game's flag names). Flag names
+  are computed by value, since `FlagsConfig::flagNames` assumes consecutive bits. `face_attributes_set` maps
+  absolute values to `SetValue`, `offsetBy`/`rotateBy` to `AddValue`, `scaleBy` to `MultiplyValue`, flags
+  `{set}` / `{add, remove}` (names or bits) to `SetFlags` / `SetFlagBits` / `ClearFlagBits`, and `unset` to
+  the material defaults. Warnings: `UNKNOWN_FLAG` (the name is skipped), `ATTRIBUTE_NOT_SAVED` (the format
+  does not store flags, value or color).
+- `face_attributes_copy` mirrors the editor's alt-click: `project` (`copyUv` with `WrapStyle::Projection`),
+  `rotate` (`WrapStyle::Rotation`; `ROTATION_NEEDS_VALVE_FORMAT` in Standard format) and `material`; the
+  source face is never a target.
+- **`uv_align`** has one `operation`: `justify` (left/right/up/down/center), `align`, `fit` (fits the face,
+  then scales so the texture repeats `repeatU` × `repeatV` times, justified to the face edge; `trimSheet`
+  uses the editor's trim-sheet fit), `autoFit`, `reset` (`resetAll` with the game's default UV attributes),
+  `resetToWorld` (`resetAllToParaxial`), `flip` (scale × -1) and `rotate90` (rotation ± 90), the latter four
+  as in `UvEditor`. `policy` is the editor's best/next/prev. Arguments of other operations are
+  `IGNORED_ARGUMENT` warnings; fit with repeats needs a loaded material (`MATERIAL_NOT_LOADED`).
+- `uv_nudge` changes offsets in each face's own texture axes (not camera-relative like `translateUv`),
+  accounts for negative scales, and rotates by the grid angle by default.
+- **Smart tags.** `SmartTag` does not expose its matcher, so `tags_list` classifies it from its printed form
+  (classname, material, surfaceparm, content or surface flags) and tells content from surface flag matchers
+  apart by testing a face; flag masks of names the game does not define are reported as `invalidflags`.
+  `tag_apply` / `tag_remove` select exactly the targets (`withTargets` for object tags, where brush entity ids
+  stand for their brushes; `withFaces` for face tags) and call `SmartTag::enable` / `disable` with an MCP
+  `TagMatcherCallback` that picks `option` or the first choice with a `TAG_OPTION_CHOSEN` warning. Material
+  tags cannot be removed (`UNSUPPORTED`, hint: `material_apply`). Results list the targets that carry the tag
+  afterwards; created brush entities also appear in the change report.
+
+### 10.9 Actions (E11)
+
+`ActionHost` enumerates `ActionManager::visitMainMenu`, `visitMapViewActions` and `MapDocumentActionCache`
+tag/entity actions. The path is the action's preference path; `enabled`/`checked` are evaluated with an
+`ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
+`QtMcpHost`, checked by the E11.8 coverage test; each entry points to the matching semantic tool.
 
 ---
 
-## 11. Implementation order
+## 11. Testing
 
-Each epic ends buildable, with tests passing and clang-format applied (TASKS.md rules). Commits within
-an epic follow the listed order, so each commit builds and tests on its own.
+### 11.1 `TbMcpLibTest` (headless, no Qt)
 
-**E1 — foundation (MVP)**
-1. E1.2: CMake for `TbMcpLib` + `TbMcpLibTest` + `TbMcpTestUtilsLib` + README; nlohmann dependency (§2).
-2. E1.3–E1.4: `Json`, `JsonRpc`, `ProtocolVersion`, `McpServer` lifecycle (transport-neutral), tests.
-3. E1.20, E1.5, E1.19: `Errors`, `Schema`, `Args`, `ToolRegistry`, `Pagination`; tests.
-4. E1.6–E1.7: `ResourceRegistry`, `PromptRegistry` (empty content), tests.
-5. mdl pre-changes: `Node::runtimeId()`, `CommandProcessor::transactionDepth()`, the redo-stack fix, the `canRedoCommand`
-   fix, `LoggingHub::targetLogger()`, each with tests in their own libraries.
-6. E1.15: `ObjectIds`/`IdRegistry`; E1.17: `ChangeCollector`; E1.16/E1.18: `CallRunner`, `Targets`; E1.21 document
-   targeting through `McpHost`; `FakeHost`/`McpToolFixture`.
-7. E1.22–E1.24: `SessionTools`, `HistoryTools`, `CallLog`.
-8. E1.8/E1.10: `HttpParser`, `StreamableHttp`, `SseParser` (core), then `McpTcpTransport`, `QtScheduler` (TbUiLib).
-9. E1.11–E1.14: `McpServerController`, `QtMcpHost` (documents + busy state), preferences + pane, status indicator,
-   log file, `--mcp-server`.
-10. E1.9: `app/TrenchBroomMcp`. Done: Claude Code connects over HTTP and stdio.
+| Test file | Covers |
+|---|---|
+| `tst_Json`, `tst_JsonVm`, `tst_JsonRpc` | conversion, rounding, parse/serialize, ids, batch gating, error codes |
+| `tst_McpServer` | initialize/version negotiation, capability gating, ping, `notifications/initialized` ordering, cancellation, progress |
+| `tst_HttpParser`, `tst_HttpResponse`, `tst_StreamableHttp`, `tst_SseParser` | split packets, limits, status codes, sessions, SSE framing, Origin/Host checks over a fake connection |
+| `tst_Schema`, `tst_Args`, `tst_Errors`, `tst_Pagination` | JSON Schema output, validation errors with paths, defaults, cursors, fields |
+| `tst_ToolRegistry`, `tst_ResourceRegistry`, `tst_PromptRegistry`, `tst_Resources` | listing, paging, dispatch, subscriptions, coalesced updates |
+| `tst_ObjectIds`, `tst_Targets` | id format/parse; delete→undo→same id; redo; linked-group aliasing; reload remap; target resolution |
+| `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks |
+| `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
+| `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
+| `tst_Scenarios` | scripted scenarios: S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
 
-**E2** DocumentTools + GameTools (`DocumentHost`, `PreferenceHost` for game paths), document/game resources,
-progress for open/reload. **E3** SceneTools, SelectionTools, subscribable status/summary/selection resources.
-**E4** GeometryTools + TransformTools + grid/locks. **E5** EntityClassTools, EntityCreateTools, EntityPropertyTools + the entity-definitions resource.
-**E6** MaterialTools + the materials resource. **E7** OrganizationTools + ClipboardTools (`map_import` parses the
-file with `mdl::MapReader` into nodes, filters them, converts the format, and adds them through the paste path).
-**E8** ValidationTools + CompileTools (`CompileHost` over `CompilationRunner`; tests use the existing `CmdTool`
-stub like `tst_CompilationRunner.cpp`). **E9** ViewTools, ActionTools, PreferenceTools,
-KnowledgeTools, coverage check. **E10** `McpSnapshotRenderer` and agent cameras (offscreen agent vision). **E11** agent guide text, descriptions review, prompts, scenario tests, manual section.
-**E12** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument` instances owned by the host) plus a
-`--headless-mcp` stdio mode in `TrenchBroomMcp` that links the core directly. Tools need no changes, which is the
-payoff of the host seam.
+`McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
+(`ui::MapDocumentFixture`), a `FakeHost` and a `FakeScheduler`, with one initialized session:
+
+```cpp
+ui::MapDocument& create(mdl::MapFixtureConfig = {});
+ui::MapDocument& load(const std::filesystem::path&, mdl::MapFixtureConfig = {});
+std::string documentId(const ui::MapDocument&) const;
+std::string openSession(const std::string& clientName = ..., const std::string& protocolVersion = ...);
+std::shared_ptr<CapturingRequestStream> post(const std::string& sessionId, const Json& message);
+Json rpc(const std::string& method, Json params = {});
+Json callRaw(std::string_view tool, Json args = {});        // full CallToolResult
+Json call(std::string_view tool, Json args = {});           // CHECKs success, returns structuredContent
+ToolError callExpectingError(std::string_view tool, Json args = {});
+// ...As(sessionId, ...) variants for other sessions
+mdl::Node* node(std::string_view id, ui::MapDocument* = nullptr);
+```
+
+`call*` run pending scheduler tasks until an asynchronous call completes. The fixture builds on
+`lib/TbMdlLib/test-utils` (`MapFixture`, `QuakeFixtureConfig`, `TestFactory.h`, `Matchers.h`) and
+`lib/TbAppLib/test-utils/MapDocumentFixture`. Fixtures live in `lib/TbMcpLib/test/fixture/`:
+`mcp/maps/two_rooms.map` (two rooms, a corridor, a door, a trigger, a group and a custom layer; used by scene,
+spatial, selection and resource tests, and by `SceneQuestions`, which answers E3's acceptance questions with
+tool calls only), `mcp/wads/cr8_a_excerpt.wad`, `mcp/wads/materials.wad` (`wall_old_a/b/c`, `wall_new_a/b`, `floor_tile`;
+material and S3 tests), and game paths in `mdl/Game/`.
+
+### 11.2 `TbUiLibTest` (Qt, `RunAllTests.cpp` QApplication)
+
+- `tst_McpTcpTransport.cpp`: listen on port 0, drive with `QTcpSocket`/`QNetworkAccessManager`, wait with
+  `QTest::qWaitFor`.
+- `tst_QtMcpHost.cpp`: with a `MapWindow` added via `MapWindowManager::addMapWindow` (showing a window under
+  the offscreen platform fails on OpenGL): document listing, busy detection, `prepareForAgentEdit`. Creating
+  and loading documents are not covered here for the same reason.
+- `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
+
+### 11.3 Other
+
+- `app/TrenchBroomMcp` holds only wiring; its parsers are covered in `TbMcpLibTest`.
+- Coverage: `-DTB_ENABLE_GCOV=1` per AGENTS.md; every tool file covers its error branches.
+- Commands: `cmake --build <build> --target TbMcpLibTest && ctest --test-dir <build>/lib/TbMcpLib/test -j`.
+- Smoke test of the real editor: `QT_QPA_PLATFORM=offscreen` and an isolated `HOME` whose `Preferences.json`
+  sets `"updater/Ask for auto updates": false` (otherwise a modal update question blocks start-up before
+  `--mcp-server` is processed).
 
 ---
 
-## 12. Non-negotiable rules for implementation agents
+## 12. Current limitations
+
+- `Last-Event-ID` replay is not supported.
+- Loading a document is synchronous and cannot be interrupted; only the steps around it honor cancellation.
+- `selection_get` cursors are keyed to the modification count, so a selection-only change does not mark a page
+  `stale`. A failed "tall" selector brush is only logged by the editor.
+- `csg_subtract` does not map fragments to the brush they came from. `vertices_move` reports
+  `hasRemainingVertices` only for vertex moves. The world-bounds error after `objects_duplicate` names copy ids
+  that will not exist.
+- Selection changes made by tools happen inside the call transaction and do not start a new repeat recording.
+- `material_apply` and `material_replace` change brush faces only, not patches. Shader-only (Quake 3)
+  materials cannot be previewed. `face_attributes_copy` does not redirect targets in linked groups as the
+  editor's alt-click does.
+- The Quake 2 game configuration's Clip tag names a flag `clip` that the game does not define, so the tag
+  never matches.
+- `object_get` does not report the layer color.
+- The bridge ignores portable mode when locating the discovery file.
+
+---
+
+## 13. Implementation order
+
+Each epic ends buildable, with tests passing and clang-format applied. Commits within an epic keep each
+commit buildable and tested.
+
+- **E1 — foundation.** CMake for `TbMcpLib`, `TbMcpLibTest`, `TbMcpTestUtilsLib`, nlohmann; `Json`,
+  `JsonRpc`, `ProtocolVersion`, `McpServer`; `Errors`, `Schema`, `Args`, `ToolRegistry`, `Pagination`;
+  resource and prompt registries; the TbMdlLib/TbBaseLib support (§6.6); `ObjectIds`, `ChangeCollector`,
+  `CallRunner`, `Targets`, document targeting, `FakeHost`, `McpToolFixture`; `SessionTools`, `HistoryTools`,
+  `CallLog`; `HttpParser`, `StreamableHttp`, `SseParser`, `McpTcpTransport`, `QtScheduler`;
+  `McpServerController`, `QtMcpHost`, preferences and pane, status indicator, log file, `--mcp-server`;
+  `app/TrenchBroomMcp`.
+- **E2** DocumentTools and GameTools (`DocumentHost`), document info and game config resources, asynchronous
+  tools with progress.
+- **E3** SceneTools, SpatialTools, SelectionTools; summary and selection resources; coalesced notifications.
+- **E4** GeometryTools, BrushEditTools, TransformTools, grid and locks.
+- **E5** EntityClassTools, EntityCreateTools, EntityPropertyTools, entity-definitions resource.
+- **E6** MaterialTools, FaceTools, TagTools, face targets in `Targets`, image content, materials resource.
+- **E9** OrganizationTools and ClipboardTools. `map_import` parses the file with `mdl::MapReader` into nodes,
+  filters them, converts the format, and adds them through the paste path.
+- **E7** CompileTools (`CompileHost` over `CompilationRunner`; tests use the `CmdTool` stub like
+  `tst_CompilationRunner.cpp`), compile presets per game family, compile log resource.
+- **E10** ValidationTools and engine launch; issues resource.
+- **E11** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
+  (`PreferenceHost`), KnowledgeTools, action coverage check.
+- **E12 — agent vision and editor console.** `McpSnapshotRenderer` (TbUiLib) renders `MapRenderer` into a
+  `QOpenGLFramebufferObject` with the shared GL context and returns PNG bytes, independent of any map window
+  so E14 can reuse it; agent cameras with their own render state; snapshot tools; `map_plan_view` image form;
+  `console_read`/`console_clear` and the subscribable `trenchbroom://console` resource.
+- **E13 — agent experience.** Final agent guide text, description review, prompts (`Prompts.cpp`), scenario
+  tests, manual section, lazy bridge start (the bridge answers `initialize` and the list methods from the
+  registries and connects to the editor only when needed).
+- **E14 — headless (v2, deferred).** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument`s owned by the host)
+  and a `--headless-mcp` stdio mode in `TrenchBroomMcp` that links the core directly. Tools need no changes.
+
+---
+
+## 14. Rules for implementation
+
+**Rule 0 — minimal upstream footprint.** This project is maintained as a fork of TrenchBroom and must stay easy to sync with upstream. All MCP code lives in new files (`lib/TbMcpLib`, `Mcp*` files in other libraries, `app/TrenchBroomMcp`). Original TrenchBroom files are changed only when there is no other way (a critical bug fix, or a hook that cannot be added from outside), and each such change is as small as possible and listed with its reason in the "Upstream changes" section. Tests are never added to existing upstream test files; they go into new test files, preferably in `TbMcpLibTest`.
 
 1. No Qt includes in `lib/TbMcpLib`. No MCP protocol logic in `lib/TbUiLib`.
 2. Map changes happen only through `mdl::` free functions/commands inside `CallRunner`'s transaction. Never
    mutate nodes directly.
-3. Every tool: a description with an example, a declared input schema, a declared output schema,
-   tests covering success, invalid input, and dry run (if modifying), plus explicit ids and selection (if targeting).
+3. Every tool has a description with an example, declared input and output schemas, and tests for success,
+   invalid input, dry run (if modifying), and explicit ids vs selection (if targeting).
 4. Never hold `mdl::Node*` across calls. Store ids and resolve through `IdRegistry` every time.
 5. Handlers never block, never open dialogs, and never call `QApplication::processEvents`.
-6. Destructive intent is explicit (`overwrite`, `discard`/`save`) and never prompts (PRD 7.1).
-
----
-
-## 13. Implementation notes (E1, as built)
-
-These notes record where the E1 implementation refines or deviates from the sections above.
-They are binding for later epics in the same way as the rest of this document.
-
-### 13.1 Core library
-
-- **`Endpoint.h`** (new) is the transport-facing interface of `McpServer`:
-  `post(sessionId?, body, shared_ptr<RequestStream>) -> PostResult{Accepted|Pending|BadRequest|SessionNotFound, newSessionId, body}`,
-  `sessionProtocolVersion`, `openNotificationStream`, `deleteSession`. The server may complete a
-  `RequestStream` before `post` returns; transports buffer output until `post` returns so that the
-  `Mcp-Session-Id` header of a new session can be sent. The server keeps only weak references to
-  streams; a dropped connection simply discards late output.
-- **`ServerState.h`** (new) holds everything tools may need: host, scheduler, options, the
-  registries, sessions, per-document state (`DocumentState`: `IdRegistry` + open
-  `AgentTransaction`), the `CallRunner`, and the current `ServerActivity`. Handlers reach it through
-  `CallContext::server()`. `McpServer::state()` exposes it to tests.
-- **`McpHost`** (E1 subset): `applicationVersion`, `documents`, `busyState`,
-  `prepareForAgentEdit`, `currentToolName`, `isCompileRunning`, plus two notifiers the host must fire:
-  `documentWillCloseNotifier(MapDocument&)` (before a document is destroyed) and
-  `documentsDidChangeNotifier` (open/close/focus). Sub-interfaces (§4.3) are still added by the epics
-  that need them.
-- **`ToolDef`** has, besides the fields in §7.2: `documentUse(None|Optional|Required)` (default:
-  `Required` for `Mutation::Map`, `None` otherwise; `document` is injected for anything but `None`),
-  and `transactional(bool)` (default true). Tools that manage the history themselves (`undo`, `redo`,
-  `transaction_*`) are `Mutation::Map` + `transactional(false)`: they still go through the busy gate and
-  get a change report, but must honor `dryRun` themselves. `CallContext::setUndoStep()` lets them name
-  the undo step they created (e.g. `transaction_commit`).
-- **Result shapes.** Read-only tools (`Mutation::None`) return the handler's JSON as
-  `structuredContent` (plus `warnings` if any). Modifying tools return the envelope of §6.3;
-  `External` tools omit `changes`, `selection` and `issuesIntroduced`. For 2025-03-26 sessions,
-  `structuredContent`, `outputSchema` and titles are omitted; the JSON is in the text block.
-  Published output schemas do not contain `additionalProperties: false`.
-- **Argument validation** happens before a call is queued, so invalid calls fail immediately even while
-  the human is busy. Unknown properties are rejected (with the list of allowed ones).
-- **Warnings** produced by `prepareForAgentEdit` use the code `EDITOR_STATE_CHANGED`.
-- **Undo step detection.** A call reports `undoStep` only if its transaction actually stored a command
-  (observed through `transactionDoneNotifier`); calls that change nothing report `null`.
-- **Dry run** computes the change report and introduced issues before the rollback. Linked-group
-  propagation (which `Map::commitTransaction` performs) is not part of a dry run's report.
-- **Object ids.** The world is always `world` and the default layer always `layer:default`
-  (canonical, also accepted on input). A face id resolves to its brush; `resolveFace` in `Targets.h`
-  returns the `BrushFaceHandle`.
-- **Reload.** `IdRegistry` keeps, for every layer and group it has seen, its persistent id; after a
-  reload, old layer/group ids resolve to the node with the same persistent id. Other ids assigned before
-  the reload fail with a "document was reloaded" message.
-- **`session_log`** lists newest first; cursors are tied to the last log sequence number, so a page
-  requested after new calls were logged is marked `stale`.
-- **Resources in E1:** `trenchbroom://editor/status` (subscribable; updated when documents open, close
-  or change focus) and `trenchbroom://guide` (a first version of the agent guide; E11 replaces it).
-- `CallLog` also provides `JsonlFileSink` (rotation at 10 MB with `.1`, `.2`, ... suffixes).
-
-### 13.2 TbMdlLib / TbBaseLib / TbAppLib additions
-
-- `Node::runtimeId()` (§5.2).
-- `CommandProcessor::transactionDepth()` and `Map::transactionDepth()` (§6.2).
-- `CommandProcessor::undoCommandNames()` / `redoCommandNames()` (most recent first), used by
-  `history_get` and `undo`/`redo` (new, not in §6.6).
-- The redo stack is now cleared only when a command or transaction reaches the top-level undo stack
-  (`storeCommand` / `createAndStoreTransaction`), not when a command is executed inside a transaction
-  (§6.6). Rolling back a transaction therefore keeps the redo history.
-- `Map::canRedoCommand()` uses `redoCommandName()` (§6.6).
-- `LoggingHub::targetLogger()` and a `MapDocument::targetLogger()` passthrough (§6.1).
-
-### 13.3 Build
-
-- An existing build tree must be configured with `-DFETCHCONTENT_UPDATES_DISCONNECTED=ON` before
-  re-running CMake; otherwise the git update step of the patched dependencies (assimp, cpptrace, miniz)
-  re-runs and re-applying the patch fails.
-
-### 13.4 Transport and stdio bridge
-
-- `StreamableHttpServer(Endpoint&, Config{bindAddress, accessToken, maxBodySize, path})` drives
-  connections through `HttpConnection{write, close}`: `openConnection`, `feed`, `connectionClosed`,
-  `sendKeepAlives`, `closeAllConnections`. `McpTcpTransport(Endpoint&, Config)` adapts it to
-  `QTcpServer` (`listen(bind, port, token)`, `serverPort`, `errorString`, `closeAllConnections`,
-  signal `connectionCountChanged`).
-- Transport-level errors carry JSON-RPC bodies. In addition to §3.2: a wrong `Content-Type` gets `415`,
-  a GET without an acceptable `Accept` gets `406`, a missing `Host` gets `400`. A wildcard bind
-  (`0.0.0.0`) skips the Host check but still requires the token. A second GET or a DELETE ends the
-  session's previous stream. SSE frames carry `event: message`; POST and GET streams of a session share
-  one `id:` sequence.
-- The bridge reads the discovery file from the same directory as `SystemPaths::userDataDirectory()`
-  (`~/.TrenchBroom` on Linux, the application data location elsewhere; portable mode is not handled).
-  After launching the editor it waits for a new or changed discovery file, so a stale file left by a
-  crash is ignored. Lines on stdin that are not valid JSON are answered with `-32700` by the bridge
-  itself. `app/CMakeLists.txt` adds `TrenchBroomMcp` before `TrenchBroom`, which copies the bridge next
-  to the editor after building (into the bundle on macOS) and installs it.
-
-### 13.5 Editor integration
-
-- `McpServerController` (owned by `AppController`, destroyed first in its destructor) creates the
-  server, `QtMcpHost`, `QtScheduler` and `McpTcpTransport` when enabled, and destroys them when
-  disabled. It watches all `MCP/*` preferences: bind address, port or token changes restart the server;
-  the busy timeout is applied with `McpServer::setOptions`; `MCP/Log to file` toggles the JSONL sink.
-  `--mcp-server` calls `setForceEnabled(true)`. The discovery and log paths are derived from
-  `EnvironmentConfig::userDataFolderPath` (the same directory as `SystemPaths::userDataDirectory()` in
-  production, a temporary directory in tests). The discovery file is written atomically and removed on
-  stop and quit; a killed editor leaves a stale file, which the bridge tolerates (§13.4).
-- The console sink logs `[AI] <tool> ok 3 ms (+1 ~2 -0)` (or the error code) to the top map window's
-  logger.
-- `QtMcpHost::busyState`: `QApplication::activeModalWidget()` or the window's `ToolBox::dragging()`.
-  `prepareForAgentEdit` deactivates the current tool when `selectionOwnedByTool()`, a node handle tool
-  (vertex/edge/face) or the clip tool is active, because only some tools override `ownsSelection()`.
-  `isCompileRunning` asks `MapWindow::compilationRunning()` (new, forwards to the compilation dialog).
-- `MapWindowManager` got two signals that drive the host notifiers: `mapWindowWillClose(MapWindow*)`
-  (emitted in `removeMapWindow`, before the window and its document are deleted) →
-  `documentWillCloseNotifier`, and `mapWindowsDidChange()` (window created/closed, focus order changed,
-  document created or loaded into an existing window) → `documentsDidChangeNotifier`. It also got a
-  public `addMapWindow(MapWindow*)` (used by `createMapWindow`, and by tests because showing a window
-  under the offscreen platform fails on OpenGL). Document handles `doc:<n>` follow window open order.
-- `McpStatusIndicator` sits next to the update indicator in the status bar and has the **Stop agent**
-  button (`McpServerController::stopAgents` → `McpServer::stopAgents` + close all connections).
-- `McpPreferencePane` ("AI Agents (MCP)") uses a new icon `McpPreferences.svg`.
-- A headless smoke test of the real editor works with `QT_QPA_PLATFORM=offscreen` and an isolated
-  `HOME` whose `Preferences.json` sets `"updater/Ask for auto updates": false` (otherwise a modal update
-  question blocks start-up before `--mcp-server` is processed).
-
-### 13.6 Implementation notes (E2, as built)
-
-**Host.** `McpHost` got `documentHost()` and `gameManager()`. `DocumentHost` (in `Host.h`) has
-`documentToReplace()` (the document a new or loaded one replaces in single-window mode, else
-nullopt), `createDocument(gameInfo, format)`, `loadDocument(gameInfo, format, path)` (format
-`Unknown` = detect), `closeDocument(document)` (no questions, discards changes; the
-`MapDocument` object must stay alive until control returns to the event loop) and
-`recentDocuments()`. Create/load return `OpenedDocument{DocumentInfo, messages}` with the
-warnings and errors logged while loading. There is no `PreferenceHost` yet: `game_set_path` uses
-`setPref` on the game's `gamePathPreference` directly (Qt-free; open documents react through
-their preference observer). Game and format detection (`readMapHeader`) happens in the core.
-
-- `QtMcpHost` implements `DocumentHost`. New documents are built with
-  `MapDocument::createDocument/loadDocument` and shown with `MapWindowManager::createMapWindow`
-  (now public, as is `shouldCreateWindowForDocument`); in single-window mode the top window's
-  document is recreated in place. `closeDocument` calls the new
-  `MapWindow::closeWithoutConfirmation()`. Agent-created documents do not close the welcome
-  window. Creating and loading are not covered by `TbUiLibTest` because showing a map window
-  needs OpenGL, which the offscreen test platform lacks.
-- `FakeHost` implements `DocumentHost` with its own task and resource managers and a
-  `GameManager` with the games "Test", "Quake" and "Quake 2" (the real configurations from the
-  fixture's `games/` folder, game paths in `test/mdl/Game/`). `singleWindow` simulates
-  single-window mode; `recentDocumentList` is the recent list; closed documents stay alive.
-  `McpToolFixture::call*` run pending scheduler tasks until an asynchronous call completes.
-
-**Log capture.** `CapturingLogger`/`ScopedLogCapture` moved from `CallRunner.cpp` to
-`LogCapture.h`, plus `LogMessage` and `collectCachedMessages(document)` (reads the messages a
-document without a target logger has cached, and caches them again for its console).
-`CallContext::setCapturedMessages` became `setLogCapture`; `loggedProblems()` returns the warnings
-and errors logged for the target document during the call.
-
-**Asynchronous tools (§4.2, E2.16).** `ToolDef::asyncHandler(fn)` with
-`fn(CallContext&, const Args&, ToolCompletion)`; only for `Mutation::External` tools, which go
-through the queue: the queue waits until the call completes. The handler continues in steps
-scheduled with `CallContext::defer` and checks `CallContext::cancelled()` between them.
-`notifications/cancelled` for a running asynchronous call sets that flag (cooperative); closing
-the session or **Stop agent** abandons it with `CANCELLED` and drops its pending steps; if its
-target document closes meanwhile, it fails with `DOCUMENT_NOT_FOUND`; an exception in a step
-becomes `INTERNAL_ERROR`. `document_open`, `entity_definitions_reload` and `materials_reload`
-are asynchronous: they emit progress, then load/reload in a deferred step, so a cancellation sent
-meanwhile is honored. The load itself is synchronous and cannot be interrupted.
-
-**Undo collation (X2 fix).** `CommandProcessor` collates a transaction with the previous one when
-their first commands collate (e.g. two consecutive worldspawn changes within the collation
-interval), which merged two agent calls into one undo step. `CallRunner` now disables collation
-while it commits a call's transaction.
-
-**Document tools** (`DocumentTools.cpp`):
-- All paths are absolute (`INVALID_ARGUMENT` otherwise); the server does not create folders.
-- `unsavedChanges: "error" | "save" | "discard"` (default `"error"` → `UNSAVED_CHANGES`) on
-  `document_close`, `document_revert`, and on `document_new` / `document_open` when they replace a
-  document (single-window mode). `"save"` fails for a never-saved document.
-- `document_new` / `document_open` make the new document the session's active document.
-  `document_new` reports the game's `initialMap` template for the format (or null).
-- `document_open` reads game and format from the header comments; explicit `game` / `format`
-  override them; a missing format is detected by the loader (`formatSource: "detected"`). A file
-  that is already open is returned with `alreadyOpen: true` instead of opening it twice.
-  `loadMessages` lists the warnings and errors logged while loading.
-- `document_revert` reloads from disk (`idsInvalidated: true`); `document_close` refuses while a
-  compilation runs.
-- `document_save_as` accepts the document's own path without `overwrite`, and warns
-  (`UNUSUAL_EXTENSION`) for paths not ending in `.map`. Exports refuse the document's own path.
-- `map_files_list` matches a case-insensitive glob (default `*.map`), optionally recursive,
-  sorted naturally. `autosave_list` lists `<map dir>/autosave/<name>.<n>.map`, newest first.
-
-**Game tools** (`GameTools.cpp`):
-- `game_info` without `game` describes the active document's game; smart tags are reported with
-  their name, attributes and a textual definition.
-- `mods_set`, `entity_definitions_set`, `materials_collections_set` and `soft_bounds_set` are
-  `Mutation::Map` (worldspawn changes, one undo step each); the resulting reload problems become
-  warnings (`LOAD_WARNING` / `LOAD_ERROR`). Unknown values are warnings (X14): `UNKNOWN_MOD`,
-  `DEFAULT_MOD`, `FILE_NOT_FOUND`, `UNKNOWN_COLLECTION`, `BOUNDS_OUTSIDE_WORLD`.
-- `materials_collections_set` takes `wads` (the ordered WAD list; WAD games only, else
-  `UNSUPPORTED`) and/or `enabled` (enabled collection paths, any game).
-  `entity_definitions_set` takes `type: "builtin" | "external"` and `path`.
-- `soft_bounds_*` use `mode: "game" | "unlimited" | "custom"` with `bounds` for custom.
-- Shared helpers (game lookup, ISO times, absolute path arguments, percent-encoding) are in
-  `src/tools/ToolUtils.{h,cpp}`. `documentInfo()` (DocumentTools.h) and `gameConfigJson()`,
-  `modsJson()`, `entityDefinitionsJson()`, `materialsJson()`, `softBoundsJson()`
-  (GameTools.h) are shared with the resources.
-
-**Resources.** `trenchbroom://documents/{doc}/info` (template; one entry per open document;
-subscribers are notified when the document is saved, loaded, its modified flag flips, or mods,
-entity definitions, materials or worldspawn change) and `trenchbroom://games/{game}/config`
-(template; `{game}` is the percent-encoded game name; listed for the games of open documents;
-notified by `game_set_path`). `ServerState` now creates a `DocumentState` for every open document
-when the document list changes, so subscriptions work before any tool touched a document.
-
-### 13.7 Implementation notes (E3, as built)
-
-**Layout.** The spatial queries (`objects_at_point`, `ray_pick`, `space_check`, `map_plan_view`)
-live in their own domain file `SpatialTools.cpp` (`registerSpatialTools`) instead of
-`SceneTools.cpp`, which keeps `map_summary`, `map_tree`, `object_get`, `objects_find`,
-`map_text_get` and `map_stats`. Shared object descriptions are in `src/tools/NodeJson.{h,cpp}`
-(`nodeSummary`, `nodeState`, `faceJson`, `nodeLabel`, `nodeMaterials`, tag names, layer/group
-ids): every list item that describes an object uses `nodeSummary`
-(`{id, kind, label, bounds, layer, classname | name | materials, entity}`), every face
-`faceJson`. `mapSummary()` (SceneTools.h) and `selectionDetails()` (SelectionTools.h) are
-shared with the resources. The sample map `test/fixture/mcp/maps/two_rooms.map` (two rooms, a
-corridor, a door, a trigger, a group and a custom layer) is the fixture for scene, spatial,
-selection and resource tests; `SceneQuestions` answers the epic's acceptance questions with tool
-calls only.
-
-**Scene tools.**
-- `map_tree` returns the flattened depth-first tree as a page; nodes at the depth limit carry
-  `descendants` counts by kind instead of children. `kinds` filters items but containers are
-  still traversed.
-- `object_get` takes up to 50 object or face ids (default `detail: "full"`); one unknown id
-  fails the whole call with all unknown ids listed. Point vs brush entity is decided by whether
-  the entity has children. The layer color is not reported.
-- `objects_find` filters are AND-combined; globs (`*`, `?`) are case-insensitive. An unknown tag
-  name is a warning (`UNKNOWN_TAG`), not an error. Pages carry `counts` by kind for the whole
-  match set.
-- `map_text_get` pages by lines (`startLine`, `maxLines` ≤ 5000); a layer id stands for its
-  contents. Line numbers match the file on disk only right after loading or saving.
-
-**Spatial tools.**
-- `ray_pick` casts rays with its own loop over the world octree and the editor's face and
-  entity hit tests instead of `mdl::pick`, because `mdl::pick` always applies the editor
-  context and cannot include hidden objects. Brush faces are hit from the front only, so a ray
-  that starts inside a brush passes through it (as in the editor). `from: <id>` starts at the
-  object's bounds center and ignores the object and its members ("what is under this
-  entity?"). No hit is `hit: null`, not an error. Entity hits have no normal.
-- `Brush::intersects(bbox)` compares bounds only, so `space_check` uses a private exact
-  separating-axis test (face planes, box axes, edge × axis) on the box shrunk by 0.01; touching
-  surfaces do not overlap. With `solidOnly` (default) brushes of `trigger_*` entities are
-  ignored. Floor and ceiling come from five vertical rays (center and inset corners);
-  `supportedCorners` counts corners with a surface within 1 unit.
-- `map_plan_view` (text form only; the image form is E9) classifies cells by area at the given
-  height: `#` solid (world, `func_group`, `func_detail*`), `+` other brush entity, `t`
-  trigger, `.` open with a floor within `floorDepth` (1024) below the cell center, space for
-  void. The grid is aligned to multiples of `cellSize`; entity chars `P M I E L` in that
-  priority. Patches only count as floor.
-
-**Selection tools.** All tools that change the selection are `Mutation::Map` (selection changes
-are undoable editor commands), so each call is one undo step `AI: <title>` and supports dry run;
-`selection_get` is read-only and paginated. `selection_set` refuses to mix objects and faces
-(`INVALID_ARGUMENT`), world/layer ids (`WRONG_OBJECT_KIND`, hint: `select_by` layers) and
-non-selectable objects (`OBJECT_NOT_EDITABLE`, not checked in remove mode). `select_by` takes
-exactly one criterion; no match is `count: 0` plus a `NO_MATCH` warning. `select_faces_of`
-without `ids` or `face` uses the selected brushes (X7); `coplanar` defaults to true and uses
-`collectConnectedCoplanarFaces`. Preconditions of the `Map_Selection` functions are checked
-before calling them. Known gaps: `selection_get` cursors are keyed to the modification count,
-so a selection-only change does not mark a page `stale`; a failed "tall" selector brush is only
-logged by the editor.
-
-**Resources and notifications.**
-- New templates `trenchbroom://documents/{doc}/summary` (= `map_summary`) and
-  `trenchbroom://documents/{doc}/selection` (= `selectionDetails`, at most 100 items), listed
-  once per open document.
-- `DocumentState` reports `DocumentAspect::{Info, Summary, Selection, Status}` changes.
-  Summary: nodes added/removed/changed, visibility, locking, current layer, grid, entity
-  definitions, reload. Selection: selection changes and changes of selected nodes. The editor
-  status is updated on info and selection changes, grid, tool changes, lock preferences
-  (`AlignmentLock`, `UvLock`) and agent transactions opening or closing.
-- Info notifications and document open/close stay immediate. All other updates go through
-  `ServerState::scheduleResourceUpdate` / `scheduleDocumentUpdate`: they are coalesced into one
-  `notifications/resources/updated` per resource and scheduler turn, and nothing is recorded
-  while no session has subscriptions (the hooks run on every map change, e.g. during drags).
-- `McpHost::currentToolDidChangeNotifier(MapDocument&)` is new; `QtMcpHost` fires it from each
-  map window's `ToolBox` `toolActivatedNotifier` / `toolDeactivatedNotifier`.
-
-### 13.8 Implementation notes (E4, as built)
-
-**Layout.** The geometry tools are split over two domain files instead of one
-`GeometryTools.cpp`: `GeometryTools.cpp` (`brush_create_box/shape/hull`, `room_create`,
-`opening_cut`) and `BrushEditTools.cpp` (`brush_clip`, `face_extrude*`, `vertices_*`,
-`vertex_add`, `csg_*`). `TransformTools.cpp` holds `objects_*` and `command_repeat*`,
-`ViewTools.cpp` `grid_get/set`, and `MaterialTools.cpp` `locks_get/set` (E6 adds the material
-tools there). Shared helpers are in `src/tools/GeometryUtils.{h,cpp}`: `brushBuilder` (game face
-defaults), `materialArgument` (`UNKNOWN_MATERIAL` warning), `checkBox`,
-`checkInsideWorldBounds`, `geometryError` / `geometryOperationFailed` (E4.16),
-`addBrushes`, `nodeSummaries`, `warnNonIntegerVertices` (`NON_INTEGER_VERTICES`, S7),
-`ScopedLockOverride` (per-call `alignmentLock` / `uvLock` overrides) and `intersectsInterior`
-(moved here from `SpatialTools.cpp`, now shared with `opening_cut`).
-
-**Validity errors (E4.16).** Degenerate or non-convex results are `INVALID_GEOMETRY`, results
-that reach or leave the world bounds `OUT_OF_WORLD_BOUNDS`; both name the involved ids and
-the editor's logged message (`details.editorMessages`). Brush geometry is clipped to the
-world bounds by `mdl::Brush`, so touching the world bounds counts as out of bounds. Vertex,
-edge and face moves pre-check each brush (`canTransformVertices` etc.) to name the offending
-brush. The editor logs nothing when a brush transform fails; the transform tools compute
-the transformed bounds themselves to report `OUT_OF_WORLD_BOUNDS`.
-
-**TbMdlLib.** `csgHollow(Map&, std::optional<double> thickness = std::nullopt)`: the wall
-thickness defaults to the grid size; a thickness ≤ 0 fails.
-
-**Creation.**
-- Creation tools select their result (as the editor does). `brush_create_shape` calls the
-  editor's `ui::DrawShapeTool*Extension` classes; `material` is applied to the faces of the
-  returned brushes instead of changing the current material. Parameters that do not apply
-  to the chosen shape are warned about (`IGNORED_ARGUMENT`), so their defaults are applied
-  in code, not in the schema. The arch axis defaults to `x` (upright arch). Hollow cylinder
-  and arch thicknesses are validated (the editor would silently build solid wedges);
-  a step height ≥ the box height only warns (`SINGLE_STEP`). The editor preference that
-  groups shape brushes automatically is not read; the `group` argument covers it.
-- `brush_create_hull` explains degenerate point sets (coincident, collinear, coplanar)
-  and warns about unused points (`POINTS_INSIDE_HULL`).
-- `room_create`: floor and ceiling span the outer footprint, the west/east walls the outer
-  depth, and the south/north walls fit between them; the result names each brush by role.
-- `opening_cut` subtracts the opening from each target with `Brush::subtract`, re-applies
-  the wall's own face attributes (subtract copies the cutter's attributes to coplanar
-  faces) and uses `material` or the wall's most used material inside the opening. Any
-  invalid fragment fails the whole call (the editor's `csgSubtract` drops it). Without ids
-  it cuts every selectable brush the opening overlaps.
-
-**Transforms.**
-- Rotate and flip default to the exact bounds center (the editor uses its grid reference
-  point). `objects_rotate` sets the world's `updateAnglePropertyAfterTransform` for the call
-  (`updateEntityAngles`, default true) and restores it.
-- `objects_array` `count` is the total number of instances including the originals
-  (≤ 1024); circle arrays rotate the copies around the center (`rotate`, default true), so
-  they keep facing it, and `rise` offsets each instance along the axis (spiral stairs). The
-  array is left selected; the call is one undo step and one repeatable entry.
-- `command_repeat` is `transactional(false)`: the repeat stack refuses to repeat while a map
-  transaction is open, so the tool opens its own `LongRunning` command-processor transaction
-  named `AI: Repeat Last Commands`, handles dry run itself (rollback; the change report of a
-  dry run is empty, the result lists the selection), and fails with `TRANSACTION_ACTIVE` inside
-  an agent transaction. Each agent call is one repeatable entry. Selection changes made by
-  tools happen inside the call transaction and therefore do not start a new repeat
-  recording (would need a CallRunner/TbMdlLib hook).
-- `grid_set` / `locks_set` are `Mutation::External` (grid on the map, locks via the
-  `AlignmentLock` / `UvLock` preferences, which `MapDocument` applies to the editor context).
-
-**Brush editing.**
-- `brush_clip`: the plane normal is `cross(p1-p0, p2-p0)`, with 2 points `cross(b-a, axis)`,
-  with `face` the face normal; "front" is the side the normal points to.
-- `face_extrude` groups faces by normal and extrudes each group; `face_extrude_new` reimplements
-  the Extrude tool's split (outward / inward for negative distances) and stamp logic with mdl
-  calls, since those functions are file-local to `ExtrudeTool.cpp`.
-- `vertices_move` targets the selected brushes, or else every editable brush that has one of
-  the handles; positions match within 0.01.
-- Clip, extrude-to-new and all `csg_*` tools leave their results selected (editor behavior);
-  the others restore the selection. Subtracting with cutters that touch nothing and
-  intersecting disjoint brushes follow the editor (brushes are removed) and warn
-  (`NOTHING_SUBTRACTED`, `EMPTY_INTERSECTION`). Other warnings: `NOTHING_CLIPPED`,
-  `VERTICES_MERGED`, `SNAP_FAILED`, `NOT_HOLLOWED`.
-- An explicit id of the wrong kind fails schema validation (`INVALID_ARGUMENT`);
-  `WRONG_OBJECT_KIND` is returned for a selection of the wrong kinds.
-
-**Tests.** `tst_GeometryTools`, `tst_BrushEditTools`, `tst_TransformTools`, `tst_ViewTools`,
-`tst_MaterialTools`, and `tst_Scenarios` ("Scenario S7": 12 columns on a circle of radius 384
-facing the center, a 20-step spiral staircase, each one undo step).
-
-**Known gaps.** `csg_subtract` does not map fragments to the brush they came from;
-`vertices_move` reports `hasRemainingVertices` only for vertex moves; the world bounds
-error after `objects_duplicate` names copy ids that will not exist.
+6. Destructive intent is explicit (`overwrite`, `unsavedChanges`) and never prompts (PRD 7.1).
+7. Shared helpers go in the `src/tools/*Utils` / `NodeJson` files; they must not grow into a second tool file.

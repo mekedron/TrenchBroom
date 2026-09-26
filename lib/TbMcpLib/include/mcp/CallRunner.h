@@ -29,6 +29,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace tb::mcp
 {
@@ -48,9 +49,15 @@ struct CallRequest
   std::function<void(Json)> completion;
 };
 
-/** Builds a CallToolResult from the structured content. */
+/**
+ * Builds a CallToolResult from the structured content. The additional content blocks
+ * (e.g. images) follow the text block.
+ */
 Json makeCallToolResult(
-  const Json& structured, bool isError, std::string_view protocolVersion);
+  const Json& structured,
+  bool isError,
+  std::string_view protocolVersion,
+  const std::vector<Json>& additionalContent = {});
 
 /**
  * Runs tool calls. Read-only calls run immediately. Modifying calls go through one FIFO

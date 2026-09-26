@@ -19,6 +19,7 @@
 
 #include "mcp/CallContext.h"
 
+#include "mcp/Pagination.h"
 #include "mcp/ServerState.h"
 #include "ui/MapDocument.h"
 
@@ -105,6 +106,20 @@ void CallContext::warn(
 {
   m_warnings.push_back(
     Warning{std::move(code), std::move(message), std::move(objectIds)});
+}
+
+void CallContext::addImage(const std::string_view data, std::string mimeType)
+{
+  m_content.push_back(Json{
+    {"type", "image"},
+    {"data", base64Encode(data)},
+    {"mimeType", std::move(mimeType)},
+  });
+}
+
+const std::vector<Json>& CallContext::content() const
+{
+  return m_content;
 }
 
 const std::vector<Warning>& CallContext::warnings() const

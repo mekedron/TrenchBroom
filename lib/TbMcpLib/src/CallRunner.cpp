@@ -98,7 +98,10 @@ bool isBusy(ServerState& server, ui::MapDocument& document)
 } // namespace
 
 Json makeCallToolResult(
-  const Json& structured, const bool isError, const std::string_view protocolVersion)
+  const Json& structured,
+  const bool isError,
+  const std::string_view protocolVersion,
+  const std::vector<Json>& additionalContent)
 {
   auto text = std::string{};
   if (isError)
@@ -122,8 +125,14 @@ Json makeCallToolResult(
     text = dumpJson(structured);
   }
 
+  auto content = Json::array({Json{{"type", "text"}, {"text", text}}});
+  for (const auto& block : additionalContent)
+  {
+    content.push_back(block);
+  }
+
   auto result = Json{
-    {"content", Json::array({Json{{"type", "text"}, {"text", text}}})},
+    {"content", std::move(content)},
   };
   if (supportsStructuredContent(protocolVersion))
   {
@@ -630,7 +639,8 @@ Json CallRunner::execute(const CallRequest& request)
 
   finishLog(true, {});
   m_server.setActivity(ServerActivity::State::Idle);
-  return makeCallToolResult(structured, false, session->protocolVersion);
+  return makeCallToolResult(
+    structured, false, session->protocolVersion, context.content());
 }
 
 bool CallRunner::startAsync(CallRequest request)
@@ -803,7 +813,8 @@ void CallRunner::completeAsync(ToolResult result)
     {
       structured["grid"] = call->document->map().grid().actualSize();
     }
-    callToolResult = makeCallToolResult(structured, false, protocolVersion);
+    callToolResult =
+      makeCallToolResult(structured, false, protocolVersion, call->context->content());
   }
   m_server.callLog.add(logEntry);
 

@@ -23,18 +23,21 @@
 #include "mcp/McpToolFixture.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mdl/BrushFace.h"
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Brushes.h"
 #include "mdl/Map_Geometry.h"
 #include "mdl/Map_NodeLocking.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Selection.h"
 #include "mdl/TestFactory.h"
+#include "mdl/UpdateBrushFaceAttributes.h"
 #include "ui/MapDocument.h"
 
 #include "vm/bbox.h"
@@ -99,6 +102,27 @@ void registerTestTools(McpServer& server)
                          }
                          return Json{{"count", targets.value().size()}};
                        }));
+
+  server.tools().add(
+    ToolDef{"test_faces"}
+      .input(object({faceTargetsField()}))
+      .mutation(Mutation::Map)
+      .handler([](CallContext& context, const Args& args) -> ToolResult {
+        auto faces = resolveFaceTargets(context, args);
+        if (faces.is_error())
+        {
+          return errorOf(faces);
+        }
+        return withFaces(context, faces.value(), [&]() -> ToolResult {
+          auto& map = context.map();
+          const auto selected = map.selection().brushFaces.size();
+          if (!mdl::setBrushFaceAttributes(map, {.materialName = "changed"}))
+          {
+            return context.operationFailed("Could not change the faces.");
+          }
+          return Json{{"faces", faces.value().size()}, {"selected", selected}};
+        });
+      }));
 
   server.tools().add(ToolDef{"test_face"}
                        .input(object({field("face", string()).required()}))
@@ -226,6 +250,94 @@ TEST_CASE("Targets")
         "test_move", Json{{"ids", {brushId1}}, {"vector", {16, 0, 0}}, {"dryRun", true}});
       CHECK(map.selection().nodes == std::vector<mdl::Node*>{brushNode2});
       CHECK(brushNode1->logicalBounds() == bounds1);
+    }
+  }
+
+  SECTION("resolveFaceTargets and withFaces")
+  {
+    const auto faceCount = brushNode1->brush().faceCount();
+    const auto materialOf = [](const mdl::BrushNode& brushNode, const size_t index) {
+      return brushNode.brush().face(index).materialName();
+    };
+
+    SECTION("face ids")
+    {
+      mdl::selectNodes(map, {brushNode2});
+      const auto result = fixture.call(
+        "test_faces", Json{{"ids", {brushId1 + "/face:1", brushId1 + "/face:1"}}});
+      CHECK(result["result"] == Json{{"faces", 1}, {"selected", 1}});
+      CHECK(materialOf(*brushNode1, 1) == "changed");
+      CHECK(materialOf(*brushNode1, 0) != "changed");
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{brushNode2});
+
+      // selecting and changing is one undo step
+      map.undoCommand();
+      CHECK(materialOf(*brushNode1, 1) != "changed");
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{brushNode2});
+    }
+
+    SECTION("brush ids stand for all their faces")
+    {
+      const auto result =
+        fixture.call("test_faces", Json{{"ids", {brushId1, brushId2 + "/face:0"}}});
+      CHECK(result["result"]["faces"] == faceCount + 1);
+      CHECK(materialOf(*brushNode2, 0) == "changed");
+      CHECK(materialOf(*brushNode2, 1) != "changed");
+      CHECK(map.selection().nodes.empty());
+      CHECK(map.selection().brushFaces.empty());
+    }
+
+    SECTION("defaults to the selected faces")
+    {
+      mdl::selectBrushFaces(map, {{brushNode2, 2}});
+      const auto result = fixture.call("test_faces");
+      CHECK(result["result"] == Json{{"faces", 1}, {"selected", 1}});
+      CHECK(materialOf(*brushNode2, 2) == "changed");
+      CHECK(
+        map.selection().brushFaces == std::vector{mdl::BrushFaceHandle{brushNode2, 2}});
+    }
+
+    SECTION("defaults to the faces of the selected objects")
+    {
+      mdl::selectNodes(map, {brushNode1, entityNode});
+      const auto result = fixture.call("test_faces");
+      CHECK(result["result"]["faces"] == faceCount);
+      CHECK(materialOf(*brushNode1, 0) == "changed");
+      CHECK(map.selection().nodes.size() == 2);
+    }
+
+    SECTION("fails without faces")
+    {
+      CHECK(fixture.callExpectingError("test_faces").code == ErrorCode::NoSelection);
+
+      mdl::selectNodes(map, {entityNode});
+      CHECK(fixture.callExpectingError("test_faces").code == ErrorCode::NoSelection);
+
+      const auto error =
+        fixture.callExpectingError("test_faces", Json{{"ids", {entityId}}});
+      CHECK(error.code == ErrorCode::ObjectNotEditable);
+      CHECK(error.objectIds == std::vector<std::string>{entityId});
+    }
+
+    SECTION("fails for bad ids")
+    {
+      CHECK(
+        fixture.callExpectingError("test_faces", Json{{"ids", {"layer:default"}}}).code
+        == ErrorCode::InvalidArgument);
+      CHECK(
+        fixture.callExpectingError("test_faces", Json{{"ids", {brushId1 + "/face:99"}}})
+          .code
+        == ErrorCode::ObjectNotFound);
+    }
+
+    SECTION("fails for locked faces")
+    {
+      mdl::lockNodes(map, {brushNode1});
+      const auto faceId = brushId1 + "/face:0";
+      const auto error =
+        fixture.callExpectingError("test_faces", Json{{"ids", {faceId}}});
+      CHECK(error.code == ErrorCode::ObjectNotEditable);
+      CHECK(error.objectIds == std::vector<std::string>{faceId});
     }
   }
 

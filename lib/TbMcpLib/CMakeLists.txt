@@ -39,6 +39,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityPropertyTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityUtils.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/FaceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.cpp
@@ -51,6 +52,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpatialTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TagTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TransformTools.cpp
@@ -94,6 +96,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityPropertyTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/FaceTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
@@ -102,6 +105,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpatialTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TagTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TransformTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ViewTools.h
 )
@@ -111,6 +115,7 @@ target_link_libraries(TbMcpLib
     CompilerConfig
     PrecompileStdHeaders
     fmt::fmt-header-only
+    miniz
   PUBLIC
     nlohmann_json::nlohmann_json
     KdLib

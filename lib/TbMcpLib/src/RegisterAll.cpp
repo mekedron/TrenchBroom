@@ -26,6 +26,7 @@
 #include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/EntityCreateTools.h"
 #include "mcp/tools/EntityPropertyTools.h"
+#include "mcp/tools/FaceTools.h"
 #include "mcp/tools/GameTools.h"
 #include "mcp/tools/GeometryTools.h"
 #include "mcp/tools/HistoryTools.h"
@@ -34,6 +35,7 @@
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
 #include "mcp/tools/SpatialTools.h"
+#include "mcp/tools/TagTools.h"
 #include "mcp/tools/TransformTools.h"
 #include "mcp/tools/ViewTools.h"
 
@@ -54,6 +56,8 @@ void registerAll(McpServer& server)
   registerBrushEditTools(server.tools());
   registerViewTools(server.tools());
   registerMaterialTools(server.tools());
+  registerFaceTools(server.tools());
+  registerTagTools(server.tools());
   registerEntityClassTools(server.tools());
   registerEntityCreateTools(server.tools());
   registerEntityPropertyTools(server.tools());

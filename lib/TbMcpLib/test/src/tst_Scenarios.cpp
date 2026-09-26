@@ -17,16 +17,27 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestEnvironment.h"
+#include "gl/ResourceManager.h"
+#include "gl/TestGl.h"
+#include "gl/TestUtils.h"
 #include "mcp/McpToolFixture.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
+#include "mdl/BrushFace.h"
+#include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/Layer.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Brushes.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
+#include "mdl/UpdateBrushFaceAttributes.h"
+#include "mdl/UvAttributes.h"
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
@@ -58,6 +69,52 @@ mdl::BrushNode* addBox(mdl::Map& map, const vm::bbox3d& bounds)
   mdl::addNodes(map, {{&mdl::parentForNodes(map), {brushNode}}});
   mdl::deselectAll(map);
   return brushNode;
+}
+
+/** Adds a box with the given material and a non-default alignment to the parent. */
+mdl::BrushNode* addBox(
+  mdl::Map& map, const vm::bbox3d& bounds, const std::string& material, mdl::Node* parent)
+{
+  auto brush = mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()}
+                 .createCuboid(bounds, material)
+                 .value();
+  auto* brushNode = new mdl::BrushNode{std::move(brush)};
+  mdl::addNodes(map, {{parent, {brushNode}}});
+  mdl::deselectAll(map);
+  mdl::selectNodes(map, {brushNode});
+  REQUIRE(mdl::setBrushFaceAttributes(
+    map,
+    {
+      .xOffset = mdl::SetValue{12.0f},
+      .yOffset = mdl::SetValue{-3.0f},
+      .rotation = mdl::SetValue{45.0f},
+      .xScale = mdl::SetValue{0.25f},
+      .yScale = mdl::SetValue{1.5f},
+    }));
+  mdl::deselectAll(map);
+  return brushNode;
+}
+
+std::vector<std::string> materialsOf(const mdl::BrushNode& brushNode)
+{
+  auto result = std::vector<std::string>{};
+  for (const auto& face : brushNode.brush().faces())
+  {
+    result.push_back(face.materialName());
+  }
+  return result;
+}
+
+using Alignment = std::tuple<mdl::UvAttributes, vm::vec3d, vm::vec3d>;
+
+std::vector<Alignment> alignmentOf(const mdl::BrushNode& brushNode)
+{
+  auto result = std::vector<Alignment>{};
+  for (const auto& face : brushNode.brush().faces())
+  {
+    result.emplace_back(face.uvAttributes(), face.uAxis(), face.vAxis());
+  }
+  return result;
 }
 
 size_t brushCount(const mdl::Node& node)
@@ -323,6 +380,100 @@ TEST_CASE("Scenario S1 and S6 entities")
   {
     CHECK(step["name"].get<std::string>().starts_with("AI: "));
   }
+}
+
+TEST_CASE("Scenario S3")
+{
+  // "Replace every wall_old* material with the matching wall_new* one, only in the
+  // 'Castle' layer."
+  auto fixture = McpToolFixture{};
+  fixture.call("document_new", Json{{"game", "Quake"}, {"format", "Valve"}});
+  auto& map = fixture.host().documentList.back().document->map();
+
+  // the WAD has wall_old_a/b/c and wall_new_a/b, but no wall_new_c
+  const auto wad = getFixtureRoot() / "test" / "mcp" / "wads" / "materials.wad";
+  fixture.call("materials_collections_set", Json{{"wads", Json{wad.string()}}});
+  auto gl = gl::TestGl{};
+  gl::processResourcesSync(
+    map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+
+  auto* castle = new mdl::LayerNode{mdl::Layer{"Castle"}};
+  auto* village = new mdl::LayerNode{mdl::Layer{"Village"}};
+  mdl::addNodes(map, {{&map.worldNode(), {castle, village}}});
+
+  // the castle: a wall with wall_old_a on four faces and wall_old_b on two, a tower with
+  // wall_old_c, and a floor; the village has a wall_old_a house
+  auto* wall = addBox(map, {{0, 0, 0}, {256, 16, 128}}, "wall_old_a", castle);
+  auto* tower = addBox(map, {{0, 64, 0}, {64, 128, 256}}, "wall_old_c", castle);
+  auto* castleFloor = addBox(map, {{0, 0, -16}, {256, 256, 0}}, "floor_tile", castle);
+  auto* house = addBox(map, {{512, 0, 0}, {640, 128, 128}}, "wall_old_a", village);
+  mdl::selectBrushFaces(map, {{wall, 0}, {wall, 1}});
+  REQUIRE(mdl::setBrushFaceAttributes(map, {.materialName = "wall_old_b"}));
+  mdl::deselectAll(map);
+
+  const auto wallMaterials = materialsOf(*wall);
+  const auto alignments = std::vector{
+    alignmentOf(*wall),
+    alignmentOf(*tower),
+    alignmentOf(*castleFloor),
+    alignmentOf(*house)};
+
+  // the agent checks which targets exist
+  const auto targets = fixture.call("materials_list", Json{{"search", "wall_new*"}});
+  CHECK(targets["total"] == 2);
+
+  const auto replace = fixture.call(
+    "material_replace",
+    Json{{"from", "wall_old*"}, {"to", "wall_new*"}, {"layer", "Castle"}});
+  CHECK(replace["undoStep"] == "AI: Replace Materials");
+
+  const auto& result = replace["result"];
+  CHECK(result["scope"]["kind"] == "layer");
+  CHECK(
+    result["scope"]["layer"] == Json{{"id", fixture.id(*castle)}, {"name", "Castle"}});
+  CHECK(result["scope"]["faces"] == 18);
+
+  // how many faces changed per material
+  CHECK(
+    result["replaced"]
+    == Json{
+      {{"from", "wall_old_a"}, {"to", "wall_new_a"}, {"faces", 4}},
+      {{"from", "wall_old_b"}, {"to", "wall_new_b"}, {"faces", 2}},
+    });
+  CHECK(result["totalFaces"] == 6);
+
+  // the material without a match is reported and left alone, not guessed
+  CHECK(
+    result["unmatched"]
+    == Json{{{"from", "wall_old_c"}, {"to", "wall_new_c"}, {"faces", 6}}});
+  CHECK(materialsOf(*tower) == std::vector<std::string>(6, "wall_old_c"));
+
+  // only the castle changed
+  for (size_t i = 0; i < 6; ++i)
+  {
+    CHECK(
+      wall->brush().face(i).materialName()
+      == (wallMaterials[i] == "wall_old_a" ? "wall_new_a" : "wall_new_b"));
+  }
+  CHECK(materialsOf(*castleFloor) == std::vector<std::string>(6, "floor_tile"));
+  CHECK(materialsOf(*house) == std::vector<std::string>(6, "wall_old_a"));
+  CHECK(replace["changes"]["modified"] == Json{fixture.id(*wall)});
+
+  // the alignment is preserved
+  CHECK(
+    std::vector{
+      alignmentOf(*wall),
+      alignmentOf(*tower),
+      alignmentOf(*castleFloor),
+      alignmentOf(*house)}
+    == alignments);
+
+  // one undo reverts the whole change
+  fixture.call("undo");
+  CHECK(materialsOf(*wall) == wallMaterials);
+  CHECK(
+    fixture.call("history_get", Json{{"limit", 1}})["redo"][0]["name"]
+    == "AI: Replace Materials");
 }
 
 } // namespace tb::mcp

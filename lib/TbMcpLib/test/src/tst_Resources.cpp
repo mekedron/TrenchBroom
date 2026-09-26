@@ -19,11 +19,16 @@
 
 #include "TestEnvironment.h"
 #include "base/PreferenceManager.h"
+#include "gl/MaterialManager.h"
+#include "gl/ResourceManager.h"
+#include "gl/TestGl.h"
+#include "gl/TestUtils.h"
 #include "mcp/JsonRpc.h"
 #include "mcp/McpServer.h"
 #include "mcp/McpToolFixture.h"
 #include "mcp/ServerState.h"
 #include "mcp/tools/EntityClassTools.h"
+#include "mcp/tools/MaterialTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mdl/BrushNode.h"
@@ -97,6 +102,9 @@ TEST_CASE("Resources")
   const auto selectionUri = "trenchbroom://documents/" + documentId + "/selection";
   const auto entityDefinitionsUri =
     "trenchbroom://documents/" + documentId + "/entity-definitions";
+  const auto materialsUri = "trenchbroom://documents/" + documentId + "/materials";
+  const auto materialsWad =
+    (getFixtureRoot() / "test" / "mcp" / "wads" / "materials.wad").string();
 
   SECTION("resources/list lists the document resources")
   {
@@ -110,6 +118,7 @@ TEST_CASE("Resources")
     CHECK(countOf(uris, selectionUri) == 1);
     CHECK(countOf(uris, "trenchbroom://documents/" + documentId + "/info") == 1);
     CHECK(countOf(uris, entityDefinitionsUri) == 1);
+    CHECK(countOf(uris, materialsUri) == 1);
 
     const auto templates = fixture.rpc("resources/templates/list");
     auto uriTemplates = std::vector<std::string>{};
@@ -120,6 +129,7 @@ TEST_CASE("Resources")
     CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/summary") == 1);
     CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/selection") == 1);
     CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/entity-definitions") == 1);
+    CHECK(countOf(uriTemplates, "trenchbroom://documents/{doc}/materials") == 1);
   }
 
   SECTION("entity definitions")
@@ -136,6 +146,25 @@ TEST_CASE("Resources")
     CHECK(resource["spec"] == "external:" + fgd.string());
     CHECK(resource["count"] == map.entityDefinitionManager().definitions().size());
     CHECK(resource["classes"].size() == resource["count"]);
+  }
+
+  SECTION("materials")
+  {
+    fixture.call("materials_collections_set", Json{{"wads", Json{materialsWad}}});
+    REQUIRE(map.materialManager().materials().size() == 6);
+
+    auto expected = materialsResource(map);
+    expected["document"] = documentId;
+    const auto resource = readResource(fixture, materialsUri);
+    CHECK(resource == expected);
+    CHECK(
+      resource["collections"]
+      == Json::array({Json{{"path", "materials.wad"}, {"materialCount", 6}}}));
+    CHECK(resource["count"] == 6);
+    CHECK(resource["materials"][0]["name"] == "floor_tile");
+    CHECK(resource["materials"][0]["collection"] == "materials.wad");
+    CHECK(resource["materials"][0].contains("width"));
+    CHECK(!resource["materials"][0].contains("usage"));
   }
 
   SECTION("map summary")
@@ -167,7 +196,8 @@ TEST_CASE("Resources")
   {
     auto notifications = std::make_shared<CapturingNotificationStream>();
     REQUIRE(fixture.server().openNotificationStream(fixture.sessionId(), notifications));
-    for (const auto& uri : {statusUri, summaryUri, selectionUri, entityDefinitionsUri})
+    for (const auto& uri :
+         {statusUri, summaryUri, selectionUri, entityDefinitionsUri, materialsUri})
     {
       REQUIRE(
         fixture.rpc("resources/subscribe", Json{{"uri", uri}})["result"].is_object());
@@ -255,6 +285,29 @@ TEST_CASE("Resources")
       mdl::addNodes(map, {{&mdl::parentForNodes(map), {brushNode}}});
       fixture.scheduler().runPending();
       CHECK(countOf(updatedUris(*notifications), entityDefinitionsUri) == 0);
+    }
+
+    SECTION("material collection changes update the materials")
+    {
+      fixture.call("materials_collections_set", Json{{"wads", Json{materialsWad}}});
+      fixture.scheduler().runPending();
+      CHECK(countOf(updatedUris(*notifications), materialsUri) == 1);
+
+      // the image sizes are known once the images are loaded
+      notifications->notifications.clear();
+      auto gl = gl::TestGl{};
+      gl::processResourcesSync(
+        map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+      fixture.scheduler().runPending();
+      CHECK(countOf(updatedUris(*notifications), materialsUri) == 1);
+      CHECK(readResource(fixture, materialsUri)["materials"][0]["width"] == 32);
+
+      // map changes do not change the materials
+      notifications->notifications.clear();
+      auto* brushNode = mdl::createBrushNode(map);
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {brushNode}}});
+      fixture.scheduler().runPending();
+      CHECK(countOf(updatedUris(*notifications), materialsUri) == 0);
     }
 
     SECTION("unsubscribed resources are not notified")

@@ -25,6 +25,7 @@
 #include "mcp/tools/DocumentTools.h"
 #include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/GameTools.h"
+#include "mcp/tools/MaterialTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
@@ -79,6 +80,33 @@ Entities
 - Unknown classes, unknown property keys and invalid values are reported as warnings;
   they never block a call.
 - trenchbroom://documents/{doc}/entity-definitions lists all classes of a document.
+
+Materials and faces
+- Material names are case-insensitive. Find materials with materials_list (search
+  "wall_*", usedOnly, includeMissing for materials the map uses but that are not
+  loaded) and look at one with material_preview, which returns a small image.
+- material_apply puts a material on faces ('brush:12/face:3') or on all faces of
+  brushes, groups and entities; material_set_current sets the material of new
+  brushes. Unknown materials are applied anyway with an UNKNOWN_MATERIAL warning.
+- material_replace swaps materials by name or pattern in the selection, the map, a
+  layer ({"layer": "Castle"}) or given ids: {"from": "wall_old*", "to": "wall_new*"}
+  fills each wildcard of 'to' with the text matched in 'from'. It keeps the
+  alignment, skips hidden and locked faces, and reports targets that are not loaded
+  in 'unmatched' instead of guessing. Check the result with dryRun first.
+- trenchbroom://documents/{doc}/materials lists all loaded materials with their sizes.
+- face_attributes_get reads offset, scale, rotation, flags, value and color; its
+  'format' block says whether the map format saves flags and colors and lists the
+  game's flag names. face_attributes_set takes flag names or raw bits ({"add":
+  ["slick"]}), relative offsetBy / scaleBy / rotateBy, and 'unset' to return to the
+  material's defaults.
+- face_attributes_copy works like the editor's alt-click: "project", "rotate" (wraps
+  around corners, Valve 220 only) or "material" only.
+- uv_align: justify, align, fit (repeatU / repeatV for an exact tiling, needs a loaded
+  material), autoFit, reset, resetToWorld, flip, rotate90. uv_nudge moves or rotates
+  in each face's texture axes, not relative to a camera.
+- Smart tags: tags_list shows the game's object tags (trigger, detail) and face tags
+  (clip, skip, hint) with what they match. tag_apply is "Turn into <tag>", tag_remove
+  "Make non-<tag>"; 'option' picks one choice when a tag offers several.
 
 Results
 - Modifying calls return 'changes' (created / modified / removed ids), 'selection',
@@ -216,6 +244,24 @@ void registerResources(McpServer& server)
     }),
     documentLister(
       DocumentAspect::EntityDefinitions, "entity-definitions", "Entity Definitions"),
+  });
+
+  resources.addTemplate(ResourceTemplateDef{
+    "trenchbroom://documents/{doc}/materials",
+    "materials",
+    "Materials",
+    "The materials an open document can use: its material collections (WAD files or "
+    "folders) with material counts, and per material name, collection, width and "
+    "height in pixels (null while the image is not loaded yet), sorted by name ({doc} "
+    "is a handle such as doc:1). Use materials_list for usage counts and filters. "
+    "Subscribe to get notified when the collections are loaded, reloaded or changed.",
+    "application/json",
+    documentReader([](ServerState&, const DocumentInfo& document, Session&) {
+      auto result = materialsResource(document.document->map());
+      result["document"] = document.id;
+      return result;
+    }),
+    documentLister(DocumentAspect::Materials, "materials", "Materials"),
   });
 
   resources.addTemplate(ResourceTemplateDef{
