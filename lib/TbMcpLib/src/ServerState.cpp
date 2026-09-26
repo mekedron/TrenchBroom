@@ -19,23 +19,29 @@
 
 #include "mcp/ServerState.h"
 
+#include "base/PreferenceManager.h"
 #include "mcp/CallRunner.h"
 #include "mcp/JsonRpc.h"
 #include "mcp/Scheduler.h"
 #include "mdl/Map.h"
+#include "mdl/Node.h"
 #include "mdl/WorldNode.h"
+#include "prefs/Preferences.h"
 #include "ui/MapDocument.h"
 
 #include <algorithm>
 
 namespace tb::mcp
 {
+namespace
+{
+constexpr auto EditorStatusUri = "trenchbroom://editor/status";
+} // namespace
 
-DocumentState::DocumentState(
-  ui::MapDocument& document_, std::function<void()> infoDidChange_)
+DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
   : document{document_}
   , ids{document_}
-  , m_infoDidChange{std::move(infoDidChange_)}
+  , m_didChange{std::move(didChange_)}
   , m_lastModified{document_.map().modified()}
 {
   // reloading replaces the map and with it the command processor, so an open agent
@@ -43,6 +49,8 @@ DocumentState::DocumentState(
   m_notifierConnection += document.documentWasLoadedNotifier.connect([&]() {
     transaction.reset();
     infoDidChange();
+    didChange(DocumentAspect::Summary);
+    didChange(DocumentAspect::Selection);
   });
 
   m_notifierConnection +=
@@ -56,26 +64,66 @@ DocumentState::DocumentState(
   });
   m_notifierConnection +=
     document.modsDidChangeNotifier.connect(this, &DocumentState::infoDidChange);
-  m_notifierConnection += document.entityDefinitionsDidChangeNotifier.connect(
-    this, &DocumentState::infoDidChange);
+  m_notifierConnection += document.entityDefinitionsDidChangeNotifier.connect([&]() {
+    infoDidChange();
+    // issues depend on the entity definitions
+    didChange(DocumentAspect::Summary);
+  });
   m_notifierConnection += document.materialCollectionsDidChangeNotifier.connect(
     this, &DocumentState::infoDidChange);
   m_notifierConnection +=
-    document.nodesDidChangeNotifier.connect([&](const std::vector<mdl::Node*>& nodes) {
-      // worldspawn holds the soft bounds, WAD list and other document settings
-      if (std::ranges::find(nodes, &document.map().worldNode()) != nodes.end())
-      {
-        infoDidChange();
-      }
-    });
+    document.nodesDidChangeNotifier.connect(this, &DocumentState::nodesDidChange);
+
+  const auto summaryDidChange = [&]() { didChange(DocumentAspect::Summary); };
+  m_notifierConnection +=
+    document.nodesWereAddedNotifier.connect([=](const auto&) { summaryDidChange(); });
+  m_notifierConnection +=
+    document.nodesWereRemovedNotifier.connect([=](const auto&) { summaryDidChange(); });
+  m_notifierConnection += document.nodeVisibilityDidChangeNotifier.connect(
+    [=](const auto&) { summaryDidChange(); });
+  m_notifierConnection += document.nodeLockingDidChangeNotifier.connect(
+    [=](const auto&) { summaryDidChange(); });
+  m_notifierConnection +=
+    document.currentLayerDidChangeNotifier.connect(summaryDidChange);
+  m_notifierConnection += document.gridDidChangeNotifier.connect([=, this]() {
+    summaryDidChange();
+    didChange(DocumentAspect::Status);
+  });
+
+  m_notifierConnection += document.selectionDidChangeNotifier.connect(
+    [&](const auto&) { didChange(DocumentAspect::Selection); });
+}
+
+void DocumentState::didChange(const DocumentAspect aspect)
+{
+  if (m_didChange)
+  {
+    m_didChange(aspect);
+  }
 }
 
 void DocumentState::infoDidChange()
 {
   m_lastModified = document.map().modified();
-  if (m_infoDidChange)
+  didChange(DocumentAspect::Info);
+}
+
+void DocumentState::nodesDidChange(const std::vector<mdl::Node*>& nodes)
+{
+  // worldspawn holds the soft bounds, WAD list and other document settings
+  if (std::ranges::find(nodes, &document.map().worldNode()) != nodes.end())
   {
-    m_infoDidChange();
+    infoDidChange();
+  }
+
+  didChange(DocumentAspect::Summary);
+
+  // the selection summary contains the bounds of the selected objects
+  if (std::ranges::any_of(nodes, [](const auto* node) {
+        return node->selected() || node->descendantSelected();
+      }))
+  {
+    didChange(DocumentAspect::Selection);
   }
 }
 
@@ -96,6 +144,16 @@ ServerState::ServerState(
     host.documentWillCloseNotifier.connect(this, &ServerState::documentWillClose);
   m_hostConnection +=
     host.documentsDidChangeNotifier.connect(this, &ServerState::documentsDidChange);
+  m_hostConnection += host.currentToolDidChangeNotifier.connect(
+    [&](ui::MapDocument&) { scheduleResourceUpdate(EditorStatusUri); });
+  m_hostConnection += PreferenceManager::instance().preferenceDidChangeNotifier.connect(
+    [&](const std::filesystem::path& path) {
+      // the editor status reports the locks
+      if (path == Preferences::AlignmentLock.path || path == Preferences::UvLock.path)
+      {
+        scheduleResourceUpdate(EditorStatusUri);
+      }
+    });
 }
 
 ServerState::~ServerState()
@@ -128,7 +186,10 @@ DocumentState& ServerState::documentState(ui::MapDocument& document)
            .emplace(
              &document,
              std::make_unique<DocumentState>(
-               document, [this, &document]() { documentInfoDidChange(document); }))
+               document,
+               [this, &document](const DocumentAspect aspect) {
+                 documentAspectDidChange(document, aspect);
+               }))
            .first;
   }
   return *it->second;
@@ -271,6 +332,8 @@ void ServerState::updateOpenTransactions()
   {
     activity.openTransactions = std::move(names);
     server.activityDidChangeNotifier(activity);
+    // the editor status reports the open transaction
+    scheduleResourceUpdate(EditorStatusUri);
   }
 }
 
@@ -319,17 +382,120 @@ void ServerState::documentsDidChange()
   {
     documentState(*document.document);
   }
-  notifyResourceUpdated("trenchbroom://editor/status");
+  notifyResourceUpdated(EditorStatusUri);
 }
 
-void ServerState::documentInfoDidChange(ui::MapDocument& document)
+void ServerState::documentAspectDidChange(
+  ui::MapDocument& document, const DocumentAspect aspect)
 {
-  for (const auto& info_ : host.documents())
+  if (aspect == DocumentAspect::Info)
   {
-    if (info_.document == &document)
+    for (const auto& info_ : host.documents())
     {
-      notifyResourceUpdated("trenchbroom://documents/" + info_.id + "/info");
+      if (info_.document == &document)
+      {
+        notifyResourceUpdated(documentResourceUri(info_.id, DocumentAspect::Info));
+      }
     }
+  }
+  else if (aspect != DocumentAspect::Status)
+  {
+    scheduleDocumentUpdate(document, aspect);
+  }
+
+  if (aspect != DocumentAspect::Summary)
+  {
+    // the editor status lists the modified flag and the selection of the documents
+    scheduleResourceUpdate(EditorStatusUri);
+  }
+}
+
+std::string ServerState::documentResourceUri(
+  const std::string& documentId, const DocumentAspect aspect)
+{
+  const auto suffix = [&]() {
+    switch (aspect)
+    {
+    case DocumentAspect::Info:
+      return "info";
+    case DocumentAspect::Summary:
+      return "summary";
+    case DocumentAspect::Selection:
+      return "selection";
+    case DocumentAspect::Status:
+      break;
+    }
+    return "info";
+  }();
+  return "trenchbroom://documents/" + documentId + "/" + suffix;
+}
+
+bool ServerState::hasSubscriptions() const
+{
+  return std::ranges::any_of(
+    sessions, [](const auto& entry) { return !entry.second->subscriptions.empty(); });
+}
+
+void ServerState::scheduleResourceUpdate(std::string uri)
+{
+  if (hasSubscriptions())
+  {
+    m_pendingUpdates.insert(std::move(uri));
+    scheduleFlush();
+  }
+}
+
+void ServerState::scheduleDocumentUpdate(
+  ui::MapDocument& document, const DocumentAspect aspect)
+{
+  // this is called for every change of the map, so keep it cheap when nobody listens
+  if (hasSubscriptions())
+  {
+    m_pendingDocumentUpdates.emplace(&document, aspect);
+    scheduleFlush();
+  }
+}
+
+void ServerState::scheduleFlush()
+{
+  if (!m_flushScheduled)
+  {
+    m_flushScheduled = true;
+    scheduler.post([this, alive = m_alive]() {
+      if (*alive)
+      {
+        flushResourceUpdates();
+      }
+    });
+  }
+}
+
+void ServerState::flushResourceUpdates()
+{
+  m_flushScheduled = false;
+
+  auto uris = std::move(m_pendingUpdates);
+  m_pendingUpdates.clear();
+
+  const auto documentUpdates = std::move(m_pendingDocumentUpdates);
+  m_pendingDocumentUpdates.clear();
+  if (!documentUpdates.empty())
+  {
+    for (const auto& info_ : host.documents())
+    {
+      for (const auto& [document, aspect] : documentUpdates)
+      {
+        if (document == info_.document)
+        {
+          uris.insert(documentResourceUri(info_.id, aspect));
+        }
+      }
+    }
+  }
+
+  for (const auto& uri : uris)
+  {
+    notifyResourceUpdated(uri);
   }
 }
 

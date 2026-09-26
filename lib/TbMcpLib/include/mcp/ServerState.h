@@ -33,6 +33,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -58,30 +59,54 @@ struct AgentTransaction
   size_t depth = 0;
 };
 
+/** The aspects of a document that resources report and clients can subscribe to. */
+enum class DocumentAspect
+{
+  /**
+   * trenchbroom://documents/{doc}/info: saved, loaded, modified flag, mods, entity
+   * definitions, materials or worldspawn changed.
+   */
+  Info,
+  /**
+   * trenchbroom://documents/{doc}/summary: objects were added, removed or changed, their
+   * visibility or locking changed, the current layer or the grid changed.
+   */
+  Summary,
+  /**
+   * trenchbroom://documents/{doc}/selection: the selection changed, or selected objects
+   * changed.
+   */
+  Selection,
+  /**
+   * Only trenchbroom://editor/status: the grid changed. (Info and selection changes
+   * update the editor status, too.)
+   */
+  Status,
+};
+
 /** The server's state for one open document. */
 class DocumentState
 {
 public:
+  using DidChange = std::function<void(DocumentAspect)>;
+
   ui::MapDocument& document;
   IdRegistry ids;
   std::optional<AgentTransaction> transaction;
 
 private:
   NotifierConnection m_notifierConnection;
-  std::function<void()> m_infoDidChange;
+  DidChange m_didChange;
   bool m_lastModified = false;
 
 public:
-  /**
-   * The callback is called when the document info (trenchbroom://documents/{doc}/info)
-   * may have changed: saved, loaded, modified flag, mods, entity definitions, materials
-   * or worldspawn changed.
-   */
-  explicit DocumentState(
-    ui::MapDocument& document, std::function<void()> infoDidChange = {});
+  /** The callback is called when an aspect of the document may have changed. */
+  explicit DocumentState(ui::MapDocument& document, DidChange didChange = {});
 
 private:
+  void didChange(DocumentAspect aspect);
   void infoDidChange();
+  void nodesDidChange(const std::vector<mdl::Node*>& nodes);
 };
 
 /**
@@ -111,6 +136,10 @@ public:
 private:
   std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
   NotifierConnection m_hostConnection;
+  /** Coalesced resource updates, sent by the next scheduled flush. */
+  std::set<std::string> m_pendingUpdates;
+  std::set<std::pair<ui::MapDocument*, DocumentAspect>> m_pendingDocumentUpdates;
+  bool m_flushScheduled = false;
 
 public:
   ServerState(
@@ -158,10 +187,30 @@ public:
   void broadcast(const Json& notification);
   void notifyResourceUpdated(const std::string& uri);
 
+  /**
+   * Sends `notifications/resources/updated` for the given uri to its subscribers after
+   * pending events were processed. Several updates of the same resource in one burst
+   * (e.g. while the user drags objects) result in a single notification.
+   */
+  void scheduleResourceUpdate(std::string uri);
+
+  /** Schedules an update of the given document resource, see scheduleResourceUpdate. */
+  void scheduleDocumentUpdate(ui::MapDocument& document, DocumentAspect aspect);
+
+  /**
+   * The URI of a document resource, e.g. trenchbroom://documents/doc:1/summary.
+   * Precondition: aspect is not DocumentAspect::Status.
+   */
+  static std::string documentResourceUri(
+    const std::string& documentId, DocumentAspect aspect);
+
 private:
   void documentWillClose(ui::MapDocument& document);
   void documentsDidChange();
-  void documentInfoDidChange(ui::MapDocument& document);
+  void documentAspectDidChange(ui::MapDocument& document, DocumentAspect aspect);
+  bool hasSubscriptions() const;
+  void scheduleFlush();
+  void flushResourceUpdates();
 };
 
 } // namespace tb::mcp

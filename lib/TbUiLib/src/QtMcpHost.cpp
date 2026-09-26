@@ -124,6 +124,7 @@ QtMcpHost::QtMcpHost(AppController& appController, QObject* parent)
     &QtMcpHost::mapWindowsDidChange);
 
   assignDocumentIds();
+  connectToolBoxes();
 }
 
 QtMcpHost::~QtMcpHost() = default;
@@ -370,12 +371,35 @@ void QtMcpHost::mapWindowWillClose(MapWindow* mapWindow)
   auto& document = mapWindow->document();
   documentWillCloseNotifier(document);
   m_documentIds.erase(&document);
+  m_toolBoxConnections.erase(mapWindow);
 }
 
 void QtMcpHost::mapWindowsDidChange()
 {
   assignDocumentIds();
+  connectToolBoxes();
   documentsDidChangeNotifier();
+}
+
+void QtMcpHost::connectToolBoxes()
+{
+  for (auto* mapWindow : m_appController.mapWindowManager().mapWindows())
+  {
+    if (!m_toolBoxConnections.contains(mapWindow))
+    {
+      // the window's document can be replaced (single window mode), so look it up
+      // when the tool changes
+      const auto toolDidChange = [this, mapWindow](auto&) {
+        currentToolDidChangeNotifier(mapWindow->document());
+      };
+
+      auto& toolBox = mapWindow->toolBox();
+      auto connection = NotifierConnection{};
+      connection += toolBox.toolActivatedNotifier.connect(toolDidChange);
+      connection += toolBox.toolDeactivatedNotifier.connect(toolDidChange);
+      m_toolBoxConnections.emplace(mapWindow, std::move(connection));
+    }
+  }
 }
 
 } // namespace tb::ui

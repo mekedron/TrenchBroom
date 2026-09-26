@@ -135,6 +135,12 @@ public:
    */
   Notifier<> documentsDidChangeNotifier;
 
+  /**
+   * The host fires this notifier when the active tool of a document's window changes
+   * (see currentToolName).
+   */
+  Notifier<ui::MapDocument&> currentToolDidChangeNotifier;
+
   virtual ~McpHost();
 
   /** The editor version, e.g. "2026.1". */

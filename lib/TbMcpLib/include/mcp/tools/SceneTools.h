@@ -17,31 +17,29 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/RegisterAll.h"
+#pragma once
 
-#include "mcp/McpServer.h"
-#include "mcp/Resources.h"
-#include "mcp/tools/DocumentTools.h"
-#include "mcp/tools/GameTools.h"
-#include "mcp/tools/HistoryTools.h"
-#include "mcp/tools/SceneTools.h"
-#include "mcp/tools/SelectionTools.h"
-#include "mcp/tools/SessionTools.h"
-#include "mcp/tools/SpatialTools.h"
+#include "mcp/Json.h"
+
+namespace tb::mdl
+{
+class Map;
+} // namespace tb::mdl
 
 namespace tb::mcp
 {
+class IdRegistry;
+class ToolRegistry;
 
-void registerAll(McpServer& server)
-{
-  registerSessionTools(server.tools());
-  registerHistoryTools(server.tools());
-  registerDocumentTools(server.tools());
-  registerGameTools(server.tools());
-  registerSceneTools(server.tools());
-  registerSpatialTools(server.tools());
-  registerSelectionTools(server.tools());
-  registerResources(server);
-}
+/**
+ * Registers map_summary, map_tree, object_get, objects_find, map_text_get and map_stats.
+ */
+void registerSceneTools(ToolRegistry& registry);
+
+/**
+ * The high-level overview of a map returned by map_summary and the
+ * trenchbroom://documents/{doc}/summary resource.
+ */
+Json mapSummary(mdl::Map& map, const IdRegistry& ids);
 
 } // namespace tb::mcp

@@ -22,8 +22,12 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Pagination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PromptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ResourceRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Resources.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SceneTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SessionTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SpatialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Targets.cpp

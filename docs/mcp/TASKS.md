@@ -12,7 +12,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 |---|---|---|---|---|
 | E1 | Server foundation and editor integration | §1, §2, §14 | MVP | Done |
 | E2 | Documents, games and assets | §3, §4 | MVP + v1 | Done |
-| E3 | Scene inspection, selection and resources | §5, §6, §21 | MVP + v1 | Not started |
+| E3 | Scene inspection, selection and resources | §5, §6, §21 | MVP + v1 | Done |
 | E4 | Geometry: creation, transforms, editing, CSG | §7, §8, §9 | MVP + v1 | Not started |
 | E5 | Entities, NPCs and models | §10 | MVP + v1 | Not started |
 | E6 | Materials, UV and face attributes | §11 | MVP + v1 | Not started |
@@ -100,18 +100,18 @@ Goal: the agent can manage map files and everything that controls how a map load
 
 Goal: the agent can understand a map without a screen and select anything.
 
-- [ ] E3.1 `map_summary`.
-- [ ] E3.2 `map_tree` with root, depth, filters, pagination.
-- [ ] E3.3 `object_get` with field selection (entities: properties; brushes: faces, materials, alignment; common: parent, layer, bounds, visibility, lock).
-- [ ] E3.4 `objects_find` (type, classname, property key/value, material, layer, group, tag, region, visibility).
-- [ ] E3.5 `objects_at_point`, `ray_pick`.
-- [ ] E3.6 `space_check` (overlaps, floor and ceiling heights for a box).
-- [ ] E3.7 `map_text_get`, `map_stats`.
-- [ ] E3.8 `map_plan_view` (text form: top-down grid of a region at a height; image form delivered in E9).
-- [ ] E3.9 `selection_get`, `selection_set` (replace / add / remove; objects and faces), `selection_clear`.
-- [ ] E3.10 `select_all`, `select_invert`, `select_by` (classname, material, layer, linked group).
-- [ ] E3.11 `select_spatial` (touching, inside, tall), `select_siblings`, `select_by_line`, `select_faces_of`.
-- [ ] E3.12 Resources with subscriptions: editor status, map summary, selection.
+- [x] E3.1 `map_summary`.
+- [x] E3.2 `map_tree` with root, depth, filters, pagination.
+- [x] E3.3 `object_get` with field selection (entities: properties; brushes: faces, materials, alignment; common: parent, layer, bounds, visibility, lock).
+- [x] E3.4 `objects_find` (type, classname, property key/value, material, layer, group, tag, region, visibility).
+- [x] E3.5 `objects_at_point`, `ray_pick`.
+- [x] E3.6 `space_check` (overlaps, floor and ceiling heights for a box).
+- [x] E3.7 `map_text_get`, `map_stats`.
+- [x] E3.8 `map_plan_view` (text form: top-down grid of a region at a height; image form delivered in E9).
+- [x] E3.9 `selection_get`, `selection_set` (replace / add / remove; objects and faces), `selection_clear`.
+- [x] E3.10 `select_all`, `select_invert`, `select_by` (classname, material, layer, linked group).
+- [x] E3.11 `select_spatial` (touching, inside, tall), `select_siblings`, `select_by_line`, `select_faces_of`.
+- [x] E3.12 Resources with subscriptions: editor status, map summary, selection.
 
 **Done when:** on a real sample map an agent can answer "what is in this room, what is under this entity, which brushes use this material" using only these tools; tests cover filters and pagination.
 

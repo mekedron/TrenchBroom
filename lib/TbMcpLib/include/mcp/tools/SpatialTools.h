@@ -17,31 +17,16 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/RegisterAll.h"
-
-#include "mcp/McpServer.h"
-#include "mcp/Resources.h"
-#include "mcp/tools/DocumentTools.h"
-#include "mcp/tools/GameTools.h"
-#include "mcp/tools/HistoryTools.h"
-#include "mcp/tools/SceneTools.h"
-#include "mcp/tools/SelectionTools.h"
-#include "mcp/tools/SessionTools.h"
-#include "mcp/tools/SpatialTools.h"
+#pragma once
 
 namespace tb::mcp
 {
+class ToolRegistry;
 
-void registerAll(McpServer& server)
-{
-  registerSessionTools(server.tools());
-  registerHistoryTools(server.tools());
-  registerDocumentTools(server.tools());
-  registerGameTools(server.tools());
-  registerSceneTools(server.tools());
-  registerSpatialTools(server.tools());
-  registerSelectionTools(server.tools());
-  registerResources(server);
-}
+/**
+ * Registers the spatial queries objects_at_point, ray_pick, space_check and
+ * map_plan_view.
+ */
+void registerSpatialTools(ToolRegistry& registry);
 
 } // namespace tb::mcp

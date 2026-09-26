@@ -35,7 +35,12 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SceneTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpatialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.h
 
@@ -75,7 +80,10 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpatialTools.h
 )
 
 target_link_libraries(TbMcpLib

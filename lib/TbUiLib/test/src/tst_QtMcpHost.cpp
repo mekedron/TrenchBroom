@@ -319,6 +319,32 @@ TEST_CASE("QtMcpHost")
       toolBox.toggleRotateTool();
     }
 
+    SECTION("currentToolDidChangeNotifier")
+    {
+      auto changedDocuments = std::vector<MapDocument*>{};
+      auto connection =
+        host.currentToolDidChangeNotifier.connect([&](MapDocument& changedDocument) {
+          changedDocuments.push_back(&changedDocument);
+        });
+
+      // switching tools may activate and deactivate several tools; the server
+      // coalesces the resulting updates
+      const auto onlyThisDocument = [&]() {
+        return std::ranges::all_of(
+          changedDocuments, [&](const auto* changed) { return changed == &document; });
+      };
+
+      toolBox.toggleRotateTool();
+      REQUIRE(toolBox.rotateToolActive());
+      CHECK(!changedDocuments.empty());
+      CHECK(onlyThisDocument());
+
+      changedDocuments.clear();
+      toolBox.toggleRotateTool();
+      CHECK(!changedDocuments.empty());
+      CHECK(onlyThisDocument());
+    }
+
     closeAllMapWindows(appController);
   }
 

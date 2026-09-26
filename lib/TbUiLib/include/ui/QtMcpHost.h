@@ -21,6 +21,7 @@
 
 #include <QObject>
 
+#include "base/NotifierConnection.h"
 #include "mcp/Host.h"
 
 #include <filesystem>
@@ -53,6 +54,8 @@ private:
   AppController& m_appController;
   std::unordered_map<const MapDocument*, size_t> m_documentIds;
   size_t m_nextDocumentId = 1;
+  /** Observes the tool box of each map window to report tool changes. */
+  std::unordered_map<const MapWindow*, NotifierConnection> m_toolBoxConnections;
 
 public:
   explicit QtMcpHost(AppController& appController, QObject* parent = nullptr);
@@ -86,6 +89,7 @@ private:
   mcp::DocumentInfo documentInfo(const MapDocument& document);
   void assignDocumentIds();
   size_t documentId(const MapDocument& document);
+  void connectToolBoxes();
 
   void mapWindowWillClose(MapWindow* mapWindow);
   void mapWindowsDidChange();

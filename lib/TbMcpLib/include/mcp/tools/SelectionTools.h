@@ -17,31 +17,33 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/RegisterAll.h"
+#pragma once
 
-#include "mcp/McpServer.h"
-#include "mcp/Resources.h"
-#include "mcp/tools/DocumentTools.h"
-#include "mcp/tools/GameTools.h"
-#include "mcp/tools/HistoryTools.h"
-#include "mcp/tools/SceneTools.h"
-#include "mcp/tools/SelectionTools.h"
-#include "mcp/tools/SessionTools.h"
-#include "mcp/tools/SpatialTools.h"
+#include "mcp/Json.h"
+
+#include <cstddef>
+
+namespace tb::mdl
+{
+class Map;
+} // namespace tb::mdl
 
 namespace tb::mcp
 {
+class IdRegistry;
+class ToolRegistry;
 
-void registerAll(McpServer& server)
-{
-  registerSessionTools(server.tools());
-  registerHistoryTools(server.tools());
-  registerDocumentTools(server.tools());
-  registerGameTools(server.tools());
-  registerSceneTools(server.tools());
-  registerSpatialTools(server.tools());
-  registerSelectionTools(server.tools());
-  registerResources(server);
-}
+/**
+ * Registers selection_get, selection_set, selection_clear, select_all, select_invert,
+ * select_by, select_spatial, select_siblings, select_by_line and select_faces_of.
+ */
+void registerSelectionTools(ToolRegistry& registry);
+
+/**
+ * The current selection with a short description of each selected object or face (at
+ * most `limit` of them), as returned by selection_get in summary detail and by the
+ * trenchbroom://documents/{doc}/selection resource.
+ */
+Json selectionDetails(const mdl::Map& map, const IdRegistry& ids, size_t limit = 100);
 
 } // namespace tb::mcp

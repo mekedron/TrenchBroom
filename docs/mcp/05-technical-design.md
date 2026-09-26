@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-26 · Status: Accepted (E1.1), implemented for E1 and E2 (see §13) · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-26 · Status: Accepted (E1.1), implemented for E1–E3 (see §13) · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint for the MCP server. Every decision below is final unless a later
 design note replaces it. Implementation agents follow it literally. When the code disagrees
@@ -967,3 +967,77 @@ entity definitions, materials or worldspawn change) and `trenchbroom://games/{ga
 (template; `{game}` is the percent-encoded game name; listed for the games of open documents;
 notified by `game_set_path`). `ServerState` now creates a `DocumentState` for every open document
 when the document list changes, so subscriptions work before any tool touched a document.
+
+### 13.7 Implementation notes (E3, as built)
+
+**Layout.** The spatial queries (`objects_at_point`, `ray_pick`, `space_check`, `map_plan_view`)
+live in their own domain file `SpatialTools.cpp` (`registerSpatialTools`) instead of
+`SceneTools.cpp`, which keeps `map_summary`, `map_tree`, `object_get`, `objects_find`,
+`map_text_get` and `map_stats`. Shared object descriptions are in `src/tools/NodeJson.{h,cpp}`
+(`nodeSummary`, `nodeState`, `faceJson`, `nodeLabel`, `nodeMaterials`, tag names, layer/group
+ids): every list item that describes an object uses `nodeSummary`
+(`{id, kind, label, bounds, layer, classname | name | materials, entity}`), every face
+`faceJson`. `mapSummary()` (SceneTools.h) and `selectionDetails()` (SelectionTools.h) are
+shared with the resources. The sample map `test/fixture/mcp/maps/two_rooms.map` (two rooms, a
+corridor, a door, a trigger, a group and a custom layer) is the fixture for scene, spatial,
+selection and resource tests; `SceneQuestions` answers the epic's acceptance questions with tool
+calls only.
+
+**Scene tools.**
+- `map_tree` returns the flattened depth-first tree as a page; nodes at the depth limit carry
+  `descendants` counts by kind instead of children. `kinds` filters items but containers are
+  still traversed.
+- `object_get` takes up to 50 object or face ids (default `detail: "full"`); one unknown id
+  fails the whole call with all unknown ids listed. Point vs brush entity is decided by whether
+  the entity has children. The layer color is not reported.
+- `objects_find` filters are AND-combined; globs (`*`, `?`) are case-insensitive. An unknown tag
+  name is a warning (`UNKNOWN_TAG`), not an error. Pages carry `counts` by kind for the whole
+  match set.
+- `map_text_get` pages by lines (`startLine`, `maxLines` ≤ 5000); a layer id stands for its
+  contents. Line numbers match the file on disk only right after loading or saving.
+
+**Spatial tools.**
+- `ray_pick` casts rays with its own loop over the world octree and the editor's face and
+  entity hit tests instead of `mdl::pick`, because `mdl::pick` always applies the editor
+  context and cannot include hidden objects. Brush faces are hit from the front only, so a ray
+  that starts inside a brush passes through it (as in the editor). `from: <id>` starts at the
+  object's bounds center and ignores the object and its members ("what is under this
+  entity?"). No hit is `hit: null`, not an error. Entity hits have no normal.
+- `Brush::intersects(bbox)` compares bounds only, so `space_check` uses a private exact
+  separating-axis test (face planes, box axes, edge × axis) on the box shrunk by 0.01; touching
+  surfaces do not overlap. With `solidOnly` (default) brushes of `trigger_*` entities are
+  ignored. Floor and ceiling come from five vertical rays (center and inset corners);
+  `supportedCorners` counts corners with a surface within 1 unit.
+- `map_plan_view` (text form only; the image form is E9) classifies cells by area at the given
+  height: `#` solid (world, `func_group`, `func_detail*`), `+` other brush entity, `t`
+  trigger, `.` open with a floor within `floorDepth` (1024) below the cell center, space for
+  void. The grid is aligned to multiples of `cellSize`; entity chars `P M I E L` in that
+  priority. Patches only count as floor.
+
+**Selection tools.** All tools that change the selection are `Mutation::Map` (selection changes
+are undoable editor commands), so each call is one undo step `AI: <title>` and supports dry run;
+`selection_get` is read-only and paginated. `selection_set` refuses to mix objects and faces
+(`INVALID_ARGUMENT`), world/layer ids (`WRONG_OBJECT_KIND`, hint: `select_by` layers) and
+non-selectable objects (`OBJECT_NOT_EDITABLE`, not checked in remove mode). `select_by` takes
+exactly one criterion; no match is `count: 0` plus a `NO_MATCH` warning. `select_faces_of`
+without `ids` or `face` uses the selected brushes (X7); `coplanar` defaults to true and uses
+`collectConnectedCoplanarFaces`. Preconditions of the `Map_Selection` functions are checked
+before calling them. Known gaps: `selection_get` cursors are keyed to the modification count,
+so a selection-only change does not mark a page `stale`; a failed "tall" selector brush is only
+logged by the editor.
+
+**Resources and notifications.**
+- New templates `trenchbroom://documents/{doc}/summary` (= `map_summary`) and
+  `trenchbroom://documents/{doc}/selection` (= `selectionDetails`, at most 100 items), listed
+  once per open document.
+- `DocumentState` reports `DocumentAspect::{Info, Summary, Selection, Status}` changes.
+  Summary: nodes added/removed/changed, visibility, locking, current layer, grid, entity
+  definitions, reload. Selection: selection changes and changes of selected nodes. The editor
+  status is updated on info and selection changes, grid, tool changes, lock preferences
+  (`AlignmentLock`, `UvLock`) and agent transactions opening or closing.
+- Info notifications and document open/close stay immediate. All other updates go through
+  `ServerState::scheduleResourceUpdate` / `scheduleDocumentUpdate`: they are coalesced into one
+  `notifications/resources/updated` per resource and scheduler turn, and nothing is recorded
+  while no session has subscriptions (the hooks run on every map change, e.g. during drags).
+- `McpHost::currentToolDidChangeNotifier(MapDocument&)` is new; `QtMcpHost` fires it from each
+  map window's `ToolBox` `toolActivatedNotifier` / `toolDeactivatedNotifier`.
