@@ -60,6 +60,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 namespace tb::mcp
 {
@@ -980,6 +981,99 @@ std::vector<std::string> referencedTools(
   return result;
 }
 
+/**
+ * Puts the per-run option overrides of compile_run ('toolArgs') before the parameters of
+ * the profile's enabled runTool tasks. A key names a compile tool as in ${name} (e.g.
+ * "rad"), the file name of the tool without extension (e.g. "sdHLRAD"), or the index of
+ * the task among the enabled tasks ("3"). Returns the changed tasks {task, tool,
+ * options, parameters}; unknown keys are an error.
+ */
+Result<Json, ToolError> applyToolArgs(
+  const mdl::GameConfig& gameConfig,
+  mdl::CompilationProfile& profile,
+  const Json& toolArgs)
+{
+  auto applied = Json::array();
+  auto used = std::set<std::string>{};
+  auto names = std::vector<std::string>{};
+  auto enabledIndex = size_t(0);
+  for (auto& task : profile.tasks)
+  {
+    if (!isTaskEnabled(task))
+    {
+      continue;
+    }
+    const auto index = enabledIndex++;
+    auto* runTool = std::get_if<mdl::CompilationRunTool>(&task);
+    if (!runTool)
+    {
+      continue;
+    }
+
+    auto taskNames = referencedTools(gameConfig, runTool->toolSpec);
+    if (taskNames.empty())
+    {
+      taskNames.push_back(std::filesystem::path{runTool->toolSpec}.stem().string());
+    }
+    names.insert(names.end(), taskNames.begin(), taskNames.end());
+
+    auto options = std::vector<std::string>{};
+    for (const auto& [key, value] : toolArgs.items())
+    {
+      const auto matches = key == std::to_string(index)
+                           || std::ranges::any_of(taskNames, [&](const auto& n) {
+                                return kdl::ci::str_is_equal(n, key);
+                              });
+      if (matches)
+      {
+        used.insert(key);
+        if (const auto trimmed = kdl::str_trim(value.get<std::string>());
+            !trimmed.empty())
+        {
+          options.push_back(trimmed);
+        }
+      }
+    }
+    if (!options.empty())
+    {
+      const auto joined = kdl::str_join(options, " ");
+      runTool->parameterSpec = kdl::str_trim(joined + " " + runTool->parameterSpec);
+      applied.push_back(Json{
+        {"task", index},
+        {"tool", runTool->toolSpec},
+        {"options", joined},
+        {"parameters", runTool->parameterSpec},
+      });
+    }
+  }
+
+  auto unknown = std::vector<std::string>{};
+  for (const auto& [key, value] : toolArgs.items())
+  {
+    if (!used.contains(key))
+    {
+      unknown.push_back(key);
+    }
+  }
+  if (!unknown.empty())
+  {
+    return makeError(
+      ErrorCode::InvalidArgument,
+      fmt::format(
+        "toolArgs names no runTool task of the profile '{}': {}.",
+        profile.name,
+        kdl::str_join(unknown, ", ")),
+      names.empty()
+        ? std::string{"The profile runs no tools."}
+        : fmt::format(
+            "Use a tool of the profile ({}) or the index of an enabled task, e.g. "
+            "{{\"toolArgs\": {{\"{}\": \"-extra\"}}}}.",
+            kdl::str_join(names, ", "),
+            names.back()));
+  }
+  return applied;
+}
+
 ToolResult compileRun(CallContext& context, const Args& args)
 {
   auto* compileHost = context.host().compileHost();
@@ -1065,6 +1159,17 @@ ToolResult compileRun(CallContext& context, const Args& args)
       return unknownProfileError(gameInfo, profileName);
     }
     profile = *found;
+  }
+
+  auto toolArgsApplied = Json::array();
+  if (const auto toolArgs = args.getOptional<Json>("toolArgs"))
+  {
+    auto applied = applyToolArgs(gameConfig, profile, *toolArgs);
+    if (applied.is_error())
+    {
+      return errorOf(applied);
+    }
+    toolArgsApplied = std::move(applied).value();
   }
 
   const auto tasks = enabledTasks(profile);
@@ -1162,6 +1267,7 @@ ToolResult compileRun(CallContext& context, const Args& args)
          tasks.size(),
          document.id)},
       {"tasks", std::move(tasksJson)},
+      {"toolArgs", std::move(toolArgsApplied)},
     };
   }
 
@@ -1186,7 +1292,9 @@ ToolResult compileRun(CallContext& context, const Args& args)
 
   // the editor status reports running compilations
   context.server().scheduleResourceUpdate("trenchbroom://editor/status");
-  return runStatus(*started.value());
+  auto status = runStatus(*started.value());
+  status["toolArgs"] = std::move(toolArgsApplied);
+  return status;
 }
 
 // compile_cancel
@@ -1813,10 +1921,15 @@ void registerCompileTools(ToolRegistry& registry)
         "tool the profile uses is not set up; warns RELATIVE_WAD_PATH if the map's WAD "
         "list has relative paths, which compile tools usually cannot open. Pass exactly "
         "one of preset and profile; "
-        "compile_presets_list describes what each preset runs per game. "
+        "compile_presets_list describes what each preset runs per game. 'toolArgs' "
+        "adds options to tools for this run only (put before the tool's parameters; the "
+        "saved profile is not changed): the key is the tool as in ${name} (e.g. rad), "
+        "the tool's file name (e.g. sdHLRAD) or the index of an enabled task; the result "
+        "lists them under toolArgs. "
         + Workflow
         + " Examples: {\"preset\": \"normal\"}; {\"profile\": \"Release\", \"test\": "
-          "true}")
+          "true}; {\"preset\": \"full\", \"toolArgs\": {\"rad\": \"-ambient 0.1 0.1 "
+          "0.1\", \"csg\": \"-wadautodetect\"}}")
       .input(object({
         field("profile", string())
           .describe("Name of a saved profile (compile_profiles_list)"),
@@ -1824,10 +1937,29 @@ void registerCompileTools(ToolRegistry& registry)
           .describe("Name of a preset: fast (no vis), normal or full quality"),
         field("test", boolean().defaultsTo(false))
           .describe("Only log the commands the tasks would run, without running them"),
+        field(
+          "toolArgs",
+          object({}).allowAdditionalProperties().withCheck(
+            [](const Json& value) -> std::optional<std::string> {
+              for (const auto& [key, option] : value.items())
+              {
+                if (!option.is_string())
+                {
+                  return "the options of '" + key + "' must be a string";
+                }
+              }
+              return std::nullopt;
+            }))
+          .describe(
+            "Options per tool for this run only, put before the tool's parameters: "
+            "{\"rad\": \"-ambient 0.1 0.1 0.1\"}; key: tool name as in ${name}, the "
+            "tool's file name, or the index of an enabled task"),
       }))
       .output(runStatusSchema(
         {
           field("wouldDo", wouldDoField()),
+          field("toolArgs", array(any()))
+            .describe("The tasks toolArgs changed: [{task, tool, options, parameters}]"),
           field("tasks", array(any()))
             .describe("Per enabled task; dry run: the task definitions"),
         },

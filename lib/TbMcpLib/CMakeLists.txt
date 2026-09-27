@@ -53,9 +53,11 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ComposedDefinitions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EngineRules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EngineTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityCreateTools.cpp
@@ -152,9 +154,11 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileUtils.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ComposedDefinitions.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ConsoleTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CsgUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EngineRules.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EngineTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h

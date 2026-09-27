@@ -18,6 +18,7 @@
  */
 
 #include "TestEnvironment.h"
+#include "fs/TestEnvironment.h"
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
@@ -42,6 +43,7 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -91,12 +93,21 @@ bool contains(const Json& list, const std::string& value)
   return std::ranges::find(list, Json(value)) != list.end();
 }
 
-/** issues.map with the entity classes of models.fgd. */
+/**
+ * A copy of issues.map with the entity classes of models.fgd. validators_set writes the
+ * map manifest next to the map, so the fixture itself is not loaded.
+ */
 ui::MapDocument& loadIssuesMap(McpToolFixture& fixture)
 {
-  auto& document = fixture.load(
+  static auto env = fs::TestEnvironment{};
+  const auto path = env.dir() / "issues.map";
+  std::filesystem::copy_file(
     getFixtureRoot() / "test" / "mcp" / "maps" / "issues.map",
-    {.mapFormat = mdl::MapFormat::Standard, .gameInfo = mdl::QuakeGameInfo});
+    path,
+    std::filesystem::copy_options::overwrite_existing);
+  std::filesystem::remove(env.dir() / "issues.mcp.json");
+  auto& document = fixture.load(
+    path, {.mapFormat = mdl::MapFormat::Standard, .gameInfo = mdl::QuakeGameInfo});
   fixture.call(
     "entity_definitions_set",
     {{"type", "external"},

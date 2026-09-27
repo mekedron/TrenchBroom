@@ -75,6 +75,11 @@ enum class ErrorCode
   DialogRequired,
   /** The action must not run from a tool call; a semantic tool does the same. */
   ActionRefused,
+  /**
+   * A name address (`group:@name`, `layer:@name`, `entity:@targetname`) matches more
+   * than one object; the error lists the candidates.
+   */
+  AmbiguousName,
   InternalError,
 };
 

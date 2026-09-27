@@ -27,7 +27,7 @@ namespace tb::mcp
 namespace
 {
 
-constexpr auto ErrorCodeNames = std::array<std::pair<ErrorCode, std::string_view>, 27>{{
+constexpr auto ErrorCodeNames = std::array<std::pair<ErrorCode, std::string_view>, 28>{{
   {ErrorCode::InvalidArgument, "INVALID_ARGUMENT"},
   {ErrorCode::ObjectNotFound, "OBJECT_NOT_FOUND"},
   {ErrorCode::WrongObjectKind, "WRONG_OBJECT_KIND"},
@@ -54,6 +54,7 @@ constexpr auto ErrorCodeNames = std::array<std::pair<ErrorCode, std::string_view
   {ErrorCode::CompileRunning, "COMPILE_RUNNING"},
   {ErrorCode::DialogRequired, "DIALOG_REQUIRED"},
   {ErrorCode::ActionRefused, "ACTION_REFUSED"},
+  {ErrorCode::AmbiguousName, "AMBIGUOUS_NAME"},
   {ErrorCode::InternalError, "INTERNAL_ERROR"},
 }};
 

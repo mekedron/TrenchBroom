@@ -19,8 +19,11 @@
 
 #include "mcp/ObjectIds.h"
 
+#include "mcp/JsonVm.h"
 #include "mdl/BrushNode.h"
+#include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/EntityProperties.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
@@ -31,10 +34,15 @@
 
 #include "kd/contracts.h"
 #include "kd/overload.h"
+#include "kd/string_compare.h"
+#include "kd/string_utils.h"
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <functional>
 
 namespace tb::mcp
 {
@@ -197,6 +205,89 @@ std::string formatObjectRef(const ObjectRef& ref)
   return result;
 }
 
+std::optional<NameAddress> parseNameAddress(const std::string_view id)
+{
+  const auto separator = id.find(":@");
+  if (separator == std::string_view::npos || separator + 2 >= id.size())
+  {
+    return std::nullopt;
+  }
+  const auto kind = objectKindFromString(id.substr(0, separator));
+  if (
+    !kind
+    || (*kind != ObjectKind::Layer && *kind != ObjectKind::Group && *kind != ObjectKind::Entity))
+  {
+    return std::nullopt;
+  }
+  return NameAddress{*kind, std::string{id.substr(separator + 2)}};
+}
+
+std::string formatNameAddress(const NameAddress& address)
+{
+  return std::string{toString(address.kind)} + ":@" + address.name;
+}
+
+namespace
+{
+
+/** The name a name address matches for the node, or nullopt. */
+std::optional<std::string> addressableName(const mdl::Node& node)
+{
+  if (const auto* layerNode = dynamic_cast<const mdl::LayerNode*>(&node))
+  {
+    return layerNode->name();
+  }
+  if (const auto* groupNode = dynamic_cast<const mdl::GroupNode*>(&node))
+  {
+    return groupNode->name();
+  }
+  if (const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(&node))
+  {
+    if (const auto* targetname =
+          entityNode->entity().property(mdl::EntityPropertyKeys::Targetname);
+        targetname && !targetname->empty())
+    {
+      return *targetname;
+    }
+  }
+  return std::nullopt;
+}
+
+void collectNamed(
+  mdl::Node& node,
+  const ObjectKind kind,
+  const std::function<bool(const std::string&)>& matches,
+  std::vector<mdl::Node*>& result)
+{
+  if (objectKindOf(node) == kind)
+  {
+    if (const auto name = addressableName(node); name && matches(*name))
+    {
+      result.push_back(&node);
+    }
+  }
+  // layers are children of the world, groups and entities can be anywhere below
+  if (kind != ObjectKind::Layer || objectKindOf(node) == ObjectKind::World)
+  {
+    for (auto* child : node.children())
+    {
+      collectNamed(*child, kind, matches, result);
+    }
+  }
+}
+
+} // namespace
+
+std::optional<std::string> nameAddressOf(const mdl::Node& node)
+{
+  const auto kind = objectKindOf(node);
+  if (const auto name = addressableName(node))
+  {
+    return formatNameAddress(NameAddress{kind, *name});
+  }
+  return std::nullopt;
+}
+
 IdRegistry::IdRegistry(ui::MapDocument& document)
   : m_document{document}
 {
@@ -240,6 +331,10 @@ std::string IdRegistry::formatFace(
 
 Result<mdl::Node*, ToolError> IdRegistry::resolve(const std::string_view id) const
 {
+  if (const auto address = parseNameAddress(id))
+  {
+    return resolve(*address);
+  }
   if (const auto ref = parseObjectRef(id))
   {
     return resolve(*ref);
@@ -249,7 +344,88 @@ Result<mdl::Node*, ToolError> IdRegistry::resolve(const std::string_view id) con
     ErrorCode::InvalidArgument,
     "'" + std::string{id} + "' is not a valid object id.",
     "Object ids look like 'brush:1042', 'entity:7', 'layer:default', 'world' or "
-    "'brush:1042/face:3'. Use ids returned by other tools.");
+    "'brush:1042/face:3'; layers, groups and entities can also be addressed by name, "
+    "e.g. 'group:@Bar'. Use ids returned by other tools.");
+}
+
+Result<mdl::Node*, ToolError> IdRegistry::resolve(const NameAddress& address) const
+{
+  const auto text = formatNameAddress(address);
+  auto& worldNode = m_document.map().worldNode();
+  const auto what = address.kind == ObjectKind::Entity
+                      ? std::string{"entity with the targetname"}
+                      : std::string{toString(address.kind)} + " named";
+
+  auto matches = std::vector<mdl::Node*>{};
+  collectNamed(
+    worldNode,
+    address.kind,
+    [&](const std::string& name) { return name == address.name; },
+    matches);
+  if (matches.empty())
+  {
+    collectNamed(
+      worldNode,
+      address.kind,
+      [&](const std::string& name) { return kdl::ci::str_is_equal(name, address.name); },
+      matches);
+  }
+
+  if (matches.size() == 1)
+  {
+    return matches.front();
+  }
+
+  if (matches.empty())
+  {
+    auto names = std::vector<std::string>{};
+    auto all = std::vector<mdl::Node*>{};
+    collectNamed(worldNode, address.kind, [](const auto&) { return true; }, all);
+    for (const auto* node : all)
+    {
+      if (names.size() == 10)
+      {
+        names.push_back("...");
+        break;
+      }
+      names.push_back("'" + *addressableName(*node) + "'");
+    }
+    return makeError(
+      ErrorCode::ObjectNotFound,
+      "There is no " + what + " '" + address.name + "' (" + text + ").",
+      names.empty() ? "The map has no such object; query the map for ids."
+                    : "Existing names: " + kdl::str_join(names, ", ") + ".",
+      {text});
+  }
+
+  auto candidates = Json::array();
+  auto candidateIds = std::vector<std::string>{};
+  for (const auto* node : matches)
+  {
+    candidateIds.push_back(format(*node));
+    auto candidate = Json{
+      {"id", candidateIds.back()},
+      {"name", *addressableName(*node)},
+      {"bounds", toJson(node->logicalBounds())},
+    };
+    if (const auto* parent = node->parent())
+    {
+      candidate["parent"] = format(*parent);
+    }
+    candidates.push_back(std::move(candidate));
+  }
+  auto error = makeError(
+    ErrorCode::AmbiguousName,
+    fmt::format(
+      "{} {} match {}.",
+      matches.size(),
+      address.kind == ObjectKind::Entity ? std::string{"entities"}
+                                         : std::string{toString(address.kind)} + "s",
+      text),
+    "Pass one of the candidates' ids, or rename the objects so that the name is unique.",
+    candidateIds);
+  error.details["candidates"] = std::move(candidates);
+  return error;
 }
 
 Result<mdl::Node*, ToolError> IdRegistry::resolve(const ObjectRef& ref) const

@@ -298,6 +298,47 @@ TEST_CASE("ManifestTools")
     }
   }
 
+  SECTION("validator settings are stored and restored when the map is opened")
+  {
+    const auto path = env.dir() / "v1.map";
+    saveMap(fixture, path);
+
+    auto result = fixture.call("validators_set", Json{{"disable", {"Z_FIGHTING"}}});
+    CHECK(
+      resultOf(result)["manifest"]
+      == Json{{"path", (env.dir() / "v1.mcp.json").string()}, {"pending", false}});
+    CHECK(
+      readManifest(env.dir() / "v1.mcp.json").disabledValidators
+      == std::vector<std::string>{"Z_FIGHTING"});
+
+    // a dry run writes nothing
+    fixture.call("validators_set", Json{{"enableAll", true}, {"dryRun", true}});
+    CHECK(readManifest(env.dir() / "v1.mcp.json").disabledValidators.size() == 1);
+
+    fixture.call("document_close", Json{{"unsavedChanges", "discard"}});
+    fixture.call("document_open", Json{{"path", path.string()}});
+    CHECK(fixture.call("validators_list")["disabled"] == Json{"Z_FIGHTING"});
+
+    // other manifest sections keep the setting
+    fixture.call("map_manifest_set", Json{{"notes", {"blockout"}}});
+    CHECK(readManifest(env.dir() / "v1.mcp.json").disabledValidators.size() == 1);
+
+    fixture.call("validators_set", Json{{"enableAll", true}});
+    CHECK(readManifest(env.dir() / "v1.mcp.json").disabledValidators.empty());
+  }
+
+  SECTION("an unsaved map keeps the validator setting until it is saved")
+  {
+    const auto result = fixture.call("validators_set", Json{{"disable", {"Z_FIGHTING"}}});
+    CHECK(resultOf(result)["manifest"] == Json{{"path", nullptr}, {"pending", true}});
+
+    const auto path = env.dir() / "v2.map";
+    saveMap(fixture, path);
+    CHECK(
+      readManifest(env.dir() / "v2.mcp.json").disabledValidators
+      == std::vector<std::string>{"Z_FIGHTING"});
+  }
+
   SECTION("cameras are saved and restored in a later session")
   {
     const auto path = env.dir() / "e1.map";

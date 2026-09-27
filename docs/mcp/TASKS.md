@@ -28,6 +28,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Done |
 | E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Done |
 | E16 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
+| E17 | Workflow and preview improvements from map work | 03 | v1 | In progress |
 
 ---
 
@@ -446,4 +447,32 @@ Goal: automation without the GUI and the remaining advanced editing features.
 - [ ] E16.9 `leak_locate` (start entity and likely gap from the point file).
 
 **Done when:** scenario S8 passes headless; all v2 tools have tests.
+
+---
+
+## E17. Workflow and preview improvements from map work
+
+Goal: remove the workarounds an agent needed while building a large Half-Life map with scripts, many imports and in-game checks.
+
+**Workflow**
+
+- [x] E17.1 Atomic replacement of generated parts: `layer_replace {layer, path}` and `map_import {replaceGroup | replaceLayer}` — delete and import as one undoable step that is safe to repeat.
+- [x] E17.2 Addresses by name that survive editor restarts: `group:@name`, `layer:@name` (and `entity:@targetname`), accepted wherever ids are.
+- [x] E17.3 Validator settings stored in the map manifest and restored when the document is opened.
+- [x] E17.4 `compile_run` takes per-run tool argument overrides (`toolArgs`, e.g. `-ambient` for RAD).
+
+**Checks**
+
+- [x] E17.5 Entity budget in `map_check`: entities that really spawn (without lights removed by the compiler, plus beams and runtime reserve), compared with the engine limit (Half-Life: 900 by default, up to 2048 with `-num_edicts`), from game-specific data.
+- [x] E17.6 NPC spawn check like the engine's: the monster hull, support under it, and overlap with world brushes, solid brush entities and other solid entities.
+
+**Entity definitions**
+
+- [x] E17.7 Composed entity definitions: the game's FGD, the compile tools' FGD when configured (e.g. sdHLT `func_detail`), and MCP additions (e.g. a model expression from the `model` key for `monster_generic` and `cycler`), written as one FGD next to the map and loaded for it.
+
+**Preview and assets**
+
+- [ ] E17.8 `bsp_preview`: render a compiled BSP with its lightmaps (and textures from the BSP or WADs) from agent cameras, without starting the game.
+- [ ] E17.9 `materials_pack`: build a WAD from images (palette, mip levels, transparent `{` textures).
+- [ ] E17.10 `game_capture`: render frames inside the running game from given cameras (copy of the BSP with cameras, launch, collect labelled frames).
 

@@ -121,6 +121,7 @@ Json layerJson(
   const auto& layer = layerNode.layer();
   auto result = Json{
     {"id", ids.format(layerNode)},
+    {"address", *nameAddressOf(layerNode)},
     {"name", layer.name()},
     {"default", layerNode.isDefaultLayer()},
     {"position", layerPosition(map, layerNode)},
@@ -139,6 +140,9 @@ Schema layerSchema()
 {
   return object({
     field("id", objectId({ObjectKind::Layer})).required().describe("Layer id"),
+    field("address", string())
+      .required()
+      .describe("Name address, e.g. 'layer:@Details'; survives editor restarts"),
     field("name", string()).required(),
     field("default", boolean()).required().describe("Whether this is the default layer"),
     field("position", integer())

@@ -77,7 +77,9 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `CallRunner`: the FIFO call queue, the "human is busy" gate, per-call transactions,
   dry runs, change reports, error mapping and the call log.
 - `ObjectIds` (`IdRegistry`): stable object ids such as `brush:1042`, based on
-  `mdl::Node::runtimeId()`, surviving undo/redo and linked group updates.
+  `mdl::Node::runtimeId()`, surviving undo/redo and linked group updates, and name addresses
+  (`layer:@name`, `group:@name`, `entity:@targetname`) that `CallRunner` resolves to ids when a
+  call runs.
 - `ChangeCollector`: created / modified / removed ids and introduced issues of a call (editor validators and
   the MCP placement checks), and their `issuesSummary`. A deferred check series (`checks: "defer"`,
   `DocumentState::deferredChecks`) keeps one collector across calls and reports the issues of all of them at once.
@@ -104,8 +106,8 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `CameraProjection` (`makeGlCamera`, `ImageProjection`): the one camera of the renderer and the core, pixel rays
   for `view_pick` and point projection; `Annotations`: labels, grids, compass and player drawn onto rendered
   images. Every snapshot gets a `snapshotId`; the `Session` keeps the cameras of the recent ones.
-- `MapManifest`: the per-map manifest `<name>.mcp.json` (spaces, key points, notes, agent cameras), kept in memory
-  for unsaved maps and written when the document is saved.
+- `MapManifest`: the per-map manifest `<name>.mcp.json` (spaces, key points, notes, agent cameras, the validators
+  turned off), kept in memory for unsaved maps and written when the document is saved.
 - `ConsoleBuffer`: the editor's console messages from editor start (filled by
   `McpConsoleHook` in `TbMcpUiLib`, by `FakeHost` in tests); `console_read` reads it, and
   every call result lists the warnings and errors logged while the call ran (`console`).
@@ -135,9 +137,14 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   `issues_list` reports them with the editor validators' issues, `issue_fix` applies the editor's quick fixes
   and the MCP checks' fixes, and `validators_set` turns validators and checks off per document
   (`DocumentState::disabledValidators`).
-- `tools/MapCheckTools`: `map_check`, the agent-oriented checks (entities in walls or floating, player start, entity
-  links, missing materials, entities outside rooms) with a suggested fix per finding, built on `PlacementChecks`,
-  `EntityModelUtils` and `SpaceAnalysis`.
+- `tools/MapCheckTools`: `map_check`, the agent-oriented checks (entities in walls or floating, monster spawns, player
+  start, entity links, missing materials, entities outside rooms, the entity budget) with a suggested fix per finding,
+  built on `PlacementChecks`, `EntityModelUtils`, `SpaceAnalysis` and `EngineRules`.
+- `tools/EngineRules` (public header, tested directly): engine data per game family (entity limits, classes the
+  compiler or the game removes, extra edicts, monster sizes and clipping hulls) and the emulation of a monster's
+  spawn (hull, overlap, drop to the floor) behind `map_check` npc_spawn / entity_budget and `entity_placement_check`.
+- `tools/ComposedDefinitions` (public header, tested directly): the composed FGD of `entity_definitions_compose`
+  (game FGD, the compile tools' FGD found next to the tools, MCP model expressions and missing classes).
 - `tools/ViewTools`: `grid_*`, the user camera tools and `view_layout_set` over `ViewHost`; `view_options_*`
   set the view preferences and the document's `EditorContext` directly.
 - `tools/ActionCatalog` (public header, tested directly): the MCP classification of every editor action (invoke /

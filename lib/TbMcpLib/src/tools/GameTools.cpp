@@ -33,6 +33,8 @@
 #include "mcp/Pagination.h"
 #include "mcp/ServerState.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/CompileUtils.h"
+#include "mcp/tools/ComposedDefinitions.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionFileSpec.h"
 #include "mdl/EntityDefinitionManager.h"
@@ -52,12 +54,17 @@
 #include "ui/MapDocument.h"
 
 #include "kd/string_compare.h"
+#include "kd/string_format.h"
 #include "kd/string_utils.h"
 
 #include <fmt/format.h>
 #include <fmt/std.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <ranges>
+#include <set>
 #include <sstream>
 
 namespace tb::mcp
@@ -497,6 +504,331 @@ void entityDefinitionsReload(CallContext& context, const Args&, ToolCompletion c
     result["loadMessages"] = toJson(context.loggedProblems());
     completion(std::move(result));
   });
+}
+
+// entity_definitions_compose
+
+/** The text of a file, or an empty string if it cannot be read. */
+std::string readText(const std::filesystem::path& path)
+{
+  auto stream = std::ifstream{path, std::ios::binary};
+  auto buffer = std::stringstream{};
+  buffer << stream.rdbuf();
+  return buffer.str();
+}
+
+/** The game's FGD to compose from: a builtin file name or a path. */
+Result<std::filesystem::path, ToolError> baseFgd(
+  const mdl::Map& map,
+  const std::optional<std::string>& argument,
+  const std::optional<std::filesystem::path>& previous,
+  const std::filesystem::path& output)
+{
+  const auto& gameConfig = map.gameInfo().gameConfig;
+  const auto isFgd = [](const std::filesystem::path& path) {
+    return kdl::ci::str_is_equal(path.extension().string(), ".fgd");
+  };
+  const auto builtin =
+    [&](const std::filesystem::path& name) -> std::optional<std::filesystem::path> {
+    const auto& paths = gameConfig.entityConfig.defFilePaths;
+    const auto it = std::ranges::find_if(paths, [&](const auto& path) {
+      return kdl::ci::str_is_equal(path.string(), name.string());
+    });
+    if (it == paths.end())
+    {
+      return std::nullopt;
+    }
+    return gameConfig.findConfigFile(*it);
+  };
+
+  auto result = std::optional<std::filesystem::path>{};
+  if (argument)
+  {
+    result = builtin(*argument);
+    if (!result)
+    {
+      result = resolveExternalPath(map, *argument);
+    }
+    if (!result)
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        fmt::format("The base FGD '{}' was not found.", *argument),
+        "Pass a builtin file of the game (entity_definitions_get) or an absolute path.");
+    }
+  }
+  else if (previous && pathExists(*previous))
+  {
+    result = previous;
+  }
+  else if (const auto spec = mdl::entityDefinitionFile(map);
+           spec && spec->type == mdl::EntityDefinitionFileSpec::Type::Builtin)
+  {
+    result = builtin(spec->path);
+  }
+  else if (
+    const auto external = spec ? resolveExternalPath(map, spec->path) : std::nullopt)
+  {
+    // a composed file (the map's own or another one) is replaced by its game source
+    const auto sources = composedFgdSources(readText(*external));
+    const auto game = std::ranges::find_if(
+      sources, [](const auto& source) { return source.first == "game"; });
+    if (game != sources.end())
+    {
+      result = game->second;
+    }
+    else if (external->lexically_normal() != output.lexically_normal())
+    {
+      result = external;
+    }
+  }
+  if (!result)
+  {
+    for (const auto& path : gameConfig.entityConfig.defFilePaths)
+    {
+      if (isFgd(path))
+      {
+        result = gameConfig.findConfigFile(path);
+        break;
+      }
+    }
+  }
+
+  if (!result || !isFgd(*result))
+  {
+    return makeError(
+      ErrorCode::Unsupported,
+      fmt::format(
+        "{} has no FGD to compose from{}.",
+        gameConfig.name,
+        result ? fmt::format(" ({} is not an FGD)", *result) : std::string{}),
+      "Composed entity definitions need FGD files; pass 'base' with an FGD.");
+  }
+  return *result;
+}
+
+ToolResult entityDefinitionsCompose(CallContext& context, const Args& args)
+{
+  auto& map = context.map();
+  const auto& documentGame = map.gameInfo();
+  const auto* managedGame =
+    context.host().gameManager().gameInfo(documentGame.gameConfig.name);
+  const auto& gameConfig = (managedGame ? *managedGame : documentGame).gameConfig;
+
+  auto output = std::filesystem::path{};
+  if (const auto path = args.getOptional<std::string>("path"))
+  {
+    output = *path;
+    if (!output.is_absolute())
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        fmt::format("'{}' is not an absolute path.", *path),
+        "Pass an absolute path, or omit it to write <map>.mcp.fgd next to the map.");
+    }
+  }
+  else if (map.path().is_absolute())
+  {
+    output = composedFgdPath(map.path());
+  }
+  else
+  {
+    return makeError(
+      ErrorCode::UnsavedChanges,
+      "The map has never been saved, so there is no folder to write the FGD to.",
+      "Save it first with document_save_as, or pass an absolute 'path'.");
+  }
+
+  // a composed file names its sources, so that regenerating it keeps them
+  auto previousGame = std::optional<std::filesystem::path>{};
+  auto previousCompiler = std::vector<std::filesystem::path>{};
+  if (pathExists(output))
+  {
+    const auto text = readText(output);
+    if (!text.starts_with(ComposedFgdMarker) && !args.get<bool>("overwrite"))
+    {
+      return makeError(
+        ErrorCode::FileExists,
+        fmt::format(
+          "{} exists and was not composed by entity_definitions_compose.", output),
+        "Pass overwrite: true to replace it, or another 'path'.");
+    }
+    for (const auto& [role, path] : composedFgdSources(text))
+    {
+      if (role == "game")
+      {
+        previousGame = path;
+      }
+      else if (pathExists(path))
+      {
+        previousCompiler.push_back(path);
+      }
+    }
+  }
+
+  auto base = baseFgd(map, args.getOptional<std::string>("base"), previousGame, output);
+  if (base.is_error())
+  {
+    return errorOf(base);
+  }
+
+  auto compilerFgds = std::vector<std::filesystem::path>{};
+  if (const auto path = args.getOptional<std::string>("compilerFgd"))
+  {
+    const auto resolved = resolveExternalPath(map, *path);
+    if (!resolved)
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        fmt::format("The compiler FGD '{}' was not found.", *path),
+        "Pass an absolute path, e.g. the sdhlt.fgd of sdHLT.");
+    }
+    compilerFgds.push_back(*resolved);
+  }
+  else if (args.get<bool>("includeCompilerFgd"))
+  {
+    compilerFgds =
+      !previousCompiler.empty() ? previousCompiler : findCompilerFgds(gameConfig);
+  }
+
+  auto parts = std::vector<FgdPart>{};
+  auto sources = Json::array();
+  const auto addPart = [&](
+                         const std::string& role,
+                         const std::filesystem::path& path) -> std::optional<ToolError> {
+    auto text = readFgdInlined(path);
+    if (text.is_error())
+    {
+      auto error = errorOf(text);
+      error.hint = "Check the path and the files it includes.";
+      return error;
+    }
+    sources.push_back(Json{
+      {"role", role},
+      {"path", path.string()},
+      {"classes", fgdClassNames(text.value()).size()},
+    });
+    parts.push_back(FgdPart{role, path, std::move(text).value()});
+    return std::nullopt;
+  };
+  if (auto error = addPart("game", base.value()))
+  {
+    return *error;
+  }
+  for (const auto& path : compilerFgds)
+  {
+    if (auto error = addPart("compiler", path))
+    {
+      return *error;
+    }
+  }
+
+  // MCP additions: model expressions on the last definition, missing classes
+  auto additions = Json::array();
+  if (args.get<bool>("mcpAdditions"))
+  {
+    const auto family = compileFamily(gameConfig);
+    const auto mcp = mcpAdditions(family ? toString(*family) : std::string_view{});
+    for (const auto& addition : mcp.models)
+    {
+      const auto applied = std::ranges::any_of(
+        parts | std::views::reverse,
+        [&](auto& part) { return applyModelAddition(part.text, addition); });
+      if (applied)
+      {
+        additions.push_back(Json{
+          {"classname", addition.classname},
+          {"kind", "model"},
+          {"definition", addition.property},
+          {"reason", addition.reason},
+        });
+      }
+    }
+
+    auto defined = std::set<std::string>{};
+    for (const auto& part : parts)
+    {
+      for (auto& name : fgdClassNames(part.text))
+      {
+        defined.insert(kdl::str_to_lower(name));
+      }
+    }
+    auto mcpText = std::string{};
+    for (const auto& addition : mcp.classes)
+    {
+      if (!defined.contains(kdl::str_to_lower(addition.classname)))
+      {
+        mcpText += addition.definition + "\n";
+        additions.push_back(Json{
+          {"classname", addition.classname},
+          {"kind", "class"},
+          {"definition", addition.definition},
+          {"reason", addition.reason},
+        });
+      }
+    }
+    if (!mcpText.empty())
+    {
+      parts.push_back(FgdPart{"mcp", {}, std::move(mcpText)});
+    }
+  }
+
+  const auto text = composeFgd(parts);
+  // next to the map, the file is referenced by its name, so the map folder can move
+  const auto spec = mdl::EntityDefinitionFileSpec::makeExternal(
+    map.path().is_absolute() && output.parent_path() == map.path().parent_path()
+      ? output.filename()
+      : output);
+
+  auto result = Json{
+    {"path", output.string()},
+    {"spec", spec.asString()},
+    {"sources", std::move(sources)},
+    {"additions", std::move(additions)},
+    {"bytes", text.size()},
+  };
+  if (compilerFgds.empty() && args.get<bool>("includeCompilerFgd"))
+  {
+    context.warn(
+      "NO_COMPILER_FGD",
+      "No FGD was found next to the configured compile tools (compile_tools_get); pass "
+      "'compilerFgd' to include one.");
+  }
+
+  if (context.dryRun())
+  {
+    result["wouldDo"] = fmt::format(
+      "write {} ({} parts) and load it as the map's entity definitions",
+      output,
+      parts.size());
+    return result;
+  }
+
+  {
+    auto error = std::error_code{};
+    std::filesystem::create_directories(output.parent_path(), error);
+    auto stream = std::ofstream{output, std::ios::binary | std::ios::trunc};
+    stream << text;
+    if (!stream)
+    {
+      return makeError(
+        ErrorCode::IoError,
+        fmt::format("{} cannot be written.", output),
+        "Check that the folder is writable, or pass another 'path'.");
+    }
+  }
+
+  if (mdl::entityDefinitionFile(map) == spec)
+  {
+    mdl::reloadEntityDefinitions(map);
+  }
+  else
+  {
+    mdl::setEntityDefinitionFile(map, spec);
+  }
+  warnAboutLoggedProblems(context);
+  result["entityDefinitions"] = entityDefinitionsJson(map);
+  return result;
 }
 
 // material collections
@@ -1097,6 +1429,65 @@ void registerGameTools(ToolRegistry& registry)
       .mutation(Mutation::Map)
       .idempotent()
       .handler(entityDefinitionsSet));
+
+  registry.add(
+    ToolDef{"entity_definitions_compose"}
+      .title("Compose Entity Definitions")
+      .description(
+        "Writes one FGD for the map, <map>.mcp.fgd next to it (or 'path'), and loads it "
+        "as the map's entity definitions (stored in worldspawn, one undo step; the "
+        "file itself stays). It joins, in order: the game's FGD ('base'; default: the "
+        "one the map uses, or the game's first builtin FGD), the compile tools' FGD "
+        "(default: *.fgd files next to the configured compile tools and in their parent "
+        "folder, e.g. sdHLT's sdhlt.fgd with func_detail, info_texlights and "
+        "light_surface; or 'compilerFgd'), and MCP additions (Half-Life: a model "
+        "expression from the model key for monster_generic, monster_furniture, cycler "
+        "and cycler_weapon, so their models render; func_detail when no FGD defines it). "
+        "Later parts override classes of the same name; @include files are inlined. The "
+        "file names its sources, so calling the tool again regenerates it with the same "
+        "ones (e.g. after the compile tools changed). A file that was not composed is "
+        "not overwritten without overwrite: true. dryRun reports the parts without "
+        "writing. Returns the path, the spec stored in the map, the sources with their "
+        "class counts, the additions and the loaded definitions. Examples: {}; "
+        "{\"compilerFgd\": \"/opt/sdhlt/tools/sdhlt.fgd\"}; {\"base\": "
+        "\"HalfLife.fgd\", \"includeCompilerFgd\": false}")
+      .input(object({
+        field("base", string().nonEmpty())
+          .describe(
+            "The game's FGD: a builtin file (entity_definitions_get) or a path. Default: "
+            "the FGD the map uses (or the composed file's game source), else the game's "
+            "first builtin FGD"),
+        field("compilerFgd", string().nonEmpty())
+          .describe("The compile tools' FGD (absolute path). Default: found next to the "
+                    "configured compile tools"),
+        field("includeCompilerFgd", boolean().defaultsTo(true))
+          .describe("Include the compile tools' FGD found next to the tools"),
+        field("mcpAdditions", boolean().defaultsTo(true))
+          .describe("Add the MCP model expressions and missing compiler classes"),
+        field("path", string().nonEmpty())
+          .describe("Absolute path of the FGD to write. Default: <map>.mcp.fgd"),
+        field("overwrite", boolean().defaultsTo(false))
+          .describe("Replace a file at path that was not composed by this tool"),
+      }))
+      .output(object({
+        field("path", string()).required().describe("The composed FGD"),
+        field("spec", string())
+          .required()
+          .describe("The entity definition file stored in the map"),
+        field("sources", array(any()))
+          .required()
+          .describe("[{role: game | compiler, path, classes}]"),
+        field("additions", array(any()))
+          .required()
+          .describe("[{classname, kind: model | class, definition, reason}]"),
+        field("bytes", integer()).required(),
+        field("entityDefinitions", any())
+          .describe("The loaded definitions, as entity_definitions_get"),
+        field("wouldDo", wouldDoField()),
+      }))
+      .mutation(Mutation::Map)
+      .idempotent()
+      .handler(entityDefinitionsCompose));
 
   registry.add(
     ToolDef{"entity_definitions_reload"}

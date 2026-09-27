@@ -676,6 +676,52 @@ TEST_CASE("CompileTools")
       CHECK(compile.started[0].profile.name == "Quick");
     }
 
+    SECTION("toolArgs add options for one run")
+    {
+      createSavedDocument(fixture, env);
+      configureTools(fixture, env, "Quake");
+
+      const auto dryRun = fixture.call(
+        "compile_run",
+        Json{
+          {"preset", "normal"},
+          {"toolArgs", {{"light", "-dirt"}, {"1", "-nopercent"}}},
+          {"dryRun", true}})["result"];
+      REQUIRE(dryRun["toolArgs"].size() == 2);
+      CHECK(dryRun["toolArgs"][0]["task"] == 1);
+      CHECK(dryRun["toolArgs"][0]["options"] == "-nopercent");
+      CHECK(dryRun["toolArgs"][1]["options"] == "-dirt");
+      CHECK(
+        dryRun["tasks"][3]["parameters"].get<std::string>().starts_with("-dirt -extra"));
+      CHECK(compile.started.empty());
+
+      // unknown tools and invalid options
+      const auto error = fixture.callExpectingError(
+        "compile_run", Json{{"preset", "normal"}, {"toolArgs", {{"rad", "-extra"}}}});
+      CHECK(error.code == ErrorCode::InvalidArgument);
+      CHECK(error.hint.find("light") != std::string::npos);
+      CHECK(
+        fixture
+          .callExpectingError(
+            "compile_run", Json{{"preset", "normal"}, {"toolArgs", {{"light", 3}}}})
+          .code
+        == ErrorCode::InvalidArgument);
+
+      const auto result = fixture.call(
+        "compile_run",
+        Json{{"preset", "normal"}, {"toolArgs", {{"light", "-dirt"}}}})["result"];
+      REQUIRE(result["toolArgs"].size() == 1);
+      REQUIRE(compile.started.size() == 1);
+      const auto& tasks = compile.started[0].profile.tasks;
+      const auto* light = std::get_if<mdl::CompilationRunTool>(&tasks[3]);
+      REQUIRE(light != nullptr);
+      CHECK(light->parameterSpec.starts_with("-dirt -extra "));
+
+      // the saved preset is not changed
+      const auto presets = fixture.call("compile_presets_list")["presets"];
+      CHECK(presets.dump().find("-dirt") == std::string::npos);
+    }
+
     SECTION("the editor is compiling")
     {
       createSavedDocument(fixture, env);

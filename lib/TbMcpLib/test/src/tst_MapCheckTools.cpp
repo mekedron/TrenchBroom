@@ -202,7 +202,14 @@ TEST_CASE("MapCheckTools")
     CHECK(map.modificationCount() == modificationCount);
     CHECK(
       result["checksRun"]
-      == Json::array({"placement", "player_start", "links", "materials", "rooms"}));
+      == Json::array(
+        {"placement",
+         "npc_spawn",
+         "player_start",
+         "links",
+         "materials",
+         "rooms",
+         "entity_budget"}));
     CHECK(result["skipped"] == Json::array());
     CHECK(result["total"] == result["items"].size());
     for (const auto& item : result["items"])
@@ -663,13 +670,17 @@ TEST_CASE("MapCheckTools")
     }
 
     const auto one = fixture.call("map_check", {{"ids", Json::array({soldier})}});
-    CHECK(one["checksRun"] == Json::array({"placement", "links", "materials", "rooms"}));
+    CHECK(
+      one["checksRun"]
+      == Json::array({"placement", "npc_spawn", "links", "materials", "rooms"}));
+    const auto mapLevel = [](const std::string& check) {
+      return Json{
+        {"check", check},
+        {"reason", "A map-level check; with ids it runs only when requested in checks."}};
+    };
     CHECK(
       one["skipped"]
-      == Json::array({Json{
-        {"check", "player_start"},
-        {"reason",
-         "A map-level check; with ids it runs only when requested in checks."}}}));
+      == Json::array({mapLevel("player_start"), mapLevel("entity_budget")}));
     REQUIRE(one["total"] == 1);
     CHECK(one["items"][0]["objectId"] == soldier);
 
@@ -730,13 +741,13 @@ TEST_CASE("MapCheckTools")
       fixture.scheduler().runPending();
       REQUIRE(stream->response.has_value());
       CHECK((*stream->response)["result"]["isError"] == false);
-      REQUIRE(stream->notifications.size() == 6);
+      REQUIRE(stream->notifications.size() == 8);
       for (const auto& notification : stream->notifications)
       {
         CHECK(notification["method"] == "notifications/progress");
-        CHECK(notification["params"]["total"] == 5);
+        CHECK(notification["params"]["total"] == 7);
       }
-      CHECK(stream->notifications.back()["params"]["progress"] == 5);
+      CHECK(stream->notifications.back()["params"]["progress"] == 7);
     }
 
     SECTION("can be cancelled")

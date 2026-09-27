@@ -167,7 +167,8 @@ public:
   /**
    * The validators turned off with validators_set: editor validator codes (e.g.
    * EMPTY_PROPERTY_VALUE) and MCP check names (e.g. Z_FIGHTING). Their issues are
-   * neither listed nor reported per call.
+   * neither listed nor reported per call. Stored in the map manifest and restored from
+   * it when the document state is created and when another map is loaded.
    */
   std::set<std::string> disabledValidators;
   /** The open deferred check series per session id. */
@@ -186,6 +187,8 @@ public:
   ~DocumentState();
 
 private:
+  /** Reads the turned-off validators from the manifest (none if it cannot be read). */
+  void restoreDisabledValidators();
   void didChange(DocumentAspect aspect);
   void infoDidChange();
   void nodesDidChange(const std::vector<mdl::Node*>& nodes);

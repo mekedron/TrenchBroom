@@ -22,7 +22,9 @@
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/Group.h"
 #include "mdl/GroupNode.h"
+#include "mdl/Layer.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Geometry.h"
@@ -68,6 +70,22 @@ TEST_CASE("ObjectRef")
     CHECK(parseObjectRef("world:1") == std::nullopt);
     CHECK(parseObjectRef("entity:1/face:0") == std::nullopt);
     CHECK(parseObjectRef("brush:1/edge:0") == std::nullopt);
+  }
+
+  SECTION("parseNameAddress and formatNameAddress")
+  {
+    CHECK(parseNameAddress("group:@Bar") == NameAddress{ObjectKind::Group, "Bar"});
+    CHECK(
+      parseNameAddress("layer:@Bar details/2")
+      == NameAddress{ObjectKind::Layer, "Bar details/2"});
+    CHECK(parseNameAddress("entity:@door1") == NameAddress{ObjectKind::Entity, "door1"});
+    CHECK(parseNameAddress("group:@") == std::nullopt);
+    CHECK(parseNameAddress("brush:@x") == std::nullopt);
+    CHECK(parseNameAddress("world:@x") == std::nullopt);
+    CHECK(parseNameAddress("group:3") == std::nullopt);
+    CHECK(parseObjectRef("group:@Bar") == std::nullopt);
+
+    CHECK(formatNameAddress(NameAddress{ObjectKind::Group, "Bar"}) == "group:@Bar");
   }
 
   SECTION("formatObjectRef")
@@ -126,6 +144,45 @@ TEST_CASE("IdRegistry")
       const auto error = errorOf(ids.resolve(wrongKind));
       CHECK(error.code == ErrorCode::WrongObjectKind);
       CHECK(error.hint.find(brushId) != std::string::npos);
+    }
+
+    SECTION("resolves name addresses")
+    {
+      auto* layerNode = new mdl::LayerNode{mdl::Layer{"Details"}};
+      auto* groupNode = new mdl::GroupNode{mdl::Group{"Bar"}};
+      auto* otherGroupNode = new mdl::GroupNode{mdl::Group{"Stool"}};
+      auto* sameNameGroupNode = new mdl::GroupNode{mdl::Group{"Stool"}};
+      auto* namedEntityNode = new mdl::EntityNode{
+        mdl::Entity{{{"classname", "func_door"}, {"targetname", "door1"}}}};
+      mdl::addNodes(map, {{&map.worldNode(), {layerNode}}});
+      mdl::addNodes(
+        map,
+        {{layerNode, {groupNode, otherGroupNode, sameNameGroupNode, namedEntityNode}}});
+
+      CHECK(ids.resolve("layer:@Details").value() == layerNode);
+      CHECK(
+        ids.resolve("layer:@Default Layer").value() == map.worldNode().defaultLayer());
+      CHECK(ids.resolve("group:@Bar").value() == groupNode);
+      CHECK(ids.resolve("group:@bar").value() == groupNode);
+      CHECK(ids.resolve("entity:@door1").value() == namedEntityNode);
+
+      CHECK(nameAddressOf(*groupNode) == "group:@Bar");
+      CHECK(nameAddressOf(*namedEntityNode) == "entity:@door1");
+      CHECK(nameAddressOf(*entityNode) == std::nullopt);
+      CHECK(nameAddressOf(*brushNode) == std::nullopt);
+
+      const auto missing = errorOf(ids.resolve("group:@Table"));
+      CHECK(missing.code == ErrorCode::ObjectNotFound);
+      CHECK(missing.hint.find("'Bar'") != std::string::npos);
+
+      const auto ambiguous = errorOf(ids.resolve("group:@Stool"));
+      CHECK(ambiguous.code == ErrorCode::AmbiguousName);
+      CHECK(
+        ambiguous.objectIds
+        == std::vector<std::string>{
+          ids.format(*otherGroupNode), ids.format(*sameNameGroupNode)});
+      CHECK(ambiguous.details["candidates"].size() == 2);
+      CHECK(ambiguous.details["candidates"][0]["parent"] == ids.format(*layerNode));
     }
 
     SECTION("reports invalid face indices")

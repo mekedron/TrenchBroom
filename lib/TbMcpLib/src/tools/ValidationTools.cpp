@@ -22,6 +22,7 @@
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
 #include "mcp/ChangeCollector.h"
+#include "mcp/MapManifest.h"
 #include "mcp/ObjectIds.h"
 #include "mcp/Pagination.h"
 #include "mcp/Schema.h"
@@ -1321,8 +1322,39 @@ ToolResult validatorsSet(CallContext& context, const Args& args)
     context.server().scheduleDocumentUpdate(context.document(), DocumentAspect::Issues);
   }
 
+  // the setting is kept in the map manifest and restored when the map is opened
+  auto& store = context.documentState().manifest;
+  if (!context.dryRun())
+  {
+    auto manifest = store.get();
+    if (manifest.is_error())
+    {
+      context.warn(
+        "MANIFEST_NOT_WRITTEN",
+        std::get<std::string>(manifest.error())
+          + " The validator setting applies until the document is closed; fix the "
+            "manifest with map_manifest_set (overwriteInvalid) to keep it.");
+    }
+    else if (const auto names =
+               std::vector<std::string>{disabled.begin(), disabled.end()};
+             names != manifest.value().disabledValidators)
+    {
+      auto updated = std::move(manifest).value();
+      updated.disabledValidators = names;
+      if (auto stored = store.set(std::move(updated)); stored.is_error())
+      {
+        context.warn("MANIFEST_NOT_WRITTEN", std::get<std::string>(stored.error()));
+      }
+    }
+  }
+
   auto result = validatorsJson(context.map(), disabled);
   result["changed"] = std::move(changed);
+  const auto path = store.filePath();
+  result["manifest"] = Json{
+    {"path", path ? Json(path->string()) : Json(nullptr)},
+    {"pending", store.pending()},
+  };
   return result;
 }
 
@@ -1622,9 +1654,11 @@ void registerValidationTools(ToolRegistry& registry)
         "neither listed by issues_list and the issues resource nor reported in "
         "issuesIntroduced, and turned-off MCP checks do not run after each call (e.g. "
         "turn off ENTITY_OUTSIDE_HULL while blocking out an unsealed map). The setting "
-        "lasts while the document is open and does not change the editor's Issues "
-        "view (not undoable). Returns all validators, the turned-off ones (disabled) "
-        "and the ones this call changed. Examples: {\"disable\": [\"Z_FIGHTING\", "
+        "is stored in the map manifest (<map>.mcp.json, disabledValidators; for a map "
+        "that was never saved, when it is saved) and restored when the map is opened; "
+        "it does not change the editor's Issues view (not undoable). Returns all "
+        "validators, the turned-off ones (disabled), the ones this call changed and "
+        "the manifest {path, pending}. Examples: {\"disable\": [\"Z_FIGHTING\", "
         "\"EMPTY_PROPERTY_VALUE\"]}; {\"enableAll\": true}")
       .input(object({
         field("enable", array(string()).nonEmpty())
@@ -1638,6 +1672,10 @@ void registerValidationTools(ToolRegistry& registry)
         field("validators", array(validatorSchema)).required(),
         field("disabled", array(string())).required(),
         field("changed", array(string())).required(),
+        field("manifest", any())
+          .required()
+          .describe("{path, pending}: the manifest that keeps the setting; pending "
+                    "until a never saved map is saved"),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)

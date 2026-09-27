@@ -40,6 +40,7 @@
 #include "mdl/BrushFace.h"
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityProperties.h"
@@ -56,9 +57,11 @@
 #include "mdl/MapReader.h"
 #include "mdl/Map_CopyPaste.h"
 #include "mdl/Map_Geometry.h"
+#include "mdl/Map_Groups.h"
 #include "mdl/Map_Layers.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/ModelUtils.h"
 #include "mdl/Node.h"
 #include "mdl/NodeWriter.h"
 #include "mdl/PasteType.h"
@@ -406,10 +409,15 @@ ToolResult pasteObjects(
         "Pass an editable layer, or close the open group first (group_close).",
         {ids.format(*targetLayer)});
     }
+    const auto moved = pasted;
     mdl::moveSelectedNodesToLayer(map, targetLayer);
+    // objects moved into a hidden or locked layer are not selected
+    pasted = map.selection().nodes.empty() ? moved : map.selection().nodes;
   }
-
-  pasted = map.selection().nodes;
+  else
+  {
+    pasted = map.selection().nodes;
+  }
   if (
     auto error = checkInsideWorldBounds(
       pasted, map, ids, "Choose a position inside the world bounds."))
@@ -1255,6 +1263,263 @@ ToolResult mapFileInspect(CallContext& context, const Args& args)
   };
 }
 
+// map_import with replaceLayer / replaceGroup, layer_replace
+
+/** What an import replaces: the objects of a layer, or a group. */
+struct Replacement
+{
+  ObjectKind kind = ObjectKind::Layer;
+  /** The name of the layer or group. */
+  std::string name;
+  /** The layer that receives the imported objects (nullptr: create it). */
+  mdl::LayerNode* layer = nullptr;
+  /** replaceGroup: the group that contains the replaced group, if any. */
+  mdl::GroupNode* parentGroup = nullptr;
+  /** The objects that are deleted. */
+  std::vector<mdl::Node*> removed;
+  /** No layer or group had the name; the import creates it. */
+  bool created = false;
+};
+
+/**
+ * Resolves the layer or group to replace: an id, a name address or a plain name. A plain
+ * name that no layer or group has is created by the import, so that a replacement can be
+ * repeated from the first run on.
+ */
+Result<std::optional<Replacement>, ToolError> replacementArgument(
+  CallContext& context, const Args& args)
+{
+  const auto layerValue = args.getOptional<std::string>("replaceLayer");
+  const auto groupValue = args.getOptional<std::string>("replaceGroup");
+  if (!layerValue && !groupValue)
+  {
+    return std::nullopt;
+  }
+  if (layerValue && groupValue)
+  {
+    return makeError(
+      ErrorCode::InvalidArgument,
+      "Pass either 'replaceLayer' or 'replaceGroup', not both.",
+      "replaceLayer replaces the objects of a layer, replaceGroup one group.");
+  }
+
+  const auto& ids = context.ids();
+  const auto kind = layerValue ? ObjectKind::Layer : ObjectKind::Group;
+  const auto& value = layerValue ? *layerValue : *groupValue;
+  const auto key = layerValue ? "replaceLayer" : "replaceGroup";
+
+  auto* node = static_cast<mdl::Node*>(nullptr);
+  const auto& name = value;
+  if (parseNameAddress(value) || parseObjectRef(value))
+  {
+    auto resolved = ids.resolve(value);
+    if (resolved.is_error())
+    {
+      return errorOf(resolved);
+    }
+    node = resolved.value();
+    if (objectKindOf(*node) != kind)
+    {
+      return makeError(
+        ErrorCode::WrongObjectKind,
+        fmt::format("'{}' of {} is not a {}.", value, key, toString(kind)),
+        fmt::format("Pass a {} id, a name address or a name.", toString(kind)),
+        {ids.format(*node)});
+    }
+  }
+  else
+  {
+    auto resolved = ids.resolve(NameAddress{kind, value});
+    if (resolved.is_success())
+    {
+      node = resolved.value();
+    }
+    else if (errorOf(resolved).code != ErrorCode::ObjectNotFound)
+    {
+      return errorOf(resolved);
+    }
+  }
+
+  auto replacement = Replacement{};
+  replacement.kind = kind;
+  if (auto* layerNode = dynamic_cast<mdl::LayerNode*>(node))
+  {
+    replacement.name = layerNode->name();
+    replacement.layer = layerNode;
+    replacement.removed = layerNode->children();
+  }
+  else if (auto* groupNode = dynamic_cast<mdl::GroupNode*>(node))
+  {
+    replacement.name = groupNode->name();
+    replacement.layer = mdl::findContainingLayer(groupNode);
+    replacement.parentGroup = dynamic_cast<mdl::GroupNode*>(groupNode->parent());
+    replacement.removed = {groupNode};
+  }
+  else
+  {
+    // created by the import; a new group goes into the target layer
+    replacement.name = name;
+    replacement.created = true;
+    if (kind == ObjectKind::Group)
+    {
+      auto targetLayer = targetLayerArgument(context, args);
+      if (targetLayer.is_error())
+      {
+        return errorOf(targetLayer);
+      }
+      replacement.layer = targetLayer.value()
+                            ? targetLayer.value()
+                            : context.map().editorContext().currentLayer();
+    }
+  }
+
+  if (node && args.has("targetLayer"))
+  {
+    return makeError(
+      ErrorCode::InvalidArgument,
+      fmt::format("'targetLayer' cannot be combined with an existing {}.", key),
+      "The imported objects replace the old ones where they are; omit targetLayer.");
+  }
+  if (replacement.layer && replacement.layer->locked())
+  {
+    return makeError(
+      ErrorCode::ObjectNotEditable,
+      fmt::format("Layer '{}' is locked.", replacement.layer->name()),
+      fmt::format(
+        "Unlock it with layer_set_state {{\"layer\": \"{}\", \"locked\": false}}.",
+        ids.format(*replacement.layer)),
+      {ids.format(*replacement.layer)});
+  }
+  return replacement;
+}
+
+/** Whether the node is one of the nodes or inside one of them. */
+bool isInside(const mdl::Node* node, const std::vector<mdl::Node*>& nodes)
+{
+  for (; node; node = node->parent())
+  {
+    if (std::ranges::find(nodes, node) != nodes.end())
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Prepares the import of a replacement: closes open groups so that the imported objects
+ * go into the layer, and creates the layer if needed.
+ */
+Result<void, ToolError> prepareReplacement(CallContext& context, Replacement& replacement)
+{
+  auto& map = context.map();
+
+  if (const auto* openGroup = map.editorContext().currentGroup())
+  {
+    const auto closedReplaced = isInside(openGroup, replacement.removed);
+    while (map.editorContext().currentGroup())
+    {
+      mdl::closeGroup(map);
+    }
+    if (!closedReplaced)
+    {
+      context.warn(
+        "GROUP_CLOSED",
+        "The open groups were closed so that the imported objects go into the layer.");
+    }
+  }
+
+  if (!replacement.layer)
+  {
+    auto& worldNode = map.worldNode();
+    const auto customLayers = worldNode.customLayersUserSorted();
+    auto layer = mdl::Layer{replacement.name};
+    layer.setSortIndex(
+      !customLayers.empty() ? customLayers.back()->layer().sortIndex() + 1 : 0);
+    auto* layerNode = new mdl::LayerNode{std::move(layer)};
+    if (mdl::addNodes(map, {{&worldNode, {layerNode}}}).empty())
+    {
+      return context.operationFailed(
+        "The layer '" + replacement.name + "' could not be created.");
+    }
+    replacement.layer = layerNode;
+  }
+  return Result<void, ToolError>{};
+}
+
+/**
+ * Deletes the replaced objects after the import (so that a parent group of a replaced
+ * group, which the new group has joined, is not removed as empty) and selects the
+ * imported objects again. Returns the number of deleted objects including their contents.
+ */
+size_t removeReplaced(
+  CallContext& context,
+  const Replacement& replacement,
+  const std::vector<mdl::Node*>& imported)
+{
+  auto& map = context.map();
+  auto count = size_t(0);
+  for (const auto* node : replacement.removed)
+  {
+    count += 1 + node->descendantCount();
+  }
+  if (!replacement.removed.empty())
+  {
+    mdl::deselectAll(map);
+    mdl::removeNodes(map, replacement.removed);
+    const auto& editorContext = map.editorContext();
+    auto selectable = std::vector<mdl::Node*>{};
+    std::ranges::copy_if(imported, std::back_inserter(selectable), [&](const auto* node) {
+      return editorContext.selectable(*node);
+    });
+    mdl::selectNodes(map, selectable);
+  }
+  return count;
+}
+
+/**
+ * Puts the imported (selected) objects in their place: into one group with the replaced
+ * group's name (an imported single group is renamed instead), inside the replaced group's
+ * parent group.
+ */
+Result<mdl::GroupNode*, ToolError> groupImported(
+  CallContext& context, const Replacement& replacement, std::vector<mdl::Node*>& imported)
+{
+  auto& map = context.map();
+  auto* groupNode = static_cast<mdl::GroupNode*>(nullptr);
+  if (imported.size() == 1 && dynamic_cast<mdl::GroupNode*>(imported.front()))
+  {
+    groupNode = static_cast<mdl::GroupNode*>(imported.front());
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, {groupNode});
+    mdl::renameSelectedGroups(map, replacement.name);
+  }
+  else
+  {
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, imported);
+    groupNode = mdl::groupSelectedNodes(map, replacement.name);
+    if (!groupNode)
+    {
+      return context.operationFailed(
+        "The imported objects could not be grouped as '" + replacement.name + "'.");
+    }
+  }
+
+  if (replacement.parentGroup && groupNode->parent() != replacement.parentGroup)
+  {
+    mdl::deselectAll(map);
+    if (!mdl::reparentNodes(map, {{replacement.parentGroup, {groupNode}}}))
+    {
+      return context.operationFailed(
+        "The group could not be moved into "
+        + context.ids().format(*replacement.parentGroup) + ".");
+    }
+  }
+  imported = {groupNode};
+  return groupNode;
+}
+
 // map_import
 
 ToolResult mapImport(CallContext& context, const Args& args)
@@ -1263,6 +1528,11 @@ ToolResult mapImport(CallContext& context, const Args& args)
   if (placement.is_error())
   {
     return errorOf(placement);
+  }
+  auto replacement = replacementArgument(context, args);
+  if (replacement.is_error())
+  {
+    return errorOf(replacement);
   }
   auto targetLayer = targetLayerArgument(context, args);
   if (targetLayer.is_error())
@@ -1288,14 +1558,65 @@ ToolResult mapImport(CallContext& context, const Args& args)
   auto& map = context.map();
   const auto text = serializeNodes(*sourceMap.world, nodes.value(), map.taskManager());
 
+  // a replacement deletes the old objects in the same undo step
+  auto plan = std::move(replacement).value();
+  if (plan)
+  {
+    if (auto prepared = prepareReplacement(context, *plan); prepared.is_error())
+    {
+      return errorOf(prepared);
+    }
+  }
+
   auto result = pasteObjects(
-    context, text, placement.value(), targetLayer.value(), uvModeArgument(args));
+    context,
+    text,
+    placement.value(),
+    plan ? plan->layer : targetLayer.value(),
+    uvModeArgument(args));
   if (result.is_error())
   {
     return result;
   }
 
   auto json = std::move(result).value();
+  if (plan)
+  {
+    auto& ids = context.ids();
+    auto imported = std::vector<mdl::Node*>{};
+    for (const auto& id : json["ids"])
+    {
+      imported.push_back(ids.resolve(id.get<std::string>()).value());
+    }
+
+    auto replaced = Json{
+      {"kind", toString(plan->kind)},
+      {"created", plan->created},
+      {"removedObjects", 0},
+      {"importedObjects", json["count"]},
+    };
+    if (plan->kind == ObjectKind::Group)
+    {
+      auto group = groupImported(context, *plan, imported);
+      if (group.is_error())
+      {
+        return errorOf(group);
+      }
+      replaced["removedObjects"] = removeReplaced(context, *plan, imported);
+      replaced["group"] = ids.format(*group.value());
+      replaced["address"] = *nameAddressOf(*group.value());
+      json["ids"] = formatIds(imported, ids);
+      json["objects"] = summaries(imported, ids);
+      json["count"] = imported.size();
+    }
+    else
+    {
+      replaced["removedObjects"] = removeReplaced(context, *plan, imported);
+      replaced["layer"] = ids.format(*plan->layer);
+      replaced["address"] = *nameAddressOf(*plan->layer);
+    }
+    json["replaced"] = std::move(replaced);
+  }
   json["path"] = sourceMap.path.string();
   json["sourceFormat"] = mdl::formatName(sourceMap.sourceFormat);
   json["formatSource"] = sourceMap.formatSource;
@@ -1304,6 +1625,20 @@ ToolResult mapImport(CallContext& context, const Args& args)
   json["sourceObjects"] = nodes.value().size();
   json.erase("pasteType");
   return json;
+}
+
+ToolResult layerReplace(CallContext& context, const Args& args)
+{
+  // map_import with replaceLayer; 'sourceLayer' is map_import's 'layer' filter
+  auto json = args.json();
+  json["replaceLayer"] = json["layer"];
+  json.erase("layer");
+  if (auto sourceLayer = json.find("sourceLayer"); sourceLayer != json.end())
+  {
+    json["layer"] = *sourceLayer;
+    json.erase(sourceLayer);
+  }
+  return mapImport(context, Args{std::move(json)});
 }
 
 // Schemas
@@ -1516,16 +1851,11 @@ void registerClipboardTools(ToolRegistry& registry)
       .idempotent()
       .handler(mapFileInspect));
 
-  auto importInput = std::vector<Field>{
-    field("path", string().nonEmpty()).required().describe("Absolute path of the map"),
-    field(
-      "layer",
-      oneOf({
-        string().nonEmpty().describe("Layer name"),
-        integer().min(0).describe("Layer index (0 = default layer)"),
-      }))
-      .describe(
-        "Only objects in this layer of the file: name or index (0 = default layer)"),
+  const auto sourceLayerSchema = oneOf({
+    string().nonEmpty().describe("Layer name"),
+    integer().min(0).describe("Layer index (0 = default layer)"),
+  });
+  auto sourceFilters = std::vector<Field>{
     field("group", string().nonEmpty())
       .describe("Only groups with this name (outermost matches, with their contents)"),
     field("classname", string().nonEmpty())
@@ -1537,8 +1867,33 @@ void registerClipboardTools(ToolRegistry& registry)
     field("regionMode", enumOf({"intersects", "inside"}).defaultsTo("intersects"))
       .describe("'intersects' (overlap) or 'inside' (bounds within the region)"),
   };
+  auto importInput = std::vector<Field>{
+    field("path", string().nonEmpty()).required().describe("Absolute path of the map"),
+    field("layer", sourceLayerSchema)
+      .describe(
+        "Only objects in this layer of the file: name or index (0 = default layer)"),
+  };
+  importInput.insert(importInput.end(), sourceFilters.begin(), sourceFilters.end());
+  importInput.push_back(
+    field("replaceLayer", string().nonEmpty())
+      .describe(
+        "Replace the objects of this layer of the document (id, 'layer:@name' or a "
+        "name; a name no layer has creates the layer) with the imported ones, in the "
+        "same undo step"));
+  importInput.push_back(
+    field("replaceGroup", string().nonEmpty())
+      .describe(
+        "Replace this group of the document (id, 'group:@name' or a name; a name no "
+        "group has creates the group) with a group of the same name holding the "
+        "imported objects, in the same undo step"));
   addPlacementFields(importInput);
+  auto replacedOutput =
+    field("replaced", any())
+      .describe(
+        "With replaceLayer / replaceGroup: {kind, layer | group, address, created, "
+        "removedObjects (including contents), importedObjects}");
   auto importOutput = pasteOutputFields();
+  importOutput.push_back(replacedOutput);
   importOutput.push_back(field("path", string()).required());
   importOutput.push_back(
     field("sourceFormat", string()).required().describe("The file's map format"));
@@ -1554,6 +1909,7 @@ void registerClipboardTools(ToolRegistry& registry)
   importOutput.push_back(
     field("sourceObjects", integer()).required().describe("Objects taken from the file"));
 
+  auto replaceOutput = importOutput;
   registry.add(
     ToolDef{"map_import"}
       .title("Import Map")
@@ -1574,16 +1930,58 @@ void registerClipboardTools(ToolRegistry& registry)
         "typical scale, continuous across brushes); default keep, so generated maps "
         "need not compute UVs. For bulk imports into an unfinished map, pass checks: "
         "\"defer\" (or detail: \"summary\" for issuesSummary). The imported objects are "
-        "selected. Examples: "
+        "selected. replaceLayer / replaceGroup delete a layer's objects or a group and "
+        "import in their place in one undo step (safe to repeat after regenerating the "
+        "file; see layer_replace); dryRun shows the counts. Examples: "
         "{\"path\": \"/maps/prefabs/rooms.map\", \"group\": \"Armory\", \"position\": "
         "[512, 0, 0], \"anchor\": \"min\"}; {\"path\": \"/tmp/shell.map\", \"uv\": "
         "\"world\", \"checks\": \"defer\"}; {\"path\": \"/maps/e1m1.map\", "
         "\"region\": {\"min\": [0, 0, 0], \"max\": [512, 512, 256]}, \"regionMode\": "
-        "\"inside\"}")
+        "\"inside\"}; {\"path\": \"/tmp/gen/bar.map\", \"replaceGroup\": \"Bar\", "
+        "\"detail\": \"summary\"}")
       .input(object(std::move(importInput)))
       .output(object(std::move(importOutput)))
       .mutation(Mutation::Map)
       .handler(mapImport));
+
+  auto replaceInput = std::vector<Field>{
+    field("layer", string().nonEmpty())
+      .required()
+      .describe(
+        "The document's layer to replace: id, 'layer:@name' or a name (a name no layer "
+        "has creates the layer)"),
+    field("path", string().nonEmpty()).required().describe("Absolute path of the map"),
+    field("sourceLayer", sourceLayerSchema)
+      .describe(
+        "Only objects in this layer of the file: name or index (0 = default layer)"),
+  };
+  replaceInput.insert(replaceInput.end(), sourceFilters.begin(), sourceFilters.end());
+  addPlacementFields(replaceInput);
+  std::erase_if(replaceInput, [](const auto& f) { return f.name == "targetLayer"; });
+
+  registry.add(
+    ToolDef{"layer_replace"}
+      .title("Replace Layer")
+      .description(
+        "Replaces the objects of a layer with the objects of a map file in one undo "
+        "step: deletes everything in the layer, then imports the file into it like "
+        "map_import (same filters, placement and uv; sourceLayer is map_import's "
+        "layer). The layer keeps its id, name and state; a layer name that does not "
+        "exist yet creates the layer, so a script can regenerate a part of the map and "
+        "call it again and again without duplicates. A failure changes nothing. Returns "
+        "replaced {kind, layer, address, created, removedObjects, importedObjects} and "
+        "the new ids (lists cut per detail; detail: \"summary\" keeps large results "
+        "small); dryRun reports the counts without changing the map. Fails with "
+        "OBJECT_NOT_EDITABLE for a locked layer and AMBIGUOUS_NAME if several layers "
+        "have the name. Examples: {\"layer\": \"Bar\", \"path\": \"/tmp/gen/bar.map\"}; "
+        "{\"layer\": \"layer:@Lights\", \"path\": \"/tmp/gen/level.map\", "
+        "\"sourceLayer\": \"Lights\", \"detail\": \"summary\", \"checks\": \"defer\"}")
+      .input(object(std::move(replaceInput)))
+      .output(object(std::move(replaceOutput)))
+      .mutation(Mutation::Map)
+      .idempotent()
+      .destructive()
+      .handler(layerReplace));
 }
 
 } // namespace tb::mcp

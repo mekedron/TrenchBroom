@@ -89,7 +89,7 @@ lib/TbMcpLib/
     CallRunner.h            call queue, busy gate, transactions, dry run, error mapping, logging
     ChangeCollector.h       notifier-based change report
     LogCapture.h            LogMessage, CapturingLogger, ScopedLogCapture, collectCachedMessages
-    ObjectIds.h             IdRegistry, ObjectRef parsing/formatting, face refs
+    ObjectIds.h             IdRegistry, ObjectRef parsing/formatting, face refs, name addresses
     Targets.h               idsField, resolveTargets, resolveFace, withTargets; face targets (§6.4)
     CompileRuns.h           compile run registry: run:<n> handles, jobs, log snapshots (§10.10)
     Errors.h                ToolError, ErrorCode, Warning, makeError
@@ -106,6 +106,8 @@ lib/TbMcpLib/
     tools/MaterialKnowledge.h  face sampling, statistics, image analysis, notes, corpus, profiles (§10.8)
     tools/UvCheck.h         the texturing checks of uv_check and the material/UV tool warnings (§10.8)
     tools/EntityModelUtils.h   model loading, animations, frame property, placement checks (§10.7)
+    tools/EngineRules.h     engine data per game family: entity budget, monster hulls and spawn emulation (§10.13)
+    tools/ComposedDefinitions.h  composed FGD: compiler FGD lookup, @include inlining, MCP additions (§10.3)
     tools/SpaceAnalysis.h   voxel grid of empty space, spaces and openings, free spots, walking, leaks (§10.13)
     tools/PlacementChecks.h z-fighting, per-call placement tracking and the MCP issue checks (§6.3, §10.13)
     tools/ActionCatalog.h   the MCP classification of every editor action: invoke, dialog or refuse, semantic tools (§10.9)
@@ -615,6 +617,14 @@ dialog compiles the document. `targetDocument(session)`, `setActiveDocument(sess
    `index`, `normal`, `center` and `material`; the change report lists geometry-changed brushes under
    `modified`, and the guide says to re-read faces then.
 5. `object_get` exposes `persistentId` (layers/groups) and `linkId` (linked-group reasoning).
+6. **Name addresses** survive editor restarts: `layer:@<name>`, `group:@<name>` and `entity:@<targetname>`
+   (`NameAddress`, `parseNameAddress`; the name is everything after `@`). `schema::objectId` accepts them for
+   these kinds, and `CallRunner` replaces them in every `object-id` argument (following the input schema through
+   objects, arrays and `oneOf`) by the canonical id when the call runs (`resolveNameAddresses`), so handlers see
+   ids only; `IdRegistry::resolve` also accepts them for string arguments that are not `object-id` fields.
+   Names match exactly, else ignoring case; no match is `OBJECT_NOT_FOUND` (the hint lists up to ten existing
+   names), several are `AMBIGUOUS_NAME` with `details.candidates [{id, name, bounds, parent}]` and the ids in
+   `objectIds`. `nodeSummary` and `layers_list` report the `address` next to the id.
 
 ---
 
@@ -959,7 +969,7 @@ Codes: `INVALID_ARGUMENT`, `OBJECT_NOT_FOUND`, `WRONG_OBJECT_KIND`, `OBJECT_NOT_
 `NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `ACTIVE_DOCUMENT_CLOSED` and `DOCUMENT_IN_USE` (§3.7), `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`, `OPERATION_FAILED`,
 `TRANSACTION_ACTIVE`, `NO_TRANSACTION`, `BUSY_TIMEOUT`, `CANCELLED`, `UNSAVED_CHANGES`, `FILE_EXISTS`,
 `IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`, `DRY_RUN_UNSUPPORTED`, `COMPILE_RUNNING`,
-`DIALOG_REQUIRED`, `ACTION_REFUSED` (§10.9), `INTERNAL_ERROR`.
+`DIALOG_REQUIRED`, `ACTION_REFUSED` (§10.9), `AMBIGUOUS_NAME` (§5.2), `INTERNAL_ERROR`.
 
 Mapping to MCP:
 - Tool failures, including argument validation failures, are `CallToolResult` with `isError: true`,
@@ -1112,7 +1122,7 @@ call log lines, and so on.
 | `ConsoleTools.cpp` | `console_read`, `console_clear`; the console resource | E10 |
 | `LayerTools.cpp` | `layers_list`, `layer_create/rename/remove/reorder`, `layer_set_state`, `objects_move_to_layer`, `visibility_set` | E9 |
 | `GroupTools.cpp` | `group_create/ungroup/rename`, `groups_merge`, `group_add_objects/remove_objects`, `group_open/close`, `linked_group_duplicate/select/separate/extract` | E9 |
-| `ClipboardTools.cpp` | `clipboard_copy/cut/paste`, `map_file_inspect`, `map_import` | E9 |
+| `ClipboardTools.cpp` | `clipboard_copy/cut/paste`, `map_file_inspect`, `map_import`, `layer_replace` | E9, E17 |
 | `MaterialKnowledgeTools.cpp` | `material_corpus_scan`, `material_notes_get/set`, `material_usage` | E11 |
 | `UvTools.cpp` | `uv_check`, `material_fit_geometry` | E11 |
 | `EntityModelTools.cpp` | `entity_animation_set`, `entity_placement_check` | E11 |
@@ -1120,7 +1130,7 @@ call log lines, and so on.
 | `SpaceTools.cpp` | `spaces_list`, `surroundings`, `free_spots`, `walkable_plan` | E12 |
 | `ManifestTools.cpp` | `map_manifest_get`, `map_manifest_set` | E12 |
 | `ValidationTools.cpp` | `issues_list`, `issue_fix`, `issue_hide`, `issue_show`, `validators_list`, `validators_set`, `checks_report`; `issuesResource()` for the issues resource | E12 (E13.1), E13 |
-| `MapCheckTools.cpp` | `map_check` | E13 |
+| `MapCheckTools.cpp` | `map_check` | E13, E17 |
 | `EngineTools.cpp` | `engine_profiles_list`, `engine_profile_save`, `engine_launch` | E13 |
 | `ActionTools.cpp` | `actions_list`, `action_invoke` | E14 |
 | `PreferenceTools.cpp` | `preferences_get`, `preferences_set` | E14 |
@@ -1228,6 +1238,23 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   compile tools such as hlcsg cannot open game-relative paths; `keepRelative: true` stores them as passed
   with a `RELATIVE_WAD_PATH` warning naming the absolute path. `entity_definitions_set` takes `type: "builtin" | "external"` and
   `path`. `soft_bounds_*` use `mode: "game" | "unlimited" | "custom"` with `bounds`.
+- `entity_definitions_compose` (`Mutation::Map`, in `GameTools.cpp` over `ComposedDefinitions`) writes one FGD,
+  `<map>.mcp.fgd` next to the map (or an absolute `path`), and sets it as the map's external definition file (by
+  file name when it is next to the map; reloaded if the spec is unchanged). Parts, in order, each with its
+  `@include`s inlined (includes in comments stay; recursion and depth are checked): the game's FGD (`base`: a
+  builtin name or path; default the composed file's game source, else the map's builtin FGD or its external file
+  (a composed one is replaced by its game source), else the game's first builtin FGD); the compile tools' FGDs
+  (`compilerFgd`, else the composed file's compiler sources, else `findCompilerFgds`: `*.fgd` in the folders of
+  the configured compile tools and their parents, e.g. sdHLT's `tools/sdhlt.fgd`; `includeCompilerFgd: false`
+  skips them, none found warns `NO_COMPILER_FGD`); the MCP additions (`mcpAdditions`, `mcpAdditions(family)`):
+  for Half-Life, `model({"path": model, "skin": skin, "frame": sequence})` replaces the `studio()` / `model()` of
+  the last definition of monster_generic, monster_furniture, cycler and cycler_weapon (`applyModelAddition`), and
+  func_detail is defined when no part defines it. The FGD parser keeps the last class of a name, so later parts
+  override earlier ones. The file starts with `ComposedFgdMarker` and names its sources (`// game: <path>`,
+  `// compiler: <path>`), which regeneration reads; a file without the marker is `FILE_EXISTS` unless
+  `overwrite`. The map must have been saved unless `path` is given (`UNSAVED_CHANGES`). Returns `{path, spec,
+  sources [{role, path, classes}], additions [{classname, kind, definition, reason}], bytes,
+  entityDefinitions}`; a dry run writes nothing. The file is not undone by undo; the worldspawn key is.
 
 ### 10.4 Scene, spatial and selection
 
@@ -1610,7 +1637,11 @@ have.
   tool task must point to an executable file (`OPERATION_FAILED` with `details.tools`, hint
   `compile_tools_set`); an invalid game path is a `GAME_PATH_NOT_SET` warning, and relative entries in the
   map's WAD list are a `RELATIVE_WAD_PATH` warning (compile tools open them relative to their working
-  directory). It returns the `compile_status` payload of the new run.
+  directory). `toolArgs` (`{key: options}`) changes the profile's copy for this run only: the options are put
+  before the parameters of the enabled run tool tasks whose key matches the tool variable (`rad` for `${rad}`),
+  the file name of the tool spec without extension, or the task's index among the enabled tasks; unknown keys
+  are `INVALID_ARGUMENT` naming the profile's tools (`applyToolArgs`). It returns the `compile_status` payload of
+  the new run, and in a dry run the task definitions, with `toolArgs [{task, tool, options, parameters}]`.
 - **Presets** (`CompileUtils`): the family is derived from the game's compilation tool names — csg/bsp/vis/rad
   (Half-Life, VHLT/ZHLT), qbsp/vis/light (Quake, ericw-tools), bsp/vis/light with a Quake 2 map format (Quake
   2, ericw-tools 2 with `-q2bsp`), q3map2 with the search path `baseq3` (Quake 3). Every preset uses
@@ -1733,6 +1764,20 @@ are dropped when the target format has none (`PATCHES_DROPPED`). The kept object
 document's format and pasted through the `clipboard_paste` path with the same placement options, into
 `targetLayer` (default: the current layer; source layers are flattened). The result lists the new ids, the
 missing materials, and selects the imported objects; the call is one undo step, `AI: Import Map`.
+
+**Replacing generated parts (E17.1).** `map_import` takes `replaceLayer` or `replaceGroup` (not both; not with
+`targetLayer` when the layer or group exists): an id, a name address or a plain name. The source is read and
+filtered first (an empty selection fails before anything changes), then open groups are closed (`GROUP_CLOSED`
+unless the open group is replaced), a layer that no layer's name matches is created, the objects are imported into
+the layer (`pasteObjects`, which keeps the pasted nodes when they move into a hidden or locked layer), and only then
+the old objects are deleted, so that the parent group of a replaced group, which the new group joins, is not
+removed as empty. With `replaceGroup`, a single imported group takes the name, otherwise the imported objects are
+grouped under it, and the group moves into the replaced group's parent group. A locked layer is
+`OBJECT_NOT_EDITABLE`; an ambiguous name `AMBIGUOUS_NAME`. Delete and import are one transaction: a failure rolls
+both back, and repeating the call after regenerating the file never duplicates objects. The result adds `replaced
+{kind, layer | group, address, created, removedObjects (with contents), importedObjects}`; the id lists are cut per
+`detail` like every result. `layer_replace {layer, path, sourceLayer, …}` (`Mutation::Map`, idempotent,
+destructive) is `map_import` with `replaceLayer = layer` and the file's layer filter named `sourceLayer`.
 
 **UV modes of new objects.** `clipboard_paste` (object text), `map_import` and `brushes_create` take `uv: "keep" |
 "typical" | "fit" | "world"` (default `keep`). `alignNodeUvs` (`UvTools.h`) collects the brush faces of the new
@@ -1983,12 +2028,14 @@ checks are not registered in the editor's validator list, so the human's issue b
 
 **`map_check`** (`MapCheckTools.cpp`, read-only, asynchronous, paginated): agent-oriented checks beyond the editor's
 validators, each finding with a severity, a plain description and a `suggestedFix {description, tool, args}` naming the
-MCP call that fixes it (tool null when no single call does). Input `checks` (placement, player_start, links, materials,
-rooms; default all), `ids` (objects and their contents; player_start is map-level and runs with ids only when listed),
+MCP call that fixes it (tool null when no single call does). Input `checks` (placement, npc_spawn, player_start, links,
+materials, rooms, entity_budget; default all), `ids` (objects and their contents; player_start and entity_budget are
+map-level and run with ids only when listed), `entityLimit` and `entityReserve` (entity_budget),
 `region` (limits the space analysis; `ENTITY_OUTSIDE_SPACES` then checks only entities inside it), `cellSize`,
 `openingSize` (the automatic cell size is enlarged with `CELL_SIZE_ENLARGED` like in `spaces_list`). Items `{id
 (check:<code>:<object or signature>), check, code, severity, description, objectId, objectIds, position, details,
-suggestedFix}`; the result adds `total`, `counts`, `checksRun`, `skipped [{check, reason}]`. Each check is a deferred step (progress per check, cancellation between checks); the space analysis
+suggestedFix}`; the result adds `total`, `counts`, `checksRun`, `skipped [{check, reason}]` and, after entity_budget,
+`entityBudget`. Each check is a deferred step (progress per check, cancellation between checks); the space analysis
 runs once per call, only when a check or a suggested move needs it, and fixes use at most 25 free-spot searches.
 - *placement*: models that load get the `modelPlacementIssues` codes; other standing classes (info_player_*, monster_*,
   item_*, weapon_*, ammo_*, classes with a model that are not light/env_/ambient_/path_/target_/trigger_/misc_/func_/
@@ -2000,7 +2047,35 @@ runs once per call, only when a check or a suggested move needs it, and fixes us
   trigger_relay, trigger_auto, trigger_changetarget, trigger_counter, scripted_sentence, env_global, env_render,
   env_fade, env_message and the Quake 2/3 relay, delay, message and score target_* classes) are skipped. The class
   rules are `placementRule` (`EntityModelUtils`), shared with the model placement checks; the definition box is
-  checked with the 1 unit tolerance.
+  checked with the 1 unit tolerance. When npc_spawn runs in the same call, monsters (`monsterClass`) are left to it.
+- *npc_spawn*: monsters are checked like the engine spawns them, from `EngineRules` (`EngineRules.h`, game data per
+  compile family: Half-Life and Quake; other games are skipped with a reason). `monsterClass` gives the size the
+  class sets in its spawn function (Half-Life SDK `UTIL_SetSize`: human 32×32×72 for scientists, grunts, zombies,
+  monster_generic; 64×64×64 for alien grunts, bullsquids, gargantuas; headcrab 24×24×24, houndeye 32×32×36, …; Quake
+  `VEC_HULL` / `VEC_HULL2`) and its movement (walk; fly, swim, ceiling: stays in place; static: dropped once without
+  the raise and never moves, so an overlap is harmless: sitting scientist, sentry); other `monster_*` classes use the definition
+  box, `*_dead` corpses are none. `engineHullBox` chooses the clipping hull like the engine (GoldSrc `SV_HullForBsp`:
+  width ≤ 8 point, ≤ 36 human or, up to 36 high, head 32×32×36, else large 64×64×64; Quake by width < 3 / ≤ 32) and
+  places it at the monster's mins. `checkMonsterSpawn` raises a walking monster by 1 unit, tests the hull against
+  the brushes that block monsters (`brushRole`: world, func_group/func_detail, clip brushes and solid brush entities
+  such as func_wall, func_door, func_breakable; not func_ladder, func_illusionary, triggers or liquids) and against
+  other monsters' hulls and solid point classes (cycler*, monster_furniture), all hidden ones included and layers
+  omitted from export ignored, then drops it up to 256 units (per brush a bisection over the swept box with
+  `intersectsInterior`; entity boxes analytically). Findings: `NPC_STUCK` (error; the engine's "stuck in wall"
+  message; fix: a free spot for the hull), `NPC_NO_SUPPORT` (walking, nothing within 256 units), `NPC_DROPS` (info,
+  more than 16 units above the support; fix: move down). `details` is `toJson(SpawnCheck)`: class bounds, hull
+  {index, name, size}, hullBox, stuckIn, drop, support, spawnBox. `entity_placement_check` adds the same `spawn`
+  and `NPC_STUCK` / `NPC_NO_SUPPORT` findings to monster items, and its scope `map` includes monsters without a model.
+- *entity_budget*: `countEntityBudget` counts the entities of the exported map (worldspawn, custom layers and groups
+  as func_group, entities; layers omitted from export left out), subtracts those the compile tools remove
+  (Half-Life: func_group, func_detail, info_texlights, info_compile_parameters, info_hullshape, info_smoothvalue,
+  info_translucent, info_angularfade, info_minlights, light_surface) and those the game removes at spawn (info_null,
+  info_node*, and light, light_spot, light_environment, infodecal without targetname), adds extra edicts (env_laser
+  with EndSprite: its sprite; monstermaker: m_imaxlivechildren, default 5; func_tanklaser: its laser) and a reserve
+  (world and player slots plus `entityReserve`, default 64), and compares the total with the limit (`entityLimit`,
+  default the engine's: GoldSrc 900, at most 2048 with `-num_edicts`; Quake 600; Quake 2 and 3 1024).
+  `ENTITY_LIMIT_NEAR` (warning, from 90 %) and `ENTITY_LIMIT_EXCEEDED` (error) name the most frequent classes and
+  explain `-num_edicts` (or that even the largest limit is too small) and how to reduce entities.
 - *player_start*: start classes from the definitions (prefixes info_player_start, info_player_deathmatch,
   info_player_coop; fallback info_player_start / info_player_deathmatch); `MISSING_PLAYER_START` suggests
   `entity_create_point` on a free floor spot of the largest sealed space; `MISSING_SINGLE_PLAYER_START` (info) when
@@ -2050,15 +2125,18 @@ hides an issue type per object and is not saved in the map. Same targets as `iss
 the MCP checks as validators (`mcpChecks()`: `Z_FIGHTING`, `ENTITY_OUTSIDE_HULL`, `MODEL_PLACEMENT` for the four
 `MODEL_*` codes, `UV_ASPECT_DISTORTION`), each `{name, source, title, codes, enabled, fixes}`. `validators_set`
 (`Mutation::External`, dry run) takes `enable`, `disable` (names or titles, case-insensitive; unknown names are
-`INVALID_ARGUMENT`) and `enableAll`, and returns the list with `changed`. The setting is per document
-(`DocumentState::disabledValidators`) and lasts while the document is open; it does not change the editor's Issues
-view. Turned-off validators are skipped by `issues_list`, `issue_fix` by code or object and the issues resource;
+`INVALID_ARGUMENT`) and `enableAll`, and returns the list with `changed` and `manifest {path, pending}`. The setting
+is per document (`DocumentState::disabledValidators`) and is stored in the map manifest (`disabledValidators`,
+written at once for a saved map, on the first save for a new one; an invalid manifest warns
+`MANIFEST_NOT_WRITTEN`); `DocumentState` restores it when it is created and when another map is loaded into the
+document. It does not change the editor's Issues view. Turned-off validators are skipped by `issues_list`, `issue_fix` by code or object and the issues resource;
 `ChangeCollector` drops their editor issues from `issuesIntroduced`, and `PlacementTracker` does not run turned-off
 MCP checks (`PlacementTrackerOptions::disabledValidators`).
 
 **Map manifest** (`MapManifest.h`, `ManifestTools.cpp`). `<name>.mcp.json` next to the map (`/x/foo.map` →
 `/x/foo.mcp.json`): `{format: "trenchbroom-mcp-manifest", version: 1, spaces [{id, name, purpose, notes, bounds}],
-keyPoints [{name, position, note}], notes [..], cameras [{name, camera}]}`; unknown top-level members are kept. It is
+keyPoints [{name, position, note}], notes [..], cameras [{name, camera}], disabledValidators? [..]}`
+(`disabledValidators` only when not empty, see `validators_set`); unknown top-level members are kept. It is
 read lazily, written atomically (temporary file and rename), and an invalid file is an `IO_ERROR` that saves never
 overwrite (`overwriteInvalid` does). The `ManifestStore` lives in `DocumentState`; the manifest of a never-saved map
 stays in memory (`pending`) and is written on the first save. Saves are observed through
@@ -2165,7 +2243,10 @@ breaks, with the subsections and the parent, previous and next sections. Without
 | `tst_ToolRegistry`, `tst_ResourceRegistry`, `tst_PromptRegistry`, `tst_Resources` | listing, paging, dispatch, subscriptions, coalesced updates |
 | `tst_Prompts` | the nine prompts with their arguments, missing required arguments, inserted and default values; every tool named in the prompts and the agent guide is registered |
 | `tst_ToolCatalog` | every registered tool: a title, a description of at least 60 characters starting with an upper-case letter, at least one JSON object after "Example" and every such object accepted by the input schema, an object input schema with a description on every property (nested objects, array items, oneOf branches), an output schema |
-| `tst_ObjectIds`, `tst_Targets` | id format/parse; delete→undo→same id; redo; linked-group aliasing; reload remap; target resolution |
+| `tst_ObjectIds`, `tst_Targets` | id format/parse; delete→undo→same id; redo; linked-group aliasing; reload remap; target resolution; name addresses (parse, resolve by name and ignoring case, not found with the existing names, ambiguous with candidates) |
+| `tst_NameAddresses` | `group:@`, `layer:@` and `entity:@` in reading and modifying tools, `address` in results, names resolved when the call runs (after a rename), `AMBIGUOUS_NAME` with candidates and no undo step, wrong kinds and brushes refused by the schema |
+| `tst_EngineRules` | the engine data (limits, monster classes, corpses, flying monsters), hull choice and placement (human, head at the mins, large; Quake), `map_check` npc_spawn on a Half-Life map (a monster in a wall, overlapping headcrabs, a func_wall but not a func_illusionary, no floor, a drop of 100 units, monsters that stand fine, placement leaving monsters out), `entity_placement_check` spawn items, entity_budget counts (compiler and spawn removals, extra edicts, reserve), near / exceeded with `-num_edicts`, map-level with ids, games without data skipped |
+| `tst_ComposedDefinitions` | `composedFgdPath`, `@include` inlining (comments, missing and recursive includes), class names, model additions (replacing `studio()`, idempotent, only the last definition), composing and reading the sources; `entity_definitions_compose` on a Half-Life map with an sdHLT layout (unsaved map, dry run, sources, additions, func_detail and info_texlights loaded, the file, regeneration with the same sources without tools, func_detail from the MCP without the compiler FGD, `FILE_EXISTS` and `overwrite`, invalid paths) |
 | `tst_DocumentTargeting` | two sessions: session A opens map 1, session B creates map 2 (focused); calls without `document` stay on each session's active document regardless of focus; `document_list` `active` / `activeIn` and `editor_status` per session, also as a resource; explicit `document` leaves the active document; `ACTIVE_DOCUMENT_CLOSED` with the open documents after the user, another session or (fallback) the session itself closed it; the `DOCUMENT_FROM_FOCUS` fallback and adoption of a fresh session; `document_close` / `document_revert` never fall back; the status notification on activation; `DOCUMENT_IN_USE` in single-window mode |
 | `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks; asynchronous read-only calls (immediate while busy, concurrent, cancel, session close, document close, no undo step) |
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
@@ -2174,7 +2255,7 @@ breaks, with the subsections and the parent, previous and next sections. Without
 | `tst_BulkCreateTools` | `brushes_create` (boxes, stairs, hulls, per-face materials, groups, brush entities, selection, one undo step, all invalid items listed and nothing created, dry run, detail summary on 120 items, layer, default group and `""`, `uv` without loaded materials); `entities_create` (properties, links by ref and to an existing entity, generated and colliding names, `dropToFloor`, all invalid items listed, group, layer, dry run, one undo step) |
 | `tst_UvModes` | `uv` of `clipboard_paste` and `map_import` on knowledge.wad with a material note: keep, typical (justified), fit (whole repeats), world (paraxial, offset 0), unloaded materials skipped, dry run, face text ignoring it; `uv_align` on `layer:default` with 40 brushes in one undo step; `uvModeFromString` |
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
-| `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
+| `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files, `toolArgs` by tool and task index (dry run, the started profile, the preset unchanged, unknown tools, invalid options) |
 | `tst_GeometryUtils`, `tst_CsgUtils` | the pure model helpers over `mdl::MapFixture`: `intersectsInterior`, `owningBrushEntity`, `classifyBrush`, `isPointEntity`, `castRay`, `checkBox`, `geometryError`, `addBrushes`, `ScopedLockOverride`; hollowing with a thickness |
 | `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode`, `tst_UpstreamLoadAssimpModel`, `tst_UpstreamQuickFixes` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId`, assimp frames named after their animations (a studio model's sequences; the model path without animations), selecting the world selects nothing (also through a worldspawn quick fix), Move Brushes to World selects no removed entity |
 | `tst_AgentCamera`, `tst_Image`, `tst_SnapshotTools` | camera math, framing, orbit, eye height over a fixture room, camera JSON; image composition and diff; the snapshot tools over `FakeSnapshotRenderer`: option handling mapped into the recorded requests (hidden tags change the scene and the image, isolate, includeHidden, highlight, face tags, 2D cameras), limits, saveTo, keepAs and compare (the undo mode leaves the history unchanged), labels, progress and cancellation, the plan image, user views, unsupported hosts, no undo steps |
@@ -2197,7 +2278,7 @@ tiles (every node reachable, one node per column); `spaces_list` (also `EDGE_ONL
 | `tst_ActionTools` | `actions_list` and `action_invoke` over `FakeActionHost`: filters, pagination, labels, disabled, unknown and ambiguous actions, `DIALOG_REQUIRED` and `openDialog`, `ACTION_REFUSED`, the active tool kept, dry run, `UNSUPPORTED_IN_HOST` |
 | `tst_PreferenceTools` | the catalog against every path in `prefs/Preferences.h`; `preferences_get` filters, types and value forms; `preferences_set` success, type, range and allowed-value errors, read-only and locked preferences, unknown paths with suggestions, atomicity, reset, dry run, shortcut conflicts, game and host preferences |
 | `tst_KnowledgeTools` | the manual parser on a pandoc-like fixture (sections, Markdown, entities, wrapped script arguments), reference resolution with and without an action host and with `shortcuts.js`, search ranking, section paging and neighbours, the manual resources, no manual |
-| `tst_MapManifest`, `tst_ManifestTools` | manifest JSON round trips and invalid files; `map_manifest_get/set` merge, replace and remove, cameras saved and restored in a new session, an unsaved map's manifest written on `document_save_as`, dry run, invalid input |
+| `tst_MapManifest`, `tst_ManifestTools` | manifest JSON round trips and invalid files; `map_manifest_get/set` merge, replace and remove, cameras saved and restored in a new session, an unsaved map's manifest written on `document_save_as`, dry run, invalid input; `disabledValidators` round trip, written by `validators_set`, restored when the map is opened again, kept by other manifest changes, pending for an unsaved map |
 | `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities; E12's acceptance scenario on `spaces.map` (pick the chair in a snapshot, both spaces with their doorway, a wall spot for a poster with the face id, z-fighting and an entity outside the hull reported by the calls that caused them); S2 on `issues.map` (every issue with type, object and explanation; the codes with one fix fixed one call each with the deleted and changed objects reported; fewer issues afterwards and the rest listed with reasons; one `AI: Fix Issues` undo step per call) |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
@@ -2376,6 +2457,11 @@ findings), and game paths in `mdl/Game/`.
   `ENTITY_OUTSIDE_SPACES` can report an entity in a closet smaller than the analysis resolution (a pocket); suggested
   moves ignore the entity's own current box when looking for free spots; patches are not checked for missing
   materials.
+- `map_check` entity_budget and npc_spawn use game data (`EngineRules`): the budget is an estimate (entities the
+  game creates at run time are covered by a fixed reserve; only env_laser, monstermaker and func_tanklaser add extra
+  edicts); the spawn emulation knows the Half-Life SDK and Quake monster classes, sizes others by their definition,
+  treats flying, swimming and ceiling monsters as staying in place, and does not model patches, `func_monsterclip`
+  or monsters that spawn later (monstermaker, scripted spawns).
 - Issue fixes: the editor's Truncate Property Values truncates to the maximum length, which its validator still
   reports (`>=`), so `issue_fix` lists such issues as not fixed; Delete Property removes the value instead. The
   missing-mod validator reports a mod only until worldspawn is validated again with the same mods. MCP issue ids

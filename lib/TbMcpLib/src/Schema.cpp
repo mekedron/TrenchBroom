@@ -689,6 +689,20 @@ Schema objectId(std::vector<ObjectKind> kinds)
     description += ")";
   }
   description += ", e.g. '" + objectIdExample(kinds) + "'";
+  // layers, groups and entities can be addressed by name
+  const auto named = [](const ObjectKind kind) {
+    return kind == ObjectKind::Layer || kind == ObjectKind::Group
+           || kind == ObjectKind::Entity;
+  };
+  const auto namedKind = std::ranges::find_if(kinds, named);
+  const auto nameKind = kinds.empty()              ? std::optional{ObjectKind::Group}
+                        : namedKind != kinds.end() ? std::optional{*namedKind}
+                                                   : std::nullopt;
+  if (nameKind)
+  {
+    description += " or by name '" + std::string{toString(*nameKind)} + ":@"
+                   + (*nameKind == ObjectKind::Entity ? "targetname" : "name") + "'";
+  }
 
   return string()
     .describe(std::move(description))
@@ -696,12 +710,16 @@ Schema objectId(std::vector<ObjectKind> kinds)
     .withCheck(
       [kinds = std::move(kinds)](const Json& value) -> std::optional<std::string> {
         const auto& str = value.get_ref<const std::string&>();
-        const auto ref = parseObjectRef(str);
+        const auto address = parseNameAddress(str);
+        const auto ref =
+          address
+            ? std::optional{ObjectRef{address->kind, std::nullopt, false, std::nullopt}}
+            : parseObjectRef(str);
         if (!ref)
         {
           return "'" + str
                + "' is not a valid object id; ids look like 'brush:1042', "
-                 "'layer:default' or 'world'";
+                 "'layer:default', 'world' or 'group:@name'";
         }
         if (!kinds.empty() && std::ranges::find(kinds, ref->kind) == kinds.end())
         {

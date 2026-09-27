@@ -83,6 +83,29 @@ std::optional<ObjectRef> parseObjectRef(std::string_view id);
 std::string formatObjectRef(const ObjectRef& ref);
 
 /**
+ * An address by name that survives editor restarts: `layer:@Details`, `group:@Bar` or
+ * `entity:@door1` (the entity's targetname). The name is everything after the `@`. It is
+ * resolved when a call runs; every tool that takes object ids accepts it.
+ */
+struct NameAddress
+{
+  ObjectKind kind = ObjectKind::Group;
+  std::string name;
+
+  bool operator==(const NameAddress&) const = default;
+};
+
+/** Parses `layer:@name`, `group:@name` or `entity:@name` (the name must not be empty). */
+std::optional<NameAddress> parseNameAddress(std::string_view id);
+std::string formatNameAddress(const NameAddress& address);
+
+/**
+ * The name address of a node: layers and groups by name, entities by targetname;
+ * nullopt for other nodes, the world and entities without a targetname.
+ */
+std::optional<std::string> nameAddressOf(const mdl::Node& node);
+
+/**
  * Maps object ids to nodes for one document.
  *
  * Ids are based on `Node::runtimeId()`, so they survive undo and redo because undo
@@ -136,10 +159,17 @@ public:
   std::string formatFace(const mdl::BrushNode& brushNode, size_t faceIndex) const;
 
   /**
-   * Resolves the given external id to a node that is currently in the tree. Face ids
-   * resolve to their brush.
+   * Resolves the given external id or name address to a node that is currently in the
+   * tree. Face ids resolve to their brush.
    */
   Result<mdl::Node*, ToolError> resolve(std::string_view id) const;
+
+  /**
+   * Resolves a name address. Fails with OBJECT_NOT_FOUND if no object has the name and
+   * with AMBIGUOUS_NAME (listing the candidates) if more than one has it. Names are
+   * compared exactly; if none matches exactly, ignoring case.
+   */
+  Result<mdl::Node*, ToolError> resolve(const NameAddress& address) const;
 
   /** Resolves a parsed reference. */
   Result<mdl::Node*, ToolError> resolve(const ObjectRef& ref) const;

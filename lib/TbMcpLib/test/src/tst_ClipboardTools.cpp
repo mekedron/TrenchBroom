@@ -802,4 +802,168 @@ TEST_CASE("ClipboardTools map_import")
   }
 }
 
+TEST_CASE("ClipboardTools replace")
+{
+  auto fixture = McpToolFixture{};
+  auto& map = newDocument(fixture, Json{{"game", "Quake"}, {"format", "Standard"}});
+  loadMaterials(fixture, map);
+
+  const auto layerCount = [&]() { return map.worldNode().allLayers().size(); };
+
+  SECTION("layer_replace")
+  {
+    // the first run creates the layer
+    auto result = fixture.call(
+      "layer_replace",
+      Json{{"layer", "Generated"}, {"path", roomsMap()}, {"sourceLayer", "Props"}});
+    CHECK(result["undoStep"] == "AI: Replace Layer");
+    auto replaced = resultOf(result)["replaced"];
+    CHECK(replaced["kind"] == "layer");
+    CHECK(replaced["created"] == true);
+    CHECK(replaced["removedObjects"] == 0);
+    CHECK(replaced["importedObjects"] == 2);
+    CHECK(replaced["address"] == "layer:@Generated");
+    const auto layer = replaced["layer"].get<std::string>();
+    CHECK(resultOf(result)["layer"] == layer);
+    CHECK(layerCount() == 2);
+    CHECK(brushCount(map) == 1);
+    CHECK(entityCount(map) == 2); // light, func_detail
+
+    // repeating it replaces the objects instead of duplicating them
+    result = fixture.call(
+      "layer_replace",
+      Json{{"layer", "Generated"}, {"path", roomsMap()}, {"sourceLayer", "Props"}});
+    replaced = resultOf(result)["replaced"];
+    CHECK(replaced["created"] == false);
+    CHECK(replaced["layer"] == layer);
+    CHECK(replaced["removedObjects"] == 3); // light, func_detail and its brush
+    CHECK(replaced["importedObjects"] == 2);
+    CHECK(result["changes"]["removed"].size() == 3);
+    CHECK(layerCount() == 2);
+    CHECK(brushCount(map) == 1);
+    CHECK(entityCount(map) == 2);
+
+    // one undo step
+    fixture.call("undo");
+    CHECK(brushCount(map) == 1);
+    CHECK(entityCount(map) == 2);
+    CHECK(
+      fixture.call("history_get", Json{{"limit", 1}})["redo"][0]["name"]
+      == "AI: Replace Layer");
+    fixture.call("redo");
+
+    // by name address, another part of the file; a dry run changes nothing
+    const auto dryRun = fixture.call(
+      "layer_replace",
+      Json{
+        {"layer", "layer:@Generated"},
+        {"path", roomsMap()},
+        {"group", "Armory"},
+        {"dryRun", true}});
+    CHECK(resultOf(dryRun)["replaced"]["removedObjects"] == 3);
+    CHECK(resultOf(dryRun)["replaced"]["importedObjects"] == 1);
+    CHECK(brushCount(map) == 1);
+
+    fixture.call(
+      "layer_replace",
+      Json{{"layer", "layer:@Generated"}, {"path", roomsMap()}, {"group", "Armory"}});
+    CHECK(brushCount(map) == 3);
+    CHECK(groupCount(map) == 1);
+
+    // a failed import changes nothing
+    CHECK(
+      fixture
+        .callExpectingError(
+          "layer_replace",
+          Json{{"layer", "Generated"}, {"path", roomsMap()}, {"group", "Nothing"}})
+        .code
+      == ErrorCode::InvalidArgument);
+    CHECK(brushCount(map) == 3);
+
+    // a locked layer is refused
+    fixture.call("layer_set_state", Json{{"layer", layer}, {"locked", true}});
+    CHECK(
+      fixture
+        .callExpectingError(
+          "layer_replace", Json{{"layer", "Generated"}, {"path", roomsMap()}})
+        .code
+      == ErrorCode::ObjectNotEditable);
+
+    // name addresses must exist
+    CHECK(
+      fixture
+        .callExpectingError(
+          "layer_replace", Json{{"layer", "layer:@Missing"}, {"path", roomsMap()}})
+        .code
+      == ErrorCode::ObjectNotFound);
+  }
+
+  SECTION("map_import replaceGroup")
+  {
+    // the first run creates the group; an imported single group gets the name
+    auto result = fixture.call(
+      "map_import",
+      Json{{"path", roomsMap()}, {"group", "Armory"}, {"replaceGroup", "Bar"}});
+    auto replaced = resultOf(result)["replaced"];
+    CHECK(replaced["kind"] == "group");
+    CHECK(replaced["created"] == true);
+    CHECK(replaced["address"] == "group:@Bar");
+    CHECK(resultOf(result)["ids"] == Json{replaced["group"]});
+    CHECK(groupCount(map) == 1);
+    CHECK(brushCount(map) == 3);
+
+    // repeating it replaces the group
+    result = fixture.call(
+      "map_import",
+      Json{{"path", roomsMap()}, {"group", "Armory"}, {"replaceGroup", "Bar"}});
+    replaced = resultOf(result)["replaced"];
+    CHECK(replaced["created"] == false);
+    CHECK(replaced["removedObjects"] == 5); // group, 3 brushes, item_armor1
+    CHECK(groupCount(map) == 1);
+    CHECK(brushCount(map) == 3);
+
+    // several objects are grouped; the group stays inside its parent group
+    const auto outer = resultOf(fixture.call(
+      "group_create", Json{{"ids", {replaced["group"]}}, {"name", "Outer"}}))["group"];
+    result = fixture.call(
+      "map_import",
+      Json{{"path", roomsMap()}, {"layer", "Props"}, {"replaceGroup", "group:@Bar"}});
+    replaced = resultOf(result)["replaced"];
+    CHECK(replaced["importedObjects"] == 2);
+    CHECK(groupCount(map) == 2);
+    CHECK(brushCount(map) == 1);
+    auto* groupNode = fixture.node(replaced["group"].get<std::string>());
+    REQUIRE(groupNode);
+    CHECK(groupNode->parent() == fixture.node(outer.get<std::string>()));
+    CHECK(groupNode->childCount() == 2);
+
+    // invalid combinations and ambiguous names
+    CHECK(
+      fixture
+        .callExpectingError(
+          "map_import",
+          Json{{"path", roomsMap()}, {"replaceGroup", "Bar"}, {"replaceLayer", "X"}})
+        .code
+      == ErrorCode::InvalidArgument);
+    CHECK(
+      fixture
+        .callExpectingError(
+          "map_import",
+          Json{
+            {"path", roomsMap()},
+            {"replaceGroup", "Bar"},
+            {"targetLayer", "layer:default"}})
+        .code
+      == ErrorCode::InvalidArgument);
+    fixture.call(
+      "map_import",
+      Json{{"path", roomsMap()}, {"group", "Storage"}, {"replaceGroup", "Outer2"}});
+    fixture.call("group_rename", Json{{"ids", {"group:@Outer2"}}, {"name", "Bar"}});
+    const auto ambiguous = fixture.callExpectingError(
+      "map_import", Json{{"path", roomsMap()}, {"replaceGroup", "Bar"}});
+    CHECK(ambiguous.code == ErrorCode::AmbiguousName);
+    CHECK(ambiguous.details["candidates"].size() == 2);
+  }
+}
+
 } // namespace tb::mcp

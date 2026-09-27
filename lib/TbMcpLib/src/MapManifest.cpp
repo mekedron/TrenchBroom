@@ -40,7 +40,7 @@ namespace
 
 bool isSection(const std::string_view key)
 {
-  return key == "format" || key == "version"
+  return key == "format" || key == "version" || key == "disabledValidators"
          || std::ranges::find(ManifestSections, key) != ManifestSections.end();
 }
 
@@ -139,7 +139,7 @@ bool validSection(const std::string_view name)
 bool MapManifest::empty() const
 {
   return spaces.empty() && keyPoints.empty() && notes.empty() && cameras.empty()
-         && extra.empty();
+         && disabledValidators.empty() && extra.empty();
 }
 
 std::filesystem::path manifestPath(const std::filesystem::path& mapPath)
@@ -282,6 +282,10 @@ Json toJson(const MapManifest& manifest)
   result["keyPoints"] = list(manifest.keyPoints);
   result["notes"] = manifest.notes;
   result["cameras"] = list(manifest.cameras);
+  if (!manifest.disabledValidators.empty())
+  {
+    result["disabledValidators"] = manifest.disabledValidators;
+  }
   for (const auto& [key, value] : manifest.extra.items())
   {
     if (!isSection(key))
@@ -434,6 +438,21 @@ Result<MapManifest, std::string> manifestFromJson(const Json& value)
     return errorText(cameras);
   }
   manifest.cameras = std::move(cameras).value();
+
+  if (const auto* disabled = findMember(value, "disabledValidators");
+      disabled && !disabled->is_null())
+  {
+    if (!disabled->is_array() || !std::ranges::all_of(*disabled, [](const auto& v) {
+          return v.is_string();
+        }))
+    {
+      return std::string{"'disabledValidators' must be an array of strings"};
+    }
+    for (const auto& name : *disabled)
+    {
+      manifest.disabledValidators.push_back(name.get<std::string>());
+    }
+  }
 
   for (const auto& [key, member] : value.items())
   {

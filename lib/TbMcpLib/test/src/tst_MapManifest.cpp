@@ -126,6 +126,22 @@ TEST_CASE("MapManifest")
       const auto parsed = manifestFromJson(json);
       REQUIRE(parsed.is_success());
       checkSameManifest(parsed.value(), manifest);
+      CHECK_FALSE(json.contains("disabledValidators"));
+    }
+
+    SECTION("turned-off validators")
+    {
+      auto manifest = MapManifest{};
+      CHECK(manifest.empty());
+      manifest.disabledValidators = {"EMPTY_PROPERTY_VALUE", "Z_FIGHTING"};
+      CHECK_FALSE(manifest.empty());
+
+      const auto json = toJson(manifest);
+      CHECK(json["disabledValidators"] == Json{"EMPTY_PROPERTY_VALUE", "Z_FIGHTING"});
+      const auto parsed = manifestFromJson(json);
+      REQUIRE(parsed.is_success());
+      CHECK(parsed.value().disabledValidators == manifest.disabledValidators);
+      CHECK(parsed.value().extra.empty());
     }
 
     SECTION("missing sections are empty")
@@ -148,6 +164,7 @@ TEST_CASE("MapManifest")
       fails(Json{{"spaces", Json{{{"name", "no id"}}}}}, "spaces[0]");
       fails(Json{{"keyPoints", Json{{{"name", "x"}}}}}, "position");
       fails(Json{{"notes", Json{1, 2}}}, "notes");
+      fails(Json{{"disabledValidators", "Z_FIGHTING"}}, "disabledValidators");
       fails(
         Json{{"cameras", Json{{{"name", "c"}, {"camera", {{"projection", "fisheye"}}}}}}},
         "projection");

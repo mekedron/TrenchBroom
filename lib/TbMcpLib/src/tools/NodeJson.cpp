@@ -167,6 +167,15 @@ Json nodeSummary(const mdl::Node& node, const IdRegistry& ids)
     break;
   }
 
+  // the name address survives editor restarts, unlike the id
+  if (
+    kind == ObjectKind::Layer || kind == ObjectKind::Group || kind == ObjectKind::Entity)
+  {
+    if (auto address = nameAddressOf(node))
+    {
+      result["address"] = std::move(*address);
+    }
+  }
   if (kind != ObjectKind::World)
   {
     result["bounds"] = toJson(node.logicalBounds());

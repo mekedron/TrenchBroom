@@ -76,6 +76,7 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
       deferredChecks.clear();
       placement = PlacementCache{placement.changeCount + 1};
       manifest.mapWasLoaded(document.map().path());
+      restoreDisabledValidators();
     }
     infoDidChange();
     didChange(DocumentAspect::Summary);
@@ -145,9 +146,20 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
 
   m_notifierConnection += document.selectionDidChangeNotifier.connect(
     [&](const auto&) { didChange(DocumentAspect::Selection); });
+
+  restoreDisabledValidators();
 }
 
 DocumentState::~DocumentState() = default;
+
+void DocumentState::restoreDisabledValidators()
+{
+  auto stored = manifest.get();
+  disabledValidators =
+    stored.is_success()
+      ? std::set<std::string>{stored.value().disabledValidators.begin(), stored.value().disabledValidators.end()}
+      : std::set<std::string>{};
+}
 
 void DocumentState::didChange(const DocumentAspect aspect)
 {

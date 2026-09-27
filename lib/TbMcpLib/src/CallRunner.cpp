@@ -26,8 +26,10 @@
 #include "mcp/ConsoleBuffer.h"
 #include "mcp/ListDetail.h"
 #include "mcp/LogCapture.h"
+#include "mcp/ObjectIds.h"
 #include "mcp/ProtocolVersion.h"
 #include "mcp/Scheduler.h"
+#include "mcp/Schema.h"
 #include "mcp/ServerState.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/Grid.h"
@@ -42,6 +44,7 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 
 namespace tb::mcp
@@ -284,6 +287,79 @@ ToolError activeDocumentClosedError(ServerState& server, const Session& session)
     {"openDocuments", std::move(openDocuments)},
   };
   return error;
+}
+
+/**
+ * Replaces the name addresses (`group:@Bar`, `layer:@Details`, `entity:@door1`) in the
+ * object id arguments of the schema by the ids of the named objects, so that names
+ * resolve when the call runs and handlers see ids only.
+ */
+std::optional<ToolError> resolveNameAddresses(
+  const schema::Schema& schema, Json& value, const IdRegistry& ids)
+{
+  using schema::Type;
+  switch (schema.type)
+  {
+  case Type::String:
+    if (schema.format == "object-id" && value.is_string())
+    {
+      if (const auto address = parseNameAddress(value.get<std::string>()))
+      {
+        auto node = ids.resolve(*address);
+        if (node.is_error())
+        {
+          return errorOf(node);
+        }
+        value = ids.format(*node.value());
+      }
+    }
+    break;
+  case Type::Array:
+    if (schema.items && value.is_array())
+    {
+      for (auto& item : value)
+      {
+        if (auto error = resolveNameAddresses(*schema.items, item, ids))
+        {
+          return error;
+        }
+      }
+    }
+    break;
+  case Type::Object:
+    if (value.is_object())
+    {
+      for (const auto& field : schema.fields)
+      {
+        if (auto it = value.find(field.name); it != value.end())
+        {
+          if (auto error = resolveNameAddresses(field.schema, *it, ids))
+          {
+            return error;
+          }
+        }
+      }
+    }
+    break;
+  case Type::OneOf:
+    for (const auto& alternative : schema.alternatives)
+    {
+      const auto matches = (alternative.type == Type::String && value.is_string())
+                           || (alternative.type == Type::Array && value.is_array())
+                           || (alternative.type == Type::Object && value.is_object());
+      if (matches)
+      {
+        return resolveNameAddresses(alternative, value, ids);
+      }
+    }
+    break;
+  case Type::Any:
+  case Type::Boolean:
+  case Type::Integer:
+  case Type::Number:
+    break;
+  }
+  return std::nullopt;
 }
 
 Result<ResolvedDocument, ToolError> resolveDocument(
@@ -782,6 +858,18 @@ Json CallRunner::execute(const CallRequest& request)
     CallContext{m_server, *session, *tool, documentInfo, dryRun, request.progress};
   applyDocumentChoice(m_server, *session, context, resolved);
 
+  // name addresses resolve now, when the call runs
+  auto arguments = request.arguments;
+  if (documentState)
+  {
+    if (
+      auto error =
+        resolveNameAddresses(tool->inputSchema(), arguments, documentState->ids))
+    {
+      return failWith(*error);
+    }
+  }
+
   if (tool->mutation() == Mutation::Map && mapDocument && !tool->keepsActiveTool())
   {
     for (auto& note : m_server.host.prepareForAgentEdit(*mapDocument))
@@ -851,7 +939,7 @@ Json CallRunner::execute(const CallRequest& request)
   auto result = [&]() -> ToolResult {
     try
     {
-      return tool->handler()(context, Args{request.arguments});
+      return tool->handler()(context, Args{arguments});
     }
     catch (const std::exception& e)
     {
@@ -1145,6 +1233,30 @@ bool CallRunner::startAsync(CallRequest request, const bool readOnly)
   const auto& resolved = document.value();
   const auto& documentInfo = resolved.document;
   call->document = documentInfo ? documentInfo->document : nullptr;
+
+  // name addresses resolve now, when the call starts
+  if (call->document)
+  {
+    auto arguments = call->request.arguments;
+    if (
+      auto error = resolveNameAddresses(
+        tool->inputSchema(), arguments, m_server.documentState(*call->document).ids))
+    {
+      call->logEntry.ok = false;
+      call->logEntry.errorCode = toString(error->code);
+      m_server.callLog.add(call->logEntry);
+      if (!readOnly)
+      {
+        m_running = false;
+      }
+      finish(
+        call->request,
+        makeCallToolResult(errorContent(*error), true, session->protocolVersion));
+      return false;
+    }
+    call->args.emplace(std::move(arguments));
+  }
+
   call->context = std::make_unique<CallContext>(
     m_server, *session, *tool, documentInfo, call->dryRun, call->request.progress);
   applyDocumentChoice(m_server, *session, *call->context, resolved);

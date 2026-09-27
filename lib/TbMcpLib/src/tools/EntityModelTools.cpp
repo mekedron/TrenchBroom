@@ -29,16 +29,21 @@
 #include "mcp/Schema.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/EngineRules.h"
 #include "mcp/tools/EntityModelUtils.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityModel.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityPropertiesVariableStore.h"
+#include "mdl/GameConfig.h"
+#include "mdl/GameInfo.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/ModelDefinition.h"
 #include "mdl/WorldNode.h"
+
+#include "kd/string_utils.h"
 
 #include <fmt/format.h>
 
@@ -362,6 +367,67 @@ Json placementItem(
   return result;
 }
 
+/**
+ * Adds the spawn emulation of a monster (checkMonsterSpawn, as map_check npc_spawn) to a
+ * placement item: `spawn` and the findings NPC_STUCK and NPC_NO_SUPPORT.
+ */
+void addSpawnCheck(
+  mdl::Map& map,
+  const IdRegistry& ids,
+  const EngineRules* rules,
+  mdl::EntityNodeBase& entityNodeBase,
+  Json& item)
+{
+  auto* entityNode = dynamic_cast<mdl::EntityNode*>(&entityNodeBase);
+  if (!rules || !entityNode || entityNode->hasChildren())
+  {
+    return;
+  }
+  const auto& entity = entityNode->entity();
+  const auto monster =
+    monsterClass(*rules, entity, entityNode->logicalBounds().translate(-entity.origin()));
+  if (!monster)
+  {
+    return;
+  }
+
+  const auto check = checkMonsterSpawn(map, ids, *rules, *entityNode, *monster);
+  item["spawn"] = toJson(check);
+  const auto hull = fmt::format(
+    "{} hull {}x{}x{}",
+    check.hull.hull.name,
+    check.hull.hull.size.x(),
+    check.hull.hull.size.y(),
+    check.hull.hull.size.z());
+  if (!check.stuckIn.empty() && canBeStuck(monster->movement))
+  {
+    auto objectIds = std::vector<std::string>{ids.format(*entityNode)};
+    objectIds.insert(objectIds.end(), check.stuckIn.begin(), check.stuckIn.end());
+    item["findings"].push_back(Json{
+      {"code", "NPC_STUCK"},
+      {"message",
+       fmt::format(
+         "It will be stuck when it spawns: the engine's {} intersects {}.",
+         hull,
+         kdl::str_join(check.stuckIn, ", "))},
+      {"objectIds", std::move(objectIds)},
+    });
+  }
+  else if (dropsToFloor(monster->movement) && check.stuckIn.empty() && !check.drop)
+  {
+    item["findings"].push_back(Json{
+      {"code", "NPC_NO_SUPPORT"},
+      {"message",
+       fmt::format(
+         "Nothing supports its {} within {} units below; it falls when the level "
+         "starts.",
+         hull,
+         rules->monsters.dropDistance)},
+      {"objectIds", Json{ids.format(*entityNode)}},
+    });
+  }
+}
+
 ToolResult entityPlacementCheck(CallContext& context, const Args& args)
 {
   auto& map = context.map();
@@ -373,6 +439,7 @@ ToolResult entityPlacementCheck(CallContext& context, const Args& args)
   }
 
   const auto scope = args.getOptional<std::string>("scope");
+  const auto* rules = engineRules(map.gameInfo().gameConfig);
   auto entities = std::vector<mdl::EntityNodeBase*>{};
   if (scope == "map")
   {
@@ -385,8 +452,13 @@ ToolResult entityPlacementCheck(CallContext& context, const Args& args)
     }
     for (auto* entityNode : pointEntities({&map.worldNode()}))
     {
-      const auto spec = entityNode->entity().modelSpecification();
-      if (spec.is_success() && !spec.value().path.empty())
+      const auto& entity = entityNode->entity();
+      const auto spec = entity.modelSpecification();
+      if (
+        (spec.is_success() && !spec.value().path.empty())
+        || (rules
+            && monsterClass(
+              *rules, entity, entityNode->logicalBounds().translate(-entity.origin()))))
       {
         entities.push_back(entityNode);
       }
@@ -410,6 +482,7 @@ ToolResult entityPlacementCheck(CallContext& context, const Args& args)
   for (auto* entityNode : entities)
   {
     auto item = placementItem(map, ids, *entityNode, loader);
+    addSpawnCheck(map, ids, rules, *entityNode, item);
     const auto hasFindings = !item["findings"].empty();
     checked += item["checked"].get<bool>() ? size_t(1) : size_t(0);
     withFindings += hasFindings ? size_t(1) : size_t(0);
@@ -489,8 +562,12 @@ void registerEntityModelTools(ToolRegistry& registry)
         "Entities whose model cannot be loaded are listed with checked false and a "
         "reason. Each item has the model, animation, modelBounds, surface {z, object, "
         "face} and findings [{code, message, objectIds, distance, suggestedMove}]; "
-        "summary counts all entities. Fix findings with objects_move (suggestedMove) or "
-        "entity_animation_set. "
+        "summary counts all entities. Monsters (Half-Life, Quake) are also checked like "
+        "the engine spawns them (as map_check npc_spawn): 'spawn' has the engine hull, "
+        "its box, the drop to the floor and the support, and the findings NPC_STUCK "
+        "(the hull intersects brushes, solid brush entities or other solid entities) "
+        "and NPC_NO_SUPPORT; scope \"map\" includes monsters without a model. Fix "
+        "findings with objects_move (suggestedMove) or entity_animation_set. "
         "Examples: {\"ids\": [\"entity:40\"]}; {\"scope\": \"map\", "
         "\"onlyProblems\": true}")
       .input(object({
@@ -506,8 +583,9 @@ void registerEntityModelTools(ToolRegistry& registry)
         field("items", array(any()))
           .required()
           .describe("[{id, classname, model, checked, reason?, animation, modelBounds, "
-                    "surface, findings: [{code, message, objectIds, distance?, "
-                    "suggestedMove?}]}]"),
+                    "surface, spawn? {classname, movement, classBounds, hull, hullBox, "
+                    "stuckIn, drop, support, spawnBox}, findings: [{code, message, "
+                    "objectIds, distance?, suggestedMove?}]}]"),
         field("total", integer()).required(),
         field("nextCursor", any())
           .required()

@@ -20,12 +20,14 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ComposedDefinitions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DeferredChecks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTargeting.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineRules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityCreateTools.cpp
@@ -55,6 +57,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NameAddresses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Pagination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PreferenceTools.cpp

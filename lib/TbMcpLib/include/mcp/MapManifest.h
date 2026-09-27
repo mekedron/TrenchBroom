@@ -37,8 +37,9 @@ namespace tb::mcp
 {
 
 // The map manifest (E12.10): the agent's notes about a map, kept in a file next to the
-// map (`<name>.mcp.json` for `<name>.map`): spaces with their purpose, key points, notes
-// and named agent cameras. It is not part of the map or its undo history.
+// map (`<name>.mcp.json` for `<name>.map`): spaces with their purpose, key points, notes,
+// named agent cameras and the validators turned off. It is not part of the map or its
+// undo history.
 
 /** The value of the manifest file's "format" member. */
 inline constexpr auto ManifestFormat = std::string_view{"trenchbroom-mcp-manifest"};
@@ -88,6 +89,12 @@ struct MapManifest
   std::vector<ManifestKeyPoint> keyPoints;
   std::vector<std::string> notes;
   std::vector<ManifestCamera> cameras;
+  /**
+   * The validators and MCP checks turned off with validators_set (member
+   * "disabledValidators", written only when not empty); applied when the document is
+   * opened.
+   */
+  std::vector<std::string> disabledValidators;
   /** Top-level members this version does not know; kept when the file is rewritten. */
   Json extra = Json::object();
 
@@ -109,7 +116,10 @@ Result<AgentCamera, std::string> cameraFromJson(const Json& value);
 Json toJson(const ManifestSpace& space);
 Json toJson(const ManifestKeyPoint& keyPoint);
 Json toJson(const ManifestCamera& camera);
-/** `{"format", "version", "spaces", "keyPoints", "notes", "cameras", ...extra}` */
+/**
+ * `{"format", "version", "spaces", "keyPoints", "notes", "cameras",
+ * "disabledValidators"?, ...extra}`
+ */
 Json toJson(const MapManifest& manifest);
 
 Result<ManifestSpace, std::string> spaceFromJson(const Json& value);

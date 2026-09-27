@@ -67,8 +67,9 @@ Json groupIdOf(const mdl::Node& node, const IdRegistry& ids);
 /**
  * A compact description of a node for lists:
  * `{"id", "kind", "label", "bounds"}` plus `"classname"` for entities, `"name"` for
- * layers and groups, `"materials"` for brushes and patches, `"entity"` (the owning brush
- * entity id) for brushes of brush entities, and `"layer"`.
+ * layers and groups, `"address"` (the name address, e.g. `group:@Bar`) for layers, groups
+ * and entities with a targetname, `"materials"` for brushes and patches, `"entity"` (the
+ * owning brush entity id) for brushes of brush entities, and `"layer"`.
  */
 Json nodeSummary(const mdl::Node& node, const IdRegistry& ids);
 

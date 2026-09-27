@@ -30,6 +30,7 @@
 #include "mcp/Pagination.h"
 #include "mcp/Schema.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/EngineRules.h"
 #include "mcp/tools/EntityModelUtils.h"
 #include "mcp/tools/GeometryUtils.h"
 #include "mcp/tools/PlacementChecks.h"
@@ -42,10 +43,14 @@
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityDefinitionUtils.h"
 #include "mdl/EntityNode.h"
+#include "mdl/GameConfig.h"
+#include "mdl/GameInfo.h"
 #include "mdl/Map.h"
 #include "mdl/NodeTree.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/WorldNode.h"
+
+#include "kd/string_utils.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
@@ -76,18 +81,31 @@ using namespace schema;
 
 // Check names, in the order in which they run and their findings are listed.
 constexpr auto PlacementCheckName = std::string_view{"placement"};
+constexpr auto NpcSpawnCheckName = std::string_view{"npc_spawn"};
 constexpr auto PlayerStartCheckName = std::string_view{"player_start"};
 constexpr auto LinksCheckName = std::string_view{"links"};
 constexpr auto MaterialsCheckName = std::string_view{"materials"};
 constexpr auto RoomsCheckName = std::string_view{"rooms"};
+constexpr auto EntityBudgetCheckName = std::string_view{"entity_budget"};
 
 const auto CheckNames = std::vector<std::string>{
   std::string{PlacementCheckName},
+  std::string{NpcSpawnCheckName},
   std::string{PlayerStartCheckName},
   std::string{LinksCheckName},
   std::string{MaterialsCheckName},
   std::string{RoomsCheckName},
+  std::string{EntityBudgetCheckName},
 };
+
+/** The checks that look at the whole map; with ids they run only when requested. */
+bool mapLevelCheck(const std::string_view check)
+{
+  return check == PlayerStartCheckName || check == EntityBudgetCheckName;
+}
+
+/** A budget at or above this share of the limit is reported as near the limit. */
+constexpr auto EntityBudgetWarningShare = 0.9;
 
 /** An entity without model floats if its box is more than this above the floor. */
 constexpr auto FloatingThreshold = 16.0;
@@ -621,6 +639,10 @@ struct CheckRun
   std::optional<std::vector<std::string>> ids;
   SpaceOptions spaceOptions;
   PageRequest page;
+  std::optional<size_t> entityLimit;
+  std::optional<size_t> entityReserve;
+  /** The entity budget, once the entity_budget check ran. */
+  Json entityBudget = nullptr;
 
   bool spacesTried = false;
   std::optional<SpaceMap> spaces;
@@ -771,12 +793,24 @@ void checkPlacement(CheckRun& run, const Scope& scope)
   auto& out = run.findings[std::string{PlacementCheckName}];
   auto loader = EntityModelLoader{map};
 
+  // monsters are checked like the engine spawns them by npc_spawn
+  const auto* rules = std::ranges::find(run.checks, NpcSpawnCheckName) != run.checks.end()
+                        ? engineRules(map.gameInfo().gameConfig)
+                        : nullptr;
+
   for (auto* entityNode : pointEntitiesIn(map, scope))
   {
     const auto& entity = entityNode->entity();
     const auto& classname = entity.classname();
     const auto rule = placementRule(map, entity);
     if (rule.positionIndependent || logicClass(classname))
+    {
+      continue;
+    }
+    if (
+      rules
+      && monsterClass(
+        *rules, entity, entityNode->logicalBounds().translate(-entity.origin())))
     {
       continue;
     }
@@ -949,6 +983,205 @@ void checkPlacement(CheckRun& run, const Scope& scope)
       out.push_back(std::move(finding));
     }
   }
+}
+
+// npc_spawn
+
+std::string formatSize(const vm::vec3d& size)
+{
+  return fmt::format(
+    "{}x{}x{}",
+    roundForOutput(size.x()),
+    roundForOutput(size.y()),
+    roundForOutput(size.z()));
+}
+
+void checkNpcSpawn(CheckRun& run, const Scope& scope)
+{
+  auto& map = run.context->map();
+  const auto& ids = run.context->ids();
+  const auto* rules = engineRules(map.gameInfo().gameConfig);
+  if (!rules || rules->monsters.hulls.empty())
+  {
+    run.skip(
+      NpcSpawnCheckName,
+      "No engine data for the monsters of " + map.gameInfo().gameConfig.name
+        + " (Half-Life and Quake have it).");
+    return;
+  }
+  auto& out = run.findings[std::string{NpcSpawnCheckName}];
+
+  for (auto* entityNode : pointEntitiesIn(map, scope))
+  {
+    if (inOmittedLayer(*entityNode))
+    {
+      continue;
+    }
+    const auto& entity = entityNode->entity();
+    const auto monster = monsterClass(
+      *rules, entity, entityNode->logicalBounds().translate(-entity.origin()));
+    if (!monster)
+    {
+      continue;
+    }
+
+    const auto check = checkMonsterSpawn(map, ids, *rules, *entityNode, *monster);
+    const auto id = ids.format(*entityNode);
+    const auto& hull = check.hull.hull;
+    const auto walks = monster->movement == MonsterMovement::Walk;
+    const auto drops = dropsToFloor(monster->movement);
+    const auto placement = drops ? Placement::Floor : Placement::Any;
+
+    auto finding = Finding{};
+    finding.objectId = id;
+    finding.objectIds = {id};
+    finding.position = entity.origin();
+    finding.details = toJson(check);
+
+    if (!check.stuckIn.empty() && canBeStuck(monster->movement))
+    {
+      finding.code = "NPC_STUCK";
+      finding.severity = "error";
+      finding.objectIds.insert(
+        finding.objectIds.end(), check.stuckIn.begin(), check.stuckIn.end());
+      finding.description = fmt::format(
+        "{} ({}) will be stuck when it spawns: the engine moves it with its {} hull "
+        "({}, placed at its mins{}), which intersects {}. {}.",
+        id,
+        entity.classname(),
+        hull.name,
+        formatSize(hull.size),
+        walks ? ", raised by 1 unit before the drop to the floor" : "",
+        fmt::join(check.stuckIn, ", "),
+        rules->monsters.stuckBehavior);
+      const auto move = freeSpotMove(run, check.hull.box, placement);
+      finding.suggestedFix =
+        move ? moveFix("Move it to the nearest free spot for its hull.", id, *move)
+             : fixJson(fmt::format(
+                 "Move it to a free spot (free_spots with size {}).",
+                 toJson(hull.size).dump()));
+      out.push_back(std::move(finding));
+    }
+    else if (drops && check.stuckIn.empty() && !check.drop)
+    {
+      finding.code = "NPC_NO_SUPPORT";
+      finding.severity = "warning";
+      finding.description = fmt::format(
+        "{} ({}) has no support within {} units below its {} hull: the game cannot drop "
+        "it to the floor when it spawns, so it falls when the level starts (or out of "
+        "the map).",
+        id,
+        entity.classname(),
+        roundForOutput(rules->monsters.dropDistance),
+        hull.name);
+      const auto move = freeSpotMove(run, check.hull.box, Placement::Floor);
+      finding.suggestedFix =
+        move ? moveFix("Move it to the nearest free floor spot.", id, *move)
+             : fixJson("Move it above a floor (free_spots finds a free floor spot).");
+      out.push_back(std::move(finding));
+    }
+    else if (drops && check.drop && *check.drop > FloatingThreshold)
+    {
+      finding.code = "NPC_DROPS";
+      finding.severity = "info";
+      finding.description = fmt::format(
+        "{} ({}) is {} units above its support {}; the game drops it to the floor "
+        "when it spawns.",
+        id,
+        entity.classname(),
+        roundForOutput(*check.drop),
+        check.support.value_or("-"));
+      finding.suggestedFix =
+        moveFix("Move it down onto the floor.", id, vm::vec3d{0, 0, -*check.drop});
+      out.push_back(std::move(finding));
+    }
+  }
+}
+
+// entity_budget
+
+void checkEntityBudget(CheckRun& run)
+{
+  auto& map = run.context->map();
+  const auto* rules = engineRules(map.gameInfo().gameConfig);
+  if (!rules)
+  {
+    run.skip(
+      EntityBudgetCheckName,
+      "No engine data for the entity limit of " + map.gameInfo().gameConfig.name + ".");
+    return;
+  }
+
+  const auto& budgetRules = rules->budget;
+  const auto budget = countEntityBudget(map, *rules, run.entityLimit, run.entityReserve);
+  run.entityBudget = toJson(budget);
+  run.entityBudget["engine"] = budgetRules.engine;
+  run.entityBudget["defaultLimit"] = budgetRules.defaultLimit;
+
+  const auto share = double(budget.total) / double(budget.limit);
+  if (share < EntityBudgetWarningShare)
+  {
+    return;
+  }
+
+  auto& out = run.findings[std::string{EntityBudgetCheckName}];
+  const auto over = budget.total > budget.limit;
+  const auto beyondMax = budget.maxLimit && budget.total > *budget.maxLimit;
+  auto finding = Finding{};
+  finding.code = over ? "ENTITY_LIMIT_EXCEEDED" : "ENTITY_LIMIT_NEAR";
+  finding.severity = over ? "error" : "warning";
+  finding.objectId = "world";
+  finding.objectIds = {"world"};
+  finding.key = "budget";
+  finding.details = run.entityBudget;
+
+  auto top = std::vector<std::string>{};
+  for (const auto& item : budget.topClasses)
+  {
+    if (top.size() == 5)
+    {
+      break;
+    }
+    top.push_back(fmt::format("{} {}", item.count, item.classname));
+  }
+  finding.description = fmt::format(
+    "The level needs about {} of {} entities ({}%): {} spawned entities, {} extra and {} "
+    "reserved for the world, the player and entities created while the game runs; {} "
+    "entities of the map are removed by the compiler or when they spawn. Most: {}. {}",
+    budget.total,
+    budget.limit,
+    int(std::round(share * 100.0)),
+    budget.spawned,
+    budget.extra,
+    budget.reserved,
+    budget.removedByCompiler + budget.removedAtSpawn,
+    kdl::str_join(top, ", "),
+    over ? fmt::format(
+             "{} fails to load the level or to create entities (\"no free edicts\").",
+             budgetRules.engine)
+         : std::string{"Entities created at run time may exceed the limit."});
+
+  auto advice = std::string{};
+  if (budget.maxLimit && budget.limit < *budget.maxLimit && !beyondMax)
+  {
+    advice = budgetRules.raiseLimit
+             + " (map_check with entityLimit tells whether that is enough). Or reduce the "
+               "entities: merge static brush entities into the world or func_detail, "
+               "remove unused info_target, path or light entities with a targetname "
+               "that is never triggered.";
+  }
+  else
+  {
+    advice = (beyondMax ? fmt::format(
+                            "Even the largest limit ({}) is too small. ",
+                            *budget.maxLimit)
+                        : std::string{budgetRules.raiseLimit + ". "})
+             + "Reduce the entities: merge static brush entities into the world or "
+               "func_detail, remove unused info_target, path or light entities with a "
+               "targetname that is never triggered.";
+  }
+  finding.suggestedFix = fixJson(std::move(advice));
+  out.push_back(std::move(finding));
 }
 
 // player_start
@@ -1754,6 +1987,10 @@ ToolResult finish(CheckRun& run)
   result["counts"] = std::move(countsJson);
   result["checksRun"] = run.checksRun;
   result["skipped"] = run.skipped;
+  if (!run.entityBudget.is_null())
+  {
+    result["entityBudget"] = run.entityBudget;
+  }
   return result;
 }
 
@@ -1788,6 +2025,14 @@ void runStep(const std::shared_ptr<CheckRun>& run, const size_t index)
     if (check == PlacementCheckName)
     {
       checkPlacement(*run, scope.value());
+    }
+    else if (check == NpcSpawnCheckName)
+    {
+      checkNpcSpawn(*run, scope.value());
+    }
+    else if (check == EntityBudgetCheckName)
+    {
+      checkEntityBudget(*run);
     }
     else if (check == PlayerStartCheckName)
     {
@@ -1827,6 +2072,14 @@ void mapCheck(CallContext& context, const Args& args, ToolCompletion completion)
   run->spaceOptions.region = args.getOptional<vm::bbox3d>("region");
   run->spaceOptions.cellSize = args.getOr<double>("cellSize", 0.0);
   run->spaceOptions.openingSize = args.getOr<double>("openingSize", 96.0);
+  if (const auto limit = args.getOptional<int64_t>("entityLimit"))
+  {
+    run->entityLimit = size_t(*limit);
+  }
+  if (const auto reserve = args.getOptional<int64_t>("entityReserve"))
+  {
+    run->entityReserve = size_t(*reserve);
+  }
 
   if (const auto scope = resolveScope(context, run->ids); scope.is_error())
   {
@@ -1841,7 +2094,7 @@ void mapCheck(CallContext& context, const Args& args, ToolCompletion completion)
     {
       continue;
     }
-    if (check == PlayerStartCheckName && run->ids && !requested)
+    if (mapLevelCheck(check) && run->ids && !requested)
     {
       run->skip(
         check, "A map-level check; with ids it runs only when requested in checks.");
@@ -1905,23 +2158,43 @@ void registerMapCheckTools(ToolRegistry& registry)
         "name), materials (MISSING_MATERIAL: one finding per material in no loaded "
         "collection) and rooms (ENTITY_OUTSIDE_HULL: the void reaches the entity, the "
         "map leaks; the fix is a brush_create_box over the gap or a move into a room; "
-        "ENTITY_OUTSIDE_SPACES: a point entity in no room of spaces_list). "
-        "Finding ids (check:<code>:<object>) are stable across calls. Also returns "
+        "ENTITY_OUTSIDE_SPACES: a point entity in no room of spaces_list), npc_spawn "
+        "(monsters checked like the engine spawns them, from game data for Half-Life "
+        "and Quake: the engine's clipping hull chosen by the monster's size (Half-Life: "
+        "human 32x32x72, large 64x64x64, head 32x32x36), raised by 1 unit and dropped "
+        "up to 256 units to the floor; NPC_STUCK (error): the hull intersects world "
+        "brushes, clip brushes, solid brush entities (func_wall, func_door, "
+        "func_breakable, ...) or other monsters and solid entities, so the monster "
+        "cannot move (monsters that never move, such as the sitting scientist, are not "
+        "stuck); NPC_NO_SUPPORT: nothing below within 256 units; NPC_DROPS (info): "
+        "more than 16 units above its support; details has the hull, hullBox, drop and "
+        "support; with npc_spawn, placement leaves monsters out) and entity_budget (a "
+        "map-level check: the entities that really hold an edict, without those the "
+        "compiler removes (func_group, func_detail, info_texlights, ...) or the game "
+        "removes at spawn (lights without targetname, info_null), plus extra edicts "
+        "(env_laser end sprites, monstermaker children) and a reserve for the world, the "
+        "player and run-time entities, compared with the engine limit (Half-Life: 900, "
+        "up to 2048 with -num_edicts; Quake 600); ENTITY_LIMIT_NEAR (warning, from 90%) "
+        "and ENTITY_LIMIT_EXCEEDED (error) explain how to raise the limit; the result "
+        "has entityBudget). Finding ids (check:<code>:<object>) are stable across calls. "
+        "Also returns "
         "counts per code, checksRun and skipped. Runs the space analysis when needed "
         "(about a quarter of a second on 20 rooms), reports progress and can be "
         "cancelled between checks. Examples: {\"checks\": [\"links\", "
         "\"player_start\"]}; {\"ids\": [\"entity:7\", \"group:3\"], \"checks\": "
-        "[\"placement\"]}")
+        "[\"placement\"]}; {\"checks\": [\"npc_spawn\", \"entity_budget\"], "
+        "\"entityLimit\": 2048}")
       .input(object({
         field("checks", array(enumOf(CheckNames)).nonEmpty())
           .describe(
-            "The checks to run: placement, player_start, links, materials, rooms. "
-            "Default: all"),
+            "The checks to run: placement, npc_spawn, player_start, links, materials, "
+            "rooms, entity_budget. Default: all"),
         field("ids", array(objectId()).nonEmpty())
           .describe(
             "Limit the object-based checks to these objects and their contents "
-            "(entities, brushes, groups, layers). player_start is a map-level check "
-            "and runs with ids only when listed in checks. Default: the whole map"),
+            "(entities, brushes, groups, layers). player_start and entity_budget are "
+            "map-level checks and run with ids only when listed in checks. Default: the "
+            "whole map"),
         field("region", box())
           .describe(
             "Limit the space analysis of the rooms check to this box; "
@@ -1936,6 +2209,15 @@ void registerMapCheckTools(ToolRegistry& registry)
           .describe(
             "Openings up to this size in map units separate spaces (rooms check), as "
             "in spaces_list"),
+        field("entityLimit", integer().min(1).max(65536))
+          .describe(
+            "entity_budget: the engine's entity limit the game runs with, e.g. 2048 for "
+            "Half-Life with -num_edicts 2048. Default: the engine's default (Half-Life "
+            "900)"),
+        field("entityReserve", integer().min(0).max(65536))
+          .describe(
+            "entity_budget: edicts reserved for entities created while the game runs "
+            "(projectiles, gibs, dropped items). Default: 64"),
       }))
       .output(object({
         field("items", array(findingSchema())).required(),
@@ -1946,6 +2228,11 @@ void registerMapCheckTools(ToolRegistry& registry)
         field("skipped", array(any()))
           .required()
           .describe("{check, reason}: checks or parts of checks that did not run"),
+        field("entityBudget", any())
+          .describe(
+            "entity_budget: {engine, mapEntities, removedByCompiler, removedAtSpawn, "
+            "spawned, extra, reserved, total, limit, defaultLimit, maxLimit, topClasses, "
+            "extraByClass}"),
       }))
       .paginated()
       .mutation(Mutation::None)
