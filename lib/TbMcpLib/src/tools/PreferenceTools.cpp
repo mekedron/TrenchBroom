@@ -719,6 +719,8 @@ std::variant<PlannedChange, PlanError> planSet(
         .info = &info,
         .previous = currentValueJson(info.preference),
         .value = valueJson(*parsed.value),
+        .shortcuts = std::nullopt,
+        .apply = {},
       };
       if constexpr (std::is_same_v<T, std::vector<KeySequence>>)
       {
@@ -742,6 +744,8 @@ PlannedChange planReset(const PreferenceInfo& info)
         .info = &info,
         .previous = currentValueJson(info.preference),
         .value = valueJson(preference->defaultValue),
+        .shortcuts = std::nullopt,
+        .apply = {},
       };
       if constexpr (std::is_same_v<T, std::vector<KeySequence>>)
       {
