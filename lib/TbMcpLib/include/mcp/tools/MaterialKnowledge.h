@@ -29,6 +29,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -164,7 +165,64 @@ struct FaceSample
 
   bool aligned() const { return alignedAxes[0] && alignedAxes[1]; }
   bool wholeRepeats() const { return wholeRepeatAxes[0] && wholeRepeatAxes[1]; }
+  /**
+   * Whether the surface shows the image exactly once: one whole repeat on both axes,
+   * aligned to the surface's edges. False if the texture size is unknown.
+   */
+  bool showsImageOnce() const;
 };
+
+/**
+ * The outline and texture mapping of a brush face: what sampling needs, and what decides
+ * whether neighbouring faces form one surface.
+ */
+struct FaceOutline
+{
+  /** The material name as written. */
+  std::string material;
+  vm::vec3d normal;
+  double distance = 0.0;
+  vm::vec3d uAxis;
+  vm::vec3d vAxis;
+  vm::vec2d scale;
+  vm::vec2d offset;
+  /** The rotation in degrees as the face shows it. */
+  double rotation = 0.0;
+  std::vector<vm::vec3d> vertices;
+};
+
+/**
+ * The outline of the face, or nullopt for faces without geometry, with a zero scale or
+ * degenerate texture axes.
+ */
+std::optional<FaceOutline> faceOutline(const mdl::BrushFace& face);
+
+/**
+ * Measures how the texture lies on a surface of one or more faces with the same texture
+ * mapping (see mergeSurfaces): the extents are those of all their vertices. The mapping
+ * (scale, rotation, texel density) is taken from the first face. Returns nullopt for an
+ * empty list.
+ */
+std::optional<FaceSample> sampleSurface(
+  const std::vector<const FaceOutline*>& faces, std::optional<vm::vec2d> textureSize);
+
+/**
+ * Per face: whether it is hidden, i.e. lies within a coplanar face of another brush that
+ * faces the opposite way (the backs of brushes that touch, which a decompiler textures
+ * like the visible faces). Faces with tool or liquid materials hide nothing.
+ */
+std::vector<bool> hiddenFaces(const std::vector<FaceOutline>& faces);
+
+/**
+ * Groups faces into surfaces: faces are joined when they are coplanar, have the same
+ * material (case-insensitive) and a continuous texture mapping (the same texture axes and
+ * scale, offsets equal modulo the texture size if it is known), and share a piece of an
+ * edge. Faces split by a compiler or decompiler become one surface again. Returns the
+ * indices of the faces of each surface, in order of their first face.
+ */
+std::vector<std::vector<size_t>> mergeSurfaces(
+  const std::vector<FaceOutline>& faces,
+  const std::function<std::optional<vm::vec2d>(const std::string&)>& textureSize);
 
 /** The texture size of the material in pixels, or nullopt if it is not loaded. */
 std::optional<vm::vec2d> textureSizeOf(const gl::Material* material);
@@ -258,6 +316,8 @@ struct MaterialStats
   std::array<uint64_t, 3> wholeRepeats = {0, 0, 0};
   /** Sized samples aligned to a face edge along U, along V, and along both. */
   std::array<uint64_t, 3> aligned = {0, 0, 0};
+  /** Sized samples that show the image exactly once (FaceSample::showsImageOnce). */
+  uint64_t once = 0;
   /** |scale| per axis, rounded to 0.001. */
   Histogram scale{2};
   /** Face extent in world units along U, V, rounded to 1. */
@@ -276,8 +336,9 @@ struct MaterialStats
 };
 
 /**
- * {"n", "sized", "whole": [u, v, both], "aligned": [u, v, both], "scale", "size",
- * "texels", "repeats", "rotation"} with histograms as in Histogram::toJson.
+ * {"n", "sized", "whole": [u, v, both], "aligned": [u, v, both], "once", "scale", "size",
+ * "texels", "repeats", "rotation"} with histograms as in Histogram::toJson ("once" is
+ * optional when reading, for files written before it existed).
  */
 Json toJson(const MaterialStats& stats);
 std::optional<MaterialStats> materialStatsFromJson(const Json& json);
@@ -318,6 +379,11 @@ struct StatsSummary
   std::optional<vm::vec2d> alignedFractionPerAxis;
   /** The fraction of sized samples with at most 1.05 repeats, per axis. */
   std::optional<vm::vec2d> singleRepeatFractionPerAxis;
+  /**
+   * The fraction of sized samples that show the image exactly once (unknown when the
+   * repeats were derived from texel extents).
+   */
+  std::optional<double> onceFraction;
   /** The most frequent rotation. */
   std::optional<double> typicalRotation;
 };
@@ -338,7 +404,9 @@ constexpr auto MinKindSamples = uint64_t(4);
 /**
  * The kind that the statistics suggest (needs MinKindSamples sized samples):
  * - panel: whole repeats on both axes in >= 75% of the samples, median repeats <= 2 on
- *   both axes, and (if known) aligned to a face edge in >= 75%;
+ *   both axes, and (if known) aligned to a face edge in >= 75%; or at least half of the
+ *   samples show the image exactly once (the texture's own evidence: a tile rarely fits
+ *   its surface exactly);
  * - trim: along one axis >= 75% of the samples have at most 1.05 repeats and (if known)
  *   are aligned, along the other axis fewer than 50% do;
  * - tile: whole repeats in fewer than 60% of the samples, or median repeats > 2;

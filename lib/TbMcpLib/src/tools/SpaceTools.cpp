@@ -40,6 +40,8 @@
 #include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/string_utils.h"
+
 #include "vm/bbox.h"
 #include "vm/ray.h"
 #include "vm/vec.h"
@@ -330,6 +332,32 @@ ToolResult spacesListResult(
       fmt::format(
         "{} space(s) are connected to the void outside the map (see outsideOpenings).",
         unsealed));
+  }
+  auto edgeGaps = std::vector<std::string>{};
+  for (const auto index : selected)
+  {
+    const auto& space = spaces.spaces[index];
+    if (space.edgeGap)
+    {
+      const auto center = space.edgeGap->center();
+      edgeGaps.push_back(fmt::format(
+        "{} near [{}, {}, {}]",
+        space.id,
+        roundForOutput(center.x()),
+        roundForOutput(center.y()),
+        roundForOutput(center.z())));
+    }
+  }
+  if (!edgeGaps.empty())
+  {
+    context.warn(
+      "EDGE_ONLY_GAPS",
+      fmt::format(
+        "{} sealed space(s) touch the void outside the map only along an edge or a "
+        "corner, e.g. where walls meet only at an edge: {}. This is not a leak (the "
+        "compilers do not leak there either), but closing the gap is cleaner.",
+        edgeGaps.size(),
+        kdl::str_join(edgeGaps, "; ")));
   }
 
   return Json{
@@ -1338,11 +1366,14 @@ void registerSpaceTools(ToolRegistry& registry)
         "Lists the enclosed spaces (rooms) of the map (read-only), found by a "
         "flood fill of the empty volume at player-size resolution: world, "
         "func_group and func_detail brushes are solid (tool brushes such as clip, "
-        "hint and trigger are not; doors are openings). Each space has an id "
+        "hint and trigger are not, and brush entities such as doors, triggers and "
+        "func_wall do not divide spaces; doors are openings). Each space has an id "
         "(space:<hash of its bounds>, stable until the geometry around it "
         "changes), inner bounds, floor and ceiling heights (min, max, typical), "
         "floor area, volume, sealed (false if connected to the void outside the "
-        "map), openings, neighbours, the layers and groups inside and object "
+        "map through a gap; air that touches a space only along an edge or a "
+        "corner does not leak, as for the compilers, and is reported as warning "
+        "EDGE_ONLY_GAPS), openings, neighbours, the layers and groups inside and object "
         "counts. Openings are doorways (reaching the floor), windows or holes (in "
         "floors) with size, center, bottom height, the two space ids (\"void\" for "
         "the outside) and the func_door entities in them; outsideOpenings are "
@@ -1518,7 +1549,9 @@ void registerSpaceTools(ToolRegistry& registry)
         "reached from the start (read-only). Start: 'start' (a point), 'from' (an "
         "object) or by default info_player_start, then info_player_deathmatch. A "
         "cell is walkable if the player's box (the game's player size) fits "
-        "standing on a floor at the cell center; moves between neighbouring cells "
+        "standing on a floor at the cell center, resting on the highest surface "
+        "under the box (steps narrower than the player and low floor tiles are "
+        "walked over); moves between neighbouring cells "
         "climb up to stepHeight, jump up to jumpHeight (use 63 for Half-Life "
         "crouch jumps) or drop any height. Doors are passable, clip brushes and "
         "solid brush entities block, water is ignored (its bottom is walkable). "

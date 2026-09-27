@@ -181,6 +181,36 @@ TEST_CASE("MaterialKnowledgeTools")
       CHECK(resultOf(result)["files"]["failed"].empty());
     }
 
+    SECTION("split faces are merged into surfaces")
+    {
+      // every surface of the map is split into pieces, like in a decompiled map: the
+      // panels' fronts show k_panel once each only when their pieces are merged
+      const auto folder = getFixtureRoot() / "test" / "mcp" / "corpus_split";
+      const auto result =
+        fixture.call("material_corpus_scan", Json{{"folder", folder.string()}});
+      const auto& scan = resultOf(result);
+      CHECK(scan["faces"] == 864);
+      // floor: top, bottom and four sides; panels: front, back, top and two ends each
+      CHECK(scan["surfaces"] == 26);
+      CHECK(hasWarning(result, "DECOMPILED_INPUT"));
+
+      const auto corpus = readCorpusFile(corpusPath);
+      REQUIRE(corpus.is_success());
+      const auto& panel = corpus.value()->materials.at("k_panel");
+      CHECK(panel.stats.samples == 4);
+      CHECK(panel.stats.once == 4);
+      CHECK(
+        kindFromStats(summarize(panel.stats, panel.textureSize)) == MaterialKind::Panel);
+      const auto& tile = corpus.value()->materials.at("k_tile");
+      CHECK(tile.stats.samples == 6);
+
+      // original map sources are not reported
+      const auto original =
+        fixture.call("material_corpus_scan", Json{{"folder", corpusFolder().string()}});
+      CHECK(resultOf(original)["surfaces"] == 72);
+      CHECK_FALSE(hasWarning(original, "DECOMPILED_INPUT"));
+    }
+
     SECTION("dry run")
     {
       const auto result = fixture.call(

@@ -25,6 +25,7 @@
 #include "gl/Texture.h"
 #include "mcp/JsonVm.h"
 #include "mcp/tools/AssetUtils.h"
+#include "mcp/tools/SpaceAnalysis.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
@@ -54,6 +55,8 @@
 #include <iterator>
 #include <limits>
 #include <system_error>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
 
 namespace tb::mcp
@@ -285,8 +288,13 @@ bool onTextureEdge(const double coordinate, const double size)
 
 } // namespace
 
-std::optional<FaceSample> sampleFace(
-  const mdl::BrushFace& face, const std::optional<vm::vec2d> textureSize)
+bool FaceSample::showsImageOnce() const
+{
+  return repeats && wholeRepeats() && aligned() && std::round(repeats->x()) == 1.0
+         && std::round(repeats->y()) == 1.0;
+}
+
+std::optional<FaceOutline> faceOutline(const mdl::BrushFace& face)
 {
   if (!face.geometry())
   {
@@ -295,47 +303,75 @@ std::optional<FaceSample> sampleFace(
 
   const auto uv = face.uvAttributes();
   const auto scale = vm::vec2d{uv.scale};
-  const auto offset = vm::vec2d{uv.offset};
   const auto uAxis = face.uAxis();
   const auto vAxis = face.vAxis();
-  const auto uLength = vm::length(uAxis);
-  const auto vLength = vm::length(vAxis);
   constexpr auto epsilon = 1e-6;
   if (
-    std::abs(scale.x()) < epsilon || std::abs(scale.y()) < epsilon || uLength < epsilon
-    || vLength < epsilon)
+    std::abs(scale.x()) < epsilon || std::abs(scale.y()) < epsilon
+    || vm::length(uAxis) < epsilon || vm::length(vAxis) < epsilon)
   {
     return std::nullopt;
   }
 
-  const auto vertices = face.vertexPositions();
+  auto vertices = face.vertexPositions();
   if (vertices.size() < 3)
   {
     return std::nullopt;
   }
+
+  return FaceOutline{
+    face.materialName(),
+    face.boundary().normal,
+    face.boundary().distance,
+    uAxis,
+    vAxis,
+    scale,
+    vm::vec2d{uv.offset},
+    faceRotation(face),
+    std::move(vertices),
+  };
+}
+
+std::optional<FaceSample> sampleSurface(
+  const std::vector<const FaceOutline*>& faces,
+  const std::optional<vm::vec2d> textureSize)
+{
+  if (faces.empty())
+  {
+    return std::nullopt;
+  }
+
+  const auto& first = *faces.front();
+  const auto& scale = first.scale;
+  const auto uLength = vm::length(first.uAxis);
+  const auto vLength = vm::length(first.vAxis);
 
   constexpr auto inf = std::numeric_limits<double>::infinity();
   auto texelMin = vm::vec2d{inf, inf};
   auto texelMax = vm::vec2d{-inf, -inf};
   auto worldMin = vm::vec2d{inf, inf};
   auto worldMax = vm::vec2d{-inf, -inf};
-  for (const auto& vertex : vertices)
+  for (const auto* face : faces)
   {
-    // the texture coordinates in texels, like mdl::computeUvCoords plus the offset
-    const auto u = vm::dot(vertex, uAxis);
-    const auto v = vm::dot(vertex, vAxis);
-    const auto texel = vm::vec2d{u / scale.x() + offset.x(), v / scale.y() + offset.y()};
-    const auto world = vm::vec2d{u / uLength, v / vLength};
-    texelMin = vm::min(texelMin, texel);
-    texelMax = vm::max(texelMax, texel);
-    worldMin = vm::min(worldMin, world);
-    worldMax = vm::max(worldMax, world);
+    for (const auto& vertex : face->vertices)
+    {
+      // the texture coordinates in texels, like mdl::computeUvCoords plus the offset
+      const auto u = vm::dot(vertex, first.uAxis);
+      const auto v = vm::dot(vertex, first.vAxis);
+      const auto texel =
+        vm::vec2d{u / scale.x() + first.offset.x(), v / scale.y() + first.offset.y()};
+      const auto world = vm::vec2d{u / uLength, v / vLength};
+      texelMin = vm::min(texelMin, texel);
+      texelMax = vm::max(texelMax, texel);
+      worldMin = vm::min(worldMin, world);
+      worldMax = vm::max(worldMax, world);
+    }
   }
 
   auto sample = FaceSample{};
   sample.scale = vm::abs(scale);
   sample.flipped = {scale.x() < 0.0, scale.y() < 0.0};
-  sample.rotation = faceRotation(face);
+  sample.rotation = first.rotation;
   sample.texelDensity = vm::vec2d{sample.scale.x() / uLength, sample.scale.y() / vLength};
   sample.worldSize = worldMax - worldMin;
   sample.texelSize = texelMax - texelMin;
@@ -359,6 +395,288 @@ std::optional<FaceSample> sampleFace(
     }
   }
   return sample;
+}
+
+std::optional<FaceSample> sampleFace(
+  const mdl::BrushFace& face, const std::optional<vm::vec2d> textureSize)
+{
+  const auto outline = faceOutline(face);
+  return outline ? sampleSurface({&*outline}, textureSize) : std::nullopt;
+}
+
+namespace
+{
+
+/** Whether two faces lie in the same plane and continue each other's texture mapping. */
+bool sameMapping(
+  const FaceOutline& lhs, const FaceOutline& rhs, const std::optional<vm::vec2d>& size)
+{
+  constexpr auto axisTolerance = 1e-4;
+  if (
+    vm::dot(lhs.normal, rhs.normal) < 1.0 - 1e-6
+    || std::abs(lhs.distance - rhs.distance) > 0.05
+    || vm::squared_length(lhs.uAxis - rhs.uAxis) > axisTolerance * axisTolerance
+    || vm::squared_length(lhs.vAxis - rhs.vAxis) > axisTolerance * axisTolerance
+    || std::abs(lhs.scale.x() - rhs.scale.x()) > axisTolerance
+    || std::abs(lhs.scale.y() - rhs.scale.y()) > axisTolerance)
+  {
+    return false;
+  }
+  for (size_t axis = 0; axis < 2; ++axis)
+  {
+    auto difference = std::abs(lhs.offset[axis] - rhs.offset[axis]);
+    if (size && (*size)[axis] > 0.0)
+    {
+      const auto s = (*size)[axis];
+      difference -= std::floor(difference / s) * s;
+      difference = std::min(difference, s - difference);
+    }
+    if (difference > 0.05)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Whether two coplanar polygons share a piece of an edge. */
+bool shareEdge(const FaceOutline& lhs, const FaceOutline& rhs)
+{
+  constexpr auto tolerance = 0.01;
+  const auto& a = lhs.vertices;
+  const auto& b = rhs.vertices;
+  for (size_t i = 0; i < a.size(); ++i)
+  {
+    const auto& a0 = a[i];
+    const auto& a1 = a[(i + 1) % a.size()];
+    const auto length = vm::length(a1 - a0);
+    if (length < tolerance)
+    {
+      continue;
+    }
+    const auto direction = (a1 - a0) / length;
+    const auto offLine = [&](const vm::vec3d& point) {
+      const auto relative = point - a0;
+      return vm::length(relative - direction * vm::dot(relative, direction)) > tolerance;
+    };
+    for (size_t j = 0; j < b.size(); ++j)
+    {
+      const auto& b0 = b[j];
+      const auto& b1 = b[(j + 1) % b.size()];
+      if (offLine(b0) || offLine(b1))
+      {
+        continue;
+      }
+      const auto t0 = vm::dot(b0 - a0, direction);
+      const auto t1 = vm::dot(b1 - a0, direction);
+      const auto overlap =
+        std::min(length, std::max(t0, t1)) - std::max(0.0, std::min(t0, t1));
+      if (overlap > tolerance)
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+std::vector<bool> hiddenFaces(const std::vector<FaceOutline>& faces)
+{
+  using Key = std::tuple<int64_t, int64_t, int64_t, int64_t>;
+  const auto keyOf = [](const vm::vec3d& normal, const double distance) {
+    return Key{
+      std::llround(normal.x() * 1000.0),
+      std::llround(normal.y() * 1000.0),
+      std::llround(normal.z() * 1000.0),
+      std::llround(distance)};
+  };
+  auto planes = std::map<Key, std::vector<size_t>>{};
+  for (size_t i = 0; i < faces.size(); ++i)
+  {
+    const auto& face = faces[i];
+    if (!isToolMaterialName(face.material) && !isLiquidMaterialName(face.material))
+    {
+      planes[keyOf(face.normal, face.distance)].push_back(i);
+    }
+  }
+
+  // whether the point lies within the convex polygon (in its plane)
+  const auto contains = [](const FaceOutline& polygon, const vm::vec3d& point) {
+    constexpr auto tolerance = 0.01;
+    const auto& vertices = polygon.vertices;
+    auto sign = 0.0;
+    for (size_t i = 0; i < vertices.size(); ++i)
+    {
+      const auto& a = vertices[i];
+      const auto& b = vertices[(i + 1) % vertices.size()];
+      const auto edge = b - a;
+      const auto length = vm::length(edge);
+      if (length < tolerance)
+      {
+        continue;
+      }
+      const auto side = vm::dot(vm::cross(edge, point - a), polygon.normal) / length;
+      if (std::abs(side) <= tolerance)
+      {
+        continue;
+      }
+      if (sign == 0.0)
+      {
+        sign = side;
+      }
+      else if ((side > 0.0) != (sign > 0.0))
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  auto result = std::vector<bool>(faces.size(), false);
+  for (size_t i = 0; i < faces.size(); ++i)
+  {
+    const auto& face = faces[i];
+    const auto it = planes.find(keyOf(-face.normal, -face.distance));
+    if (it == planes.end())
+    {
+      continue;
+    }
+    result[i] = std::ranges::any_of(it->second, [&](const auto j) {
+      const auto& other = faces[j];
+      return vm::dot(face.normal, other.normal) < -1.0 + 1e-6
+             && std::abs(face.distance + other.distance) <= 0.05
+             && std::ranges::all_of(face.vertices, [&](const auto& vertex) {
+                  return contains(other, vertex);
+                });
+    });
+  }
+  return result;
+}
+
+std::vector<std::vector<size_t>> mergeSurfaces(
+  const std::vector<FaceOutline>& faces,
+  const std::function<std::optional<vm::vec2d>(const std::string&)>& textureSize)
+{
+  // union-find over the faces
+  auto parent = std::vector<size_t>(faces.size());
+  for (size_t i = 0; i < parent.size(); ++i)
+  {
+    parent[i] = i;
+  }
+  const auto find = [&](size_t i) {
+    while (parent[i] != i)
+    {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+
+  // candidates: the same material in about the same plane
+  using Key = std::tuple<std::string, int64_t, int64_t, int64_t, int64_t>;
+  auto candidates = std::map<Key, std::vector<size_t>>{};
+  for (size_t i = 0; i < faces.size(); ++i)
+  {
+    const auto& face = faces[i];
+    candidates[Key{
+                 kdl::str_to_lower(face.material),
+                 std::llround(face.normal.x() * 1000.0),
+                 std::llround(face.normal.y() * 1000.0),
+                 std::llround(face.normal.z() * 1000.0),
+                 std::llround(face.distance)}]
+      .push_back(i);
+  }
+
+  for (auto& [key, indices] : candidates)
+  {
+    if (indices.size() < 2)
+    {
+      continue;
+    }
+    const auto size = textureSize(faces[indices.front()].material);
+
+    // sweep along the axis in which the faces spread most
+    auto bounds = std::vector<std::pair<vm::vec3d, vm::vec3d>>{};
+    auto spreadMin = vm::vec3d::fill(std::numeric_limits<double>::infinity());
+    auto spreadMax = vm::vec3d::fill(-std::numeric_limits<double>::infinity());
+    for (const auto index : indices)
+    {
+      auto min = faces[index].vertices.front();
+      auto max = min;
+      for (const auto& vertex : faces[index].vertices)
+      {
+        min = vm::min(min, vertex);
+        max = vm::max(max, vertex);
+      }
+      spreadMin = vm::min(spreadMin, min);
+      spreadMax = vm::max(spreadMax, max);
+      bounds.emplace_back(min, max);
+    }
+    const auto spread = spreadMax - spreadMin;
+    const auto axis = spread.x() >= spread.y() && spread.x() >= spread.z() ? size_t(0)
+                      : spread.y() >= spread.z()                           ? size_t(1)
+                                                                           : size_t(2);
+    auto order = std::vector<size_t>(indices.size());
+    for (size_t i = 0; i < order.size(); ++i)
+    {
+      order[i] = i;
+    }
+    std::ranges::sort(order, [&](const auto lhs, const auto rhs) {
+      return bounds[lhs].first[axis] < bounds[rhs].first[axis];
+    });
+
+    constexpr auto tolerance = 0.01;
+    for (size_t i = 0; i < order.size(); ++i)
+    {
+      const auto& [minI, maxI] = bounds[order[i]];
+      for (size_t j = i + 1; j < order.size(); ++j)
+      {
+        const auto& [minJ, maxJ] = bounds[order[j]];
+        if (minJ[axis] > maxI[axis] + tolerance)
+        {
+          break;
+        }
+        const auto lhs = indices[order[i]];
+        const auto rhs = indices[order[j]];
+        if (find(lhs) == find(rhs))
+        {
+          continue;
+        }
+        const auto touching = [&]() {
+          for (size_t a = 0; a < 3; ++a)
+          {
+            if (minJ[a] > maxI[a] + tolerance || minI[a] > maxJ[a] + tolerance)
+            {
+              return false;
+            }
+          }
+          return true;
+        }();
+        if (
+          touching && sameMapping(faces[lhs], faces[rhs], size)
+          && shareEdge(faces[lhs], faces[rhs]))
+        {
+          parent[find(lhs)] = find(rhs);
+        }
+      }
+    }
+  }
+
+  auto groups = std::vector<std::vector<size_t>>{};
+  auto groupOfRoot = std::unordered_map<size_t, size_t>{};
+  for (size_t i = 0; i < faces.size(); ++i)
+  {
+    const auto root = find(i);
+    const auto [it, inserted] = groupOfRoot.emplace(root, groups.size());
+    if (inserted)
+    {
+      groups.emplace_back();
+    }
+    groups[it->second].push_back(i);
+  }
+  return groups;
 }
 
 // Histogram
@@ -622,6 +940,7 @@ void MaterialStats::add(const FaceSample& sample)
     aligned[0] += sample.alignedAxes[0] ? 1u : 0u;
     aligned[1] += sample.alignedAxes[1] ? 1u : 0u;
     aligned[2] += sample.aligned() ? 1u : 0u;
+    once += sample.showsImageOnce() ? 1u : 0u;
   }
 }
 
@@ -629,6 +948,7 @@ void MaterialStats::merge(const MaterialStats& other)
 {
   samples += other.samples;
   sizedSamples += other.sizedSamples;
+  once += other.once;
   for (size_t i = 0; i < 3; ++i)
   {
     wholeRepeats[i] += other.wholeRepeats[i];
@@ -657,6 +977,7 @@ Json toJson(const MaterialStats& stats)
     {"sized", stats.sizedSamples},
     {"whole", stats.wholeRepeats},
     {"aligned", stats.aligned},
+    {"once", stats.once},
     {"scale", stats.scale.toJson()},
     {"size", stats.worldSize.toJson()},
     {"texels", stats.texelSize.toJson()},
@@ -696,6 +1017,7 @@ std::optional<MaterialStats> materialStatsFromJson(const Json& json)
   result.sizedSamples = *sized;
   result.wholeRepeats = *whole;
   result.aligned = *aligned;
+  result.once = member<uint64_t>(json, "once").value_or(0);
   result.scale = std::move(*scale);
   result.worldSize = std::move(*size);
   result.texelSize = std::move(*texels);
@@ -785,6 +1107,7 @@ StatsSummary summarize(
     result.alignedFraction = double(stats.aligned[2]) / sized;
     result.alignedFractionPerAxis =
       vm::vec2d{double(stats.aligned[0]) / sized, double(stats.aligned[1]) / sized};
+    result.onceFraction = double(stats.once) / sized;
   }
   else if (textureSize && textureSize->x() > 0.0 && textureSize->y() > 0.0)
   {
@@ -835,6 +1158,7 @@ Json toJson(const StatsSummary& summary)
     {"medianRepeats", optionalVec2Json(summary.medianRepeats)},
     {"wholeRepeatFraction", optionalNumberJson(summary.wholeRepeatFraction)},
     {"alignedFraction", optionalNumberJson(summary.alignedFraction)},
+    {"onceFraction", optionalNumberJson(summary.onceFraction)},
     {"typicalRotation", optionalNumberJson(summary.typicalRotation)},
   };
 }
@@ -857,8 +1181,9 @@ std::optional<MaterialKind> kindFromStats(const StatsSummary& summary)
   };
 
   if (
-    whole >= 0.75 && median.x() <= 2.0 && median.y() <= 2.0
-    && (!summary.alignedFraction || *summary.alignedFraction >= 0.75))
+    (whole >= 0.75 && median.x() <= 2.0 && median.y() <= 2.0
+     && (!summary.alignedFraction || *summary.alignedFraction >= 0.75))
+    || (summary.onceFraction && *summary.onceFraction >= 0.5))
   {
     return MaterialKind::Panel;
   }

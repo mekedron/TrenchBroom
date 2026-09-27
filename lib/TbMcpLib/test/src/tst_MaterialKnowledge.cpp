@@ -276,6 +276,97 @@ TEST_CASE("MaterialKnowledge functions")
     }
   }
 
+  SECTION("faceOutline, hiddenFaces, mergeSurfaces and sampleSurface")
+  {
+    auto fixture = mdl::MapFixture{};
+    auto& map = fixture.create(mdl::QuakeFixtureConfig);
+
+    // a wall 128 x 64 split into four pieces, like a decompiler does, a piece of it with
+    // another material, a piece with a shifted texture and a piece that does not touch
+    auto brushes = std::vector<mdl::Brush>{};
+    const auto addPiece = [&](
+                            const double x0,
+                            const double x1,
+                            const std::string& material,
+                            const mdl::UvAttributes& attributes = {}) {
+      auto brush =
+        brushBuilder(map).createCuboid({{x0, 0, 0}, {x1, 16, 64}}, material).value();
+      for (auto& face : brush.faces())
+      {
+        REQUIRE(face.setUvAttributes(attributes).is_success());
+      }
+      brushes.push_back(std::move(brush));
+    };
+    for (const auto x : {0.0, 32.0, 64.0, 96.0})
+    {
+      addPiece(x, x + 32.0, "m");
+    }
+    addPiece(128, 160, "other");
+    addPiece(160, 192, "m", {.offset = {8, 0}});
+    addPiece(224, 256, "m");
+    // an offset by the texture size continues the mapping
+    addPiece(-32, 0, "m", {.offset = {128, 0}});
+
+    auto outlines = std::vector<FaceOutline>{};
+    auto front = std::vector<size_t>{};
+    for (const auto& brush : brushes)
+    {
+      for (const auto& face : brush.faces())
+      {
+        auto outline = faceOutline(face);
+        REQUIRE(outline);
+        if (face.boundary().normal == vm::vec3d{0, -1, 0})
+        {
+          front.push_back(outlines.size());
+        }
+        outlines.push_back(std::move(*outline));
+      }
+    }
+    REQUIRE(front.size() == 8);
+
+    // the faces where two pieces touch are hidden, the outer faces are not
+    const auto hidden = hiddenFaces(outlines);
+    const auto hiddenCount = std::ranges::count(hidden, true);
+    // 3 joints in the wall, the joints to "other", to the shifted piece and to the piece
+    // at x = -32: 6 joints with two faces each
+    CHECK(hiddenCount == 12);
+    CHECK_FALSE(hidden[front[0]]);
+
+    const auto textureSize = [](const std::string& name) -> std::optional<vm::vec2d> {
+      return name == "m" ? std::optional{vm::vec2d{128, 64}} : std::nullopt;
+    };
+    const auto surfaces = mergeSurfaces(outlines, textureSize);
+    const auto surfaceOf = [&](const size_t face) {
+      const auto it = std::ranges::find_if(surfaces, [&](const auto& surface) {
+        return std::ranges::find(surface, face) != surface.end();
+      });
+      REQUIRE(it != surfaces.end());
+      return *it;
+    };
+    const auto wall = surfaceOf(front[0]);
+    CHECK(wall == std::vector<size_t>{front[0], front[1], front[2], front[3], front[7]});
+    CHECK(surfaceOf(front[4]) == std::vector<size_t>{front[4]});
+    CHECK(surfaceOf(front[5]) == std::vector<size_t>{front[5]});
+    CHECK(surfaceOf(front[6]) == std::vector<size_t>{front[6]});
+
+    // the wall's four pieces show the texture exactly once
+    auto pieces = std::vector<const FaceOutline*>{};
+    for (const auto index : {front[0], front[1], front[2], front[3]})
+    {
+      pieces.push_back(&outlines[index]);
+    }
+    const auto sample = sampleSurface(pieces, vm::vec2d{128, 64});
+    REQUIRE(sample);
+    CHECK(sample->worldSize == vm::approx{vm::vec2d{128, 64}});
+    CHECK(*sample->repeats == vm::approx{vm::vec2d{1, 1}});
+    CHECK(sample->showsImageOnce());
+    const auto piece = sampleSurface({pieces.front()}, vm::vec2d{128, 64});
+    REQUIRE(piece);
+    CHECK(*piece->repeats == vm::approx{vm::vec2d{0.25, 1}});
+    CHECK_FALSE(piece->showsImageOnce());
+    CHECK(sampleSurface({}, vm::vec2d{128, 64}) == std::nullopt);
+  }
+
   SECTION("summarize and kindFromStats")
   {
     const auto panel = summarize(panelStats(5));
@@ -305,6 +396,23 @@ TEST_CASE("MaterialKnowledge functions")
       trim.add(makeSample({1, 1}, {length, 16}, vm::vec2d{64, 16}, {true, true}));
     }
     CHECK(kindFromStats(summarize(trim)) == MaterialKind::Trim);
+
+    // surfaces that show the image exactly once are evidence for a panel, even if the
+    // other samples are strips (the sides of the panel's brush)
+    auto once = MaterialStats{};
+    for (size_t i = 0; i < 3; ++i)
+    {
+      once.add(makeSample({1, 1}, {64, 128}, vm::vec2d{64, 128}, {true, true}));
+    }
+    once.add(makeSample({1, 1}, {8, 128}, vm::vec2d{64, 128}, {false, true}));
+    once.add(makeSample({1, 1}, {64, 8}, vm::vec2d{64, 128}, {true, false}));
+    const auto onceSummary = summarize(once);
+    CHECK(onceSummary.onceFraction == Catch::Approx(0.6));
+    CHECK(onceSummary.wholeRepeatFraction == Catch::Approx(0.6));
+    CHECK(kindFromStats(onceSummary) == MaterialKind::Panel);
+    once.add(makeSample({1, 1}, {8, 128}, vm::vec2d{64, 128}, {false, true}));
+    once.add(makeSample({1, 1}, {8, 128}, vm::vec2d{64, 128}, {false, true}));
+    CHECK(kindFromStats(summarize(once)) == MaterialKind::Tile);
 
     // the scale range reports percentiles and extremes
     auto scales = MaterialStats{};
@@ -585,7 +693,15 @@ TEST_CASE("MaterialStats")
     const auto parsed = materialStatsFromJson(json);
     REQUIRE(parsed);
     CHECK(toJson(*parsed) == json);
+    CHECK(parsed->once == 3);
     CHECK(materialStatsFromJson(Json{{"n", 1}}) == std::nullopt);
+
+    // files written before "once" existed
+    auto withoutOnce = json;
+    withoutOnce.erase("once");
+    const auto old = materialStatsFromJson(withoutOnce);
+    REQUIRE(old);
+    CHECK(old->once == 0);
   }
 
   SECTION("cap keeps the corpus compact")

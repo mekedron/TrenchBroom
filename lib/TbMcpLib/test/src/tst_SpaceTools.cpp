@@ -27,6 +27,8 @@
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
+#include "vm/bbox.h"
+
 #include <algorithm>
 #include <functional>
 #include <string>
@@ -154,6 +156,31 @@ TEST_CASE("SpaceTools")
          || opening["spaces"] == Json::array({(*room2)["id"], (*room1)["id"]})));
       CHECK(result["outsideOpenings"].empty());
       CHECK((*room1)["openings"] == Json::array({opening["id"]}));
+      CHECK_FALSE(hasWarning(result, "SPACES_NOT_SEALED"));
+      CHECK_FALSE(hasWarning(result, "EDGE_ONLY_GAPS"));
+    }
+
+    SECTION("walls that meet only at an edge")
+    {
+      // room 1's west wall no longer reaches the corners: the corner columns touch the
+      // room only along an edge, which does not leak
+      auto* westWall = findNode(map.worldNode(), [](const mdl::Node& node) {
+        return dynamic_cast<const mdl::BrushNode*>(&node)
+               && node.logicalBounds() == vm::bbox3d{{-16, -16, 0}, {0, 400, 192}};
+      });
+      REQUIRE(westWall);
+      fixture.call("objects_delete", Json{{"ids", {fixture.id(*westWall)}}});
+      fixture.call(
+        "brush_create_box", Json{{"min", {-16, 0, 0}}, {"max", {0, 384, 192}}});
+
+      const auto result = fixture.call("spaces_list");
+      CHECK(result["count"] == 2);
+      const auto* room1 = findSpaceContaining(result["spaces"], 64, 192);
+      REQUIRE(room1);
+      CHECK((*room1)["sealed"] == true);
+      CHECK(result["outsideOpenings"].empty());
+      CHECK_FALSE(hasWarning(result, "SPACES_NOT_SEALED"));
+      CHECK(hasWarning(result, "EDGE_ONLY_GAPS"));
     }
 
     SECTION("openingSize")

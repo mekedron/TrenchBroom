@@ -40,6 +40,7 @@
 #include "vm/vec_io.h" // IWYU pragma: keep
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <functional>
 #include <string>
@@ -104,6 +105,22 @@ mdl::EntityNode* addPointEntity(
      std::to_string(int(origin.x())) + " " + std::to_string(int(origin.y())) + " "
        + std::to_string(int(origin.z()))},
   }}};
+  mdl::addNodes(map, {{&mdl::parentForNodes(map), {entityNode}}});
+  return entityNode;
+}
+
+mdl::EntityNode* addBrushEntity(
+  mdl::Map& map,
+  const std::string& classname,
+  const std::vector<vm::bbox3d>& boxes,
+  const std::string& material = "wall")
+{
+  auto* entityNode = new mdl::EntityNode{mdl::Entity{{{"classname", classname}}}};
+  for (const auto& box : boxes)
+  {
+    entityNode->addChild(
+      new mdl::BrushNode{brushBuilder(map).createCuboid(box, material).value()});
+  }
   mdl::addNodes(map, {{&mdl::parentForNodes(map), {entityNode}}});
   return entityNode;
 }
@@ -579,6 +596,186 @@ TEST_CASE("SpaceAnalysis")
     UNSCOPED_INFO("analyzeSpaces on 20 rooms: " << spacesElapsed.count() << " ms");
     // about 250 ms in a debug build
     CHECK(spacesElapsed.count() < 5000);
+  }
+}
+
+TEST_CASE("SpaceAnalysis regressions")
+{
+  auto fixture = mdl::MapFixture{};
+  auto& map = fixture.create({.gameInfo = mdl::QuakeGameInfo});
+
+  SECTION("wall details next to a door do not split a room")
+  {
+    // a cafe (0..768 x 0..512 x 0..160) south of a taller dance hall; the double door
+    // between them has a trigger in front of it, and the cafe's wall has trims below
+    // 48, posters beside the door and a lamp under the ceiling in front of it, which
+    // leave only a diagonal link between parts of the cafe's core
+    addCuboid(map, {{-16, -464, -16}, {784, 528, 0}});
+    addCuboid(map, {{-16, -16, 160}, {784, 528, 176}});
+    addCuboid(map, {{80, -464, 224}, {688, -16, 240}});
+    addCuboid(map, {{-16, -16, 0}, {0, 528, 160}});
+    addCuboid(map, {{768, -16, 0}, {784, 528, 160}});
+    addCuboid(map, {{0, 512, 0}, {768, 528, 160}});
+    addCuboid(map, {{80, -464, 0}, {96, -16, 224}});
+    addCuboid(map, {{672, -464, 0}, {688, -16, 224}});
+    addCuboid(map, {{96, -464, 0}, {672, -448, 224}});
+    // the wall between the rooms with the door opening 448..544 x 0..112
+    addCuboid(map, {{-16, -16, 0}, {448, 0, 240}});
+    addCuboid(map, {{544, -16, 0}, {784, 0, 240}});
+    addCuboid(map, {{448, -16, 112}, {544, 0, 240}});
+    // trims, posters and the lamp
+    addCuboid(map, {{0, 0, 0}, {448, 4, 48}});
+    addCuboid(map, {{544, 0, 0}, {768, 4, 48}});
+    addCuboid(map, {{320, 0, 72}, {432, 2, 136}});
+    addCuboid(map, {{560, 0, 56}, {624, 2, 152}});
+    addCuboid(map, {{496, 120, 156}, {560, 136, 160}});
+    // the door leaves and the trigger
+    const auto* leftLeaf =
+      addBrushEntity(map, "func_door", {{{448, -10, 0}, {496, -6, 112}}});
+    const auto* rightLeaf =
+      addBrushEntity(map, "func_door", {{{496, -10, 0}, {544, -6, 112}}});
+    addBrushEntity(map, "trigger_multiple", {{{448, -80, 0}, {544, 64, 112}}}, "trigger");
+
+    const auto spaces = analyzeSpaces(map).value();
+    const auto cafe = spaces.spaceAt({384, 256, 80});
+    const auto hall = spaces.spaceAt({384, -256, 80});
+    REQUIRE(cafe);
+    REQUIRE(hall);
+    CHECK(*cafe != *hall);
+    CHECK(spaces.spaces.size() == 2);
+    // in front of the door, under the lamp
+    CHECK(spaces.spaceAt({496, 56, 100}) == cafe);
+    CHECK(spaces.spaceAt({496, 8, 150}) == cafe);
+
+    // one doorway with both door leaves
+    REQUIRE(spaces.openings.size() == 1);
+    const auto details = describeOpening(map, spaces, 0);
+    CHECK(details.kind == "doorway");
+    CHECK(details.width == Catch::Approx(96));
+    CHECK(details.height == Catch::Approx(112));
+    CHECK(details.bottom == Catch::Approx(0));
+    CHECK(details.doors.size() == 2);
+    CHECK(std::ranges::find(details.doors, leftLeaf) != details.doors.end());
+    CHECK(std::ranges::find(details.doors, rightLeaf) != details.doors.end());
+  }
+
+  SECTION("walls that meet only at an edge seal a room")
+  {
+    // the walls leave a 16 x 16 column open in every corner, which touches the room only
+    // along a vertical edge
+    addCuboid(map, {{-16, -16, -16}, {272, 272, 0}});
+    addCuboid(map, {{-16, -16, 128}, {272, 272, 144}});
+    addCuboid(map, {{-16, 0, 0}, {0, 256, 128}});
+    addCuboid(map, {{256, 0, 0}, {272, 256, 128}});
+    addCuboid(map, {{0, -16, 0}, {256, 0, 128}});
+    addCuboid(map, {{0, 256, 0}, {256, 272, 128}});
+    auto* light = addPointEntity(map, "light", {128, 128, 64});
+
+    const auto spaces = analyzeSpaces(map).value();
+    const auto room = spaces.spaceAt({128, 128, 64});
+    REQUIRE(room);
+    const auto& space = spaces.spaces[*room];
+    CHECK(space.sealed);
+    CHECK(space.bounds == vm::bbox3d{{0, 0, 0}, {256, 256, 128}});
+    CHECK(std::ranges::none_of(spaces.openings, [&](const auto& opening) {
+      return opening.spaceA == *room || opening.spaceB == room;
+    }));
+    // the corner columns are reported separately
+    REQUIRE(space.edgeGap);
+    CHECK(std::ranges::any_of(
+      std::array<vm::vec3d, 4>{
+        {{-8, -8, 64}, {264, -8, 64}, {-8, 264, 64}, {264, 264, 64}}},
+      [&](const auto& corner) {
+        return space.edgeGap->min.x() <= corner.x()
+               && corner.x() <= space.edgeGap->max.x()
+               && space.edgeGap->min.y() <= corner.y()
+               && corner.y() <= space.edgeGap->max.y();
+      }));
+
+    const auto report = predictLeaks(map);
+    CHECK(report.analyzed);
+    CHECK(std::ranges::none_of(
+      report.findings, [&](const auto& finding) { return finding.entity == light; }));
+
+    // a real gap is still a leak
+    addCuboid(map, {{-16, -16, 0}, {0, 0, 128}});
+    addCuboid(map, {{256, -16, 0}, {272, 0, 128}});
+    addCuboid(map, {{-16, 256, 0}, {0, 272, 128}});
+    mdl::removeNodes(map, {findBrush(map, {{0, 256, 0}, {256, 272, 128}})});
+    addCuboid(map, {{0, 256, 0}, {112, 272, 128}});
+    addCuboid(map, {{144, 256, 0}, {256, 272, 128}});
+    const auto leaking = analyzeSpaces(map).value();
+    const auto leakingRoom = leaking.spaceAt({128, 128, 64});
+    REQUIRE(leakingRoom);
+    CHECK_FALSE(leaking.spaces[*leakingRoom].sealed);
+  }
+
+  SECTION("planWalk: steps narrower than the player and low floor tiles")
+  {
+    // a room 0..512 x 0..384 x 0..192 with a pool (256..448 x 64..320, 80 deep) whose
+    // stairs have 16 x 16 steps, and a dance floor of 2 unit high tiles in a checker
+    // pattern
+    addCuboid(map, {{-16, -16, -16}, {256, 400, 0}});
+    addCuboid(map, {{448, -16, -16}, {528, 400, 0}});
+    addCuboid(map, {{256, -16, -16}, {448, 64, 0}});
+    addCuboid(map, {{256, 320, -16}, {448, 400, 0}});
+    addCuboid(map, {{240, 48, -96}, {464, 336, -80}});
+    addCuboid(map, {{240, 48, -80}, {256, 336, -16}});
+    addCuboid(map, {{448, 48, -80}, {464, 336, -16}});
+    addCuboid(map, {{256, 48, -80}, {448, 64, -16}});
+    addCuboid(map, {{256, 320, -80}, {448, 336, -16}});
+    for (int step = 0; step < 4; ++step)
+    {
+      const auto x = 256.0 + step * 16.0;
+      addCuboid(map, {{x, 64, -80}, {x + 16, 128, -16.0 - step * 16.0}});
+    }
+    addCuboid(map, {{-16, -16, 192}, {528, 400, 208}});
+    addCuboid(map, {{-16, -16, 0}, {0, 400, 192}});
+    addCuboid(map, {{512, -16, 0}, {528, 400, 192}});
+    addCuboid(map, {{0, -16, 0}, {512, 0, 192}});
+    addCuboid(map, {{0, 384, 0}, {512, 400, 192}});
+    for (int i = 0; i < 6; ++i)
+    {
+      for (int j = 0; j < 6; ++j)
+      {
+        if ((i + j) % 2 == 0)
+        {
+          const auto min = vm::vec3d{32.0 + i * 32.0, 96.0 + j * 32.0, 0.0};
+          addCuboid(map, {min, min + vm::vec3d{32, 32, 2}});
+        }
+      }
+    }
+
+    const auto plan = planWalk(map, {.start = vm::vec3d{64, 48, 24}}).value();
+    REQUIRE(plan.startNode);
+    auto unreachable = std::vector<vm::vec3d>{};
+    for (const auto& node : plan.nodes)
+    {
+      if (node.z < 100.0 && (!node.reachable || !node.canReturn))
+      {
+        unreachable.push_back(plan.position(node));
+      }
+    }
+    CHECK(unreachable.empty());
+
+    const auto nodesAt = [&](const double x, const double y) {
+      const auto column = size_t((x - plan.origin.x()) / plan.cellSize);
+      const auto row = size_t((y - plan.origin.y()) / plan.cellSize);
+      auto result = std::vector<double>{};
+      for (const auto index : plan.columnNodes[column + row * plan.columns])
+      {
+        // below the roof
+        if (plan.nodes[index].z < 100.0)
+        {
+          result.push_back(plan.nodes[index].z);
+        }
+      }
+      return result;
+    };
+    // the player stands on the highest surface under its box
+    CHECK(nodesAt(352, 200) == std::vector<double>{-80});
+    CHECK(nodesAt(280, 100) == std::vector<double>{-16});
+    CHECK(nodesAt(72, 104) == std::vector<double>{2});
   }
 }
 

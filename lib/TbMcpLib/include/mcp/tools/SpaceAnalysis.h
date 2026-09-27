@@ -255,8 +255,18 @@ struct SpaceGeometry
   vm::bbox3d bounds;
   size_t cellCount = 0;
   double volume = 0.0;
-  /** False if the space is connected to the void outside the map. */
+  /**
+   * False if the space is connected to the void outside the map through a face of a
+   * cell; air that touches the space only along an edge or a corner does not count, as
+   * compilers do not leak through it.
+   */
   bool sealed = true;
+  /**
+   * Sealed spaces only: where the space touches air connected to the outside only along
+   * an edge or a corner (the bounds of the two cells), e.g. walls that meet only at an
+   * edge; nullopt if it does not.
+   */
+  std::optional<vm::bbox3d> edgeGap;
   /**
    * Whether the space grew from a room core; false for passages and pockets, which
    * are narrower than openingSize in every direction.
@@ -297,11 +307,13 @@ struct SpaceMap
 
 /**
  * Segments the empty volume into spaces: the empty cells are eroded by
- * openingSize / 2 (chessboard distance to solid cells), the connected parts of the
+ * openingSize / 2 (chessboard distance to solid cells), the 26-connected parts of the
  * remainder are room cores, which grow back over the empty cells (first up to the erosion
  * distance, then narrow passages that are long enough become spaces of their own, then
  * everything). Cores and cells at the border of the grid that are connected to it form
- * the void. Boundaries between two labels are openings.
+ * the void. Growth never joins a cell connected to the outside (6-connected, like a BSP
+ * compiler's flood fill) with one that is not. Boundaries between two labels are
+ * openings.
  */
 Result<SpaceMap, ToolError> analyzeSpaces(
   const mdl::Map& map, const SpaceOptions& options = {});
@@ -519,8 +531,9 @@ struct WalkPlan
  * Finds where the player's center can stand (a free player box on a floor, the lowest
  * step height of the box ignored) and which of these positions can be reached from the
  * start by walking (height difference <= stepHeight), jumping up (<= jumpHeight) or
- * dropping down. Doors are passable. Floors are brush faces (walkable slope, normal z
- * >= 0.7) and patches.
+ * dropping down. The box rests on the highest floor under it: a floor with a standable
+ * floor at most stepHeight higher under the box is not a position of its own. Doors are
+ * passable. Floors are brush faces (walkable slope, normal z >= 0.7) and patches.
  */
 Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options = {});
 

@@ -255,7 +255,19 @@ struct ScanJob
   Json failed = Json::array();
   std::vector<std::string> otherGames;
   std::unordered_map<std::string, std::optional<vm::vec2d>> textureSizes;
+  /** The surfaces sampled: brush faces merged with their split neighbours. */
+  uint64_t surfaces = 0;
+  /** Files whose faces are split into many pieces, e.g. decompiled maps. */
+  std::vector<std::string> splitFiles;
 };
+
+/** Files with fewer sampled faces are not reported as split. */
+constexpr auto MinDecompiledFaces = size_t(200);
+/**
+ * A file is reported as split (decompiled) if merging removes at least this fraction of
+ * its faces.
+ */
+constexpr auto DecompiledMergeRatio = 0.2;
 
 std::optional<vm::vec2d> textureSize(
   ScanJob& job, const mdl::Map& map, const std::string& name)
@@ -296,19 +308,19 @@ std::optional<std::string> scanFile(
   for (const auto format : candidates)
   {
     auto sampled = CorpusFile{};
+    auto outlines = std::vector<FaceOutline>{};
     const auto onFace = [&](const mdl::BrushFace& face) {
       const auto& name = face.materialName();
-      const auto size = textureSize(job, map, name);
       sampled.faces += 1;
       auto& entry = sampled.materials[kdl::str_to_lower(name)];
       if (entry.name.empty())
       {
         entry.name = name;
-        entry.textureSize = size;
+        entry.textureSize = textureSize(job, map, name);
       }
-      if (const auto sample = sampleFace(face, size))
+      if (auto outline = faceOutline(face))
       {
-        entry.stats.add(*sample);
+        outlines.push_back(std::move(*outline));
       }
     };
 
@@ -318,6 +330,49 @@ std::optional<std::string> scanFile(
     if (const auto read = reader.read(map.worldBounds(), status, map.taskManager());
         read.is_success())
     {
+      // the backs of touching brushes are not seen and say nothing about the material
+      const auto hidden = hiddenFaces(outlines);
+      auto visible = std::vector<FaceOutline>{};
+      for (size_t i = 0; i < outlines.size(); ++i)
+      {
+        if (!hidden[i])
+        {
+          visible.push_back(std::move(outlines[i]));
+        }
+      }
+      outlines = std::move(visible);
+      // faces split by a compiler or decompiler are sampled as the surface they form
+      const auto sizeOf = [&](const std::string& name) {
+        return textureSize(job, map, name);
+      };
+      const auto surfaces = mergeSurfaces(outlines, sizeOf);
+      for (const auto& surface : surfaces)
+      {
+        auto faces = std::vector<const FaceOutline*>{};
+        for (const auto index : surface)
+        {
+          faces.push_back(&outlines[index]);
+        }
+        const auto& name = outlines[surface.front()].material;
+        auto& entry = sampled.materials[kdl::str_to_lower(name)];
+        if (const auto sample = sampleSurface(faces, entry.textureSize))
+        {
+          entry.stats.add(*sample);
+        }
+      }
+      job.surfaces += surfaces.size();
+      if (
+        outlines.size() >= MinDecompiledFaces
+        && double(surfaces.size())
+             < double(outlines.size()) * (1.0 - DecompiledMergeRatio))
+      {
+        job.splitFiles.push_back(fmt::format(
+          "{} ({} faces form {} surfaces)",
+          path.filename(),
+          outlines.size(),
+          surfaces.size()));
+      }
+
       for (auto& [key, entry] : sampled.materials)
       {
         entry.stats.cap();
@@ -476,6 +531,18 @@ void finishScan(CallContext& context, const std::shared_ptr<ScanJob>& job)
         map.gameInfo().gameConfig.name,
         kdl::str_join(job->otherGames, ", ")));
   }
+  if (!job->splitFiles.empty())
+  {
+    context.warn(
+      "DECOMPILED_INPUT",
+      fmt::format(
+        "{} file(s) look decompiled: many of their brush faces are pieces of larger "
+        "surfaces ({}). The pieces were merged into surfaces before sampling, but the "
+        "statistics of such files are less reliable than those of original map "
+        "sources.",
+        job->splitFiles.size(),
+        kdl::str_join(job->splitFiles, ", ")));
+  }
   if (scanned == 0)
   {
     job->completion(makeError(
@@ -496,6 +563,7 @@ void finishScan(CallContext& context, const std::shared_ptr<ScanJob>& job)
        {"failed", job->failed},
      }},
     {"faces", scannedFaces},
+    {"surfaces", job->surfaces},
     {"materials", scannedMaterials},
     {"topMaterials", topMaterials(job->corpus, map)},
     {"corpus",
@@ -1025,13 +1093,20 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
         "(scope.path). Reads every map file in 'folder' matching 'pattern' "
         "(subfolders too unless recursive is false) without opening it, and "
         "collects per material: scales, face sizes, texel extents, repeat counts, "
-        "rotations and how often the texture is aligned to face edges. Texture "
+        "rotations, how often the texture is aligned to face edges and how often a "
+        "surface shows the image exactly once. Faces hidden by a touching brush are "
+        "skipped, and coplanar neighbouring faces with the same material and a "
+        "continuous texture mapping are measured as one surface, so faces split by "
+        "a decompiler count once; files with many split faces "
+        "are reported (warning DECOMPILED_INPUT), as their statistics are less "
+        "reliable. Texture "
         "sizes come from the document's loaded materials, so load the game's WADs "
         "/ texture collections first (without a size, repeats and alignment are "
         "not recorded). mode \"replace\" replaces the stored corpus, \"merge\" "
         "adds to it. material_usage, uv_check, uv_align \"typical\" and "
         "material_fit_geometry use the result. Returns file counts (files.failed "
-        "lists unparsable files), faces, materials and the 20 topMaterials. "
+        "lists unparsable files), faces, surfaces, materials and the 20 "
+        "topMaterials. "
         "Reports progress per file; cancelling writes nothing. Example: "
         "{\"folder\": \"/home/me/hl/mapsrc\", \"mode\": \"merge\"}")
       .input(object({
@@ -1052,7 +1127,11 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
         field("files", any())
           .required()
           .describe("{total, scanned, failed: [{path, message}]}"),
-        field("faces", integer()).required().describe("Brush faces sampled by this scan"),
+        field("faces", integer()).required().describe("Brush faces read by this scan"),
+        field("surfaces", integer())
+          .required()
+          .describe("Surfaces sampled by this scan: faces merged with their coplanar "
+                    "neighbours of the same material and texture mapping"),
         field("materials", integer())
           .required()
           .describe("Distinct materials sampled by this scan"),
@@ -1062,7 +1141,7 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
             "The 20 most used materials of this scan: {name, textureSize, samples, "
             "sizedSamples, kind, typicalScale, scaleRange, typicalFaceSize, "
             "typicalRepeats, medianRepeats, wholeRepeatFraction, alignedFraction, "
-            "typicalRotation}"),
+            "onceFraction, typicalRotation}"),
         field("corpus", any())
           .required()
           .describe("The stored corpus after the scan: {path, files, faces, materials}"),

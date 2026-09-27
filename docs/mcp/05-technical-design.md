@@ -1312,10 +1312,13 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   along the texture axes in world units and texels, the repeats, where the texture starts relative to the
   face's min edge, whether a texture edge lies on a face edge (within 1 texel) and whether the repeats are
   whole. Statistics are capped histograms (16 entries, dropped entries merged into the nearest kept one, exact
-  min and max kept), so a corpus of a million faces stays a few MB. With at least 4 sized samples, whole
-  repeats in ≥ 75% with median repeats ≤ 2 and ≥ 75% aligned is a panel; one axis fitted (≤ 1.05 repeats,
-  aligned) in ≥ 75% while the other is not in ≥ 50% is a trim; whole repeats in < 60% or median repeats > 2
-  is a tile.
+  min and max kept), so a corpus of a million faces stays a few MB. Statistics also count the samples that show
+  the image exactly once (one whole, aligned repeat on both axes; `once` in the corpus file, 0 when missing).
+  With at least 4 sized samples, whole repeats in ≥ 75% with median repeats ≤ 2 and ≥ 75% aligned, or the
+  image shown exactly once in ≥ 50%, is a panel; one axis fitted (≤ 1.05 repeats, aligned) in ≥ 75% while the
+  other is not in ≥ 50% is a trim; whole repeats in < 60% or median repeats > 2 is a tile. `sampleFace` is
+  `sampleSurface` over the `faceOutline` of one face; `sampleSurface` measures several faces with the mapping of
+  the first as one surface.
 - **Image analysis.** `analyzeImage` compares opposite edges (left/right columns, top/bottom rows) with the
   mean difference between adjacent columns or rows inside the image: an axis tiles when the edge difference is
   at most 1.5 × that + 0.03, so noisy tiles still count as seamless. Both axes tile → tile; one axis or an
@@ -1328,8 +1331,15 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   tools fail with `UNSUPPORTED_IN_HOST`; `material_usage` still works.
 - **`material_corpus_scan`** is an asynchronous `Mutation::External` tool: it lists the matching files
   (`pattern`, `recursive`), reads one file per deferred step with progress (cancel writes nothing), each in its
-  own format (header, else the game's formats, then all), samples every brush face and discards the brushes,
-  and replaces or merges (`mode`) the corpus of the document's game and mod. Texture sizes come from the
+  own format (header, else the game's formats, then all), keeps the outline of every brush face and discards the
+  brushes, and replaces or merges (`mode`) the corpus of the document's game and mod. Faces are sampled as surfaces:
+  `hiddenFaces` drops faces that lie within an opposite coplanar face of another brush (the backs of touching
+  brushes; tool and liquid materials hide nothing), and `mergeSurfaces` joins coplanar faces with the same material
+  and a continuous mapping (the same texture axes and scale, offsets equal modulo the texture size) that share a
+  piece of an edge (union-find over faces grouped by material and plane, with a sweep along the axis of the
+  largest spread). Decompilers split faces into many pieces and texture hidden faces, which made every material a
+  tile. The result adds `surfaces`; a file with at least 200 visible faces that merging reduces by at least a fifth
+  is reported in the warning `DECOMPILED_INPUT` (its statistics are less reliable). Texture sizes come from the
   document's loaded materials, so the game's WADs should be loaded first; unparsable files are listed, not
   fatal. `material_notes_set` (`scope: game | mod`) merges per-material facts (kind, scale, faceSize, text),
   clears fields or removes notes; `material_notes_get` pages them. `material_usage` returns profiles for names
@@ -1690,11 +1700,18 @@ large maps stay fast. `brushRole` classifies brushes:
 empty cells are eroded (chessboard distance) by `floor(openingSize / cellSize / 2)` cells, so an opening of n cells
 across its smaller side separates spaces when `ceil(n / 2)` is at most that (`openingSize` acts rounded down to a
 multiple of twice the cell size); rooms not larger than that in every direction have no core (`hasCore` false),
-and when no space has one the space tools warn `OPENING_SIZE_TOO_LARGE`. The connected cores grow back 26-connected up
+and when no space has one the space tools warn `OPENING_SIZE_TOO_LARGE`. Cores are 26-connected, like the chessboard
+metric of the erosion measures distances (wall details such as posters and lamps can leave parts of a room's core that
+touch only diagonally, and they must not become rooms of their own). The cores grow back 26-connected up
 to the erosion distance (the inner bounds), then one step into the openings; long leftover passages become their
 own spaces, leftovers connected to the outside become void, everything else grows 6-connected, and small isolated
 leftovers become pockets. Boundaries between two grown regions are openings (`doorway` when they reach the floor,
-`window`, `hole`; the `func_door`s in them). A core connected to the outside is a leaking room (`sealed: false`)
+`window`, `hole`; the `func_door`s in them). Triggers, doors and other brush entities are not space-solid, so a doorway
+with its door leaves and trigger is one opening. The cells connected to the outside are found with a 6-connected flood
+fill, and no growth step (diagonal or not) joins such a cell with one that is not: like a BSP compiler, air that
+touches a room only along an edge or a corner (walls that meet at an edge) does not leak. A sealed space that touches
+outside air that way gets `edgeGap` (the two cells), which `spaces_list` reports as the warning `EDGE_ONLY_GAPS`. A core
+connected to the outside is a leaking room (`sealed: false`)
 if most of its cells are enclosed in at least five directions, otherwise outdoor void. Space ids are an FNV hash of
 the inner bounds in cells: they survive unrelated edits and change when a surrounding wall moves; they depend on
 the segmentation, i.e. are only valid with the same `cellSize` and `openingSize`. The doors of an opening are the
@@ -1711,15 +1728,19 @@ eight sealing brushes nearest to it. Entities outside the grid or in cells that 
 entities with their model bounds; `wallDistance` applies to space-solid world and `func_group` brushes and to brushes
 whose innermost group's bounds contain the candidate's center (a room built as a group), `objectDistance` to
 everything else (point entities, brush entities, `func_detail`, groups that do not enclose the spot); `planWalk`
-fits the player box with its lowest `stepHeight` units ignored, finds floors with five rays, and moves to the four
-neighbouring columns (step 18, jump 45 for all games; 63 is a Half-Life crouch jump).
+fits the player box with its lowest `stepHeight` units ignored, finds floors with five rays (center and inset corners
+of the box), and moves to the four neighbouring columns (step 18, jump 45 for all games; 63 is a Half-Life crouch
+jump). Like the game, the box rests on the highest surface under its footprint: a floor with a standable floor at most
+`stepHeight` higher under the box (a step narrower than the player, a 2 unit floor tile) is not a node of its own, so
+stairs with treads shallower than the player and low tiles are walked over.
 
 Tools (`SpaceTools.cpp`; all read-only and asynchronous with progress, cancellation between steps):
 - `spaces_list {region, cellSize, openingSize (96), detail summary|full, limit (100)}` → `{cellSize, openingSize,
   count, spaces, openings, outsideOpenings, truncated}`. A space: `{id, bounds, size, floor {min, max, typical},
   ceiling, height, floorArea, volume, sealed, openings, neighbours, layers, groups, objects {pointEntities,
   brushEntities, groups, patches, classnames}, contents (full)}`; an opening: `{id (opening:n, valid in this result),
-  kind, spaces [a, b | "void"], center, bounds, width, height, bottom, normal, doors}`. Warns `SPACES_NOT_SEALED`.
+  kind, spaces [a, b | "void"], center, bounds, width, height, bottom, normal, doors}`. Warns `SPACES_NOT_SEALED`
+  and `EDGE_ONLY_GAPS` (sealed spaces touching the outside only along an edge or a corner, with a position each).
   About 250 ms (Debug) for 20 rooms.
 - `surroundings {point, radius (512), limit (20), diagonals, maxDistance (4096), includeSpace, cellSize,
   openingSize}` → `{point, space, inside, floor, ceiling, walls [{direction, distance, face, material, object,
@@ -1948,11 +1969,17 @@ breaks, with the subsections and the parent, previous and next sections. Without
 | `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode`, `tst_UpstreamLoadAssimpModel`, `tst_UpstreamQuickFixes` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId`, assimp frames named after their animations (a studio model's sequences; the model path without animations), selecting the world selects nothing (also through a worldspawn quick fix), Move Brushes to World selects no removed entity |
 | `tst_AgentCamera`, `tst_Image`, `tst_SnapshotTools` | camera math, framing, orbit, eye height over a fixture room, camera JSON; image composition and diff; the snapshot tools over `FakeSnapshotRenderer`: option handling mapped into the recorded requests (hidden tags change the scene and the image, isolate, includeHidden, highlight, face tags, 2D cameras), limits, saveTo, keepAs and compare (the undo mode leaves the history unchanged), labels, progress and cancellation, the plan image, user views, unsupported hosts, no undo steps |
 | `tst_ConsoleBuffer`, `tst_ConsoleTools` | bounds, sequence numbers, clear, notifiers; `console_read` filters, cursor, pagination, `dropped`, invalid input; `console_clear` with dry run; the console resource and its coalesced notifications; the per-call `console` report (`document_open` of a map with a missing WAD) |
-| `tst_MaterialKnowledge`, `tst_MaterialKnowledgeTools` | kinds from names and the real Quake config, `sampleFace` on Standard and Valve faces, histograms and statistics (merge, cap, JSON), summaries and kinds from statistics, image tile detection on synthetic images and the fixture textures, notes and corpus files (round trips, cache, invalid files), profile precedence with sources and samples, mod notes over game notes; `material_corpus_scan` (replace, merge, pattern, recursion, dry run, progress, cancel, no knowledge directory), `material_notes_get/set`, `material_usage` (the panel and the tile of the fixture corpus, defaults from the selection and the map) |
+| `tst_MaterialKnowledge`, `tst_MaterialKnowledgeTools` | kinds from names and the real Quake config, `sampleFace` on Standard and Valve faces, hidden faces, surface merging (split pieces, another material, a shifted
+texture, a gap) and `sampleSurface`, the exactly-once panel rule, histograms and statistics (merge, cap, JSON), summaries and kinds from statistics, image tile detection on synthetic images and the fixture textures, notes and corpus files (round trips, cache, invalid files), profile precedence with sources and samples, mod notes over game notes; `material_corpus_scan` (replace, merge, pattern, recursion, dry run, progress, cancel, no knowledge directory, a
+split map's panels and the `DECOMPILED_INPUT` warning), `material_notes_get/set`, `material_usage` (the panel and the tile of the fixture corpus, defaults from the selection and the map) |
 | `tst_UvCheck`, `tst_UvTools`, `tst_UvWarnings` | every finding code with negatives, source gating and skip rules, the finding JSON and fixes; `uv_check` on `uv_check.map` (a stretched tile and a fractional panel), following the suggested fixes, ids vs selection, codes, pagination; `uv_align` `keepAspect`, `round`, `typical` (notes, map, default), dry run; `material_fit_geometry` followed until the face fits; the warnings of `material_apply`, `material_replace`, `face_attributes_set` and `uv_align` and their limit |
 | `tst_EntityModelUtils`, `tst_EntityModelTools` | frame property discovery (`sequence`, `frame`, fixed frames, variables that change the model), animations with names and bounds per frame, world bounds with scale, `entity_model_info`, `entity_animation_set` (names, indices, unknown animations, dry run, ids vs selection, one undo step), placement findings (a sitting model reaching below the floor, standing, floating, a chair brush, no floor), `dropToFloor` with model bounds, `objects_move` warnings, `entity_placement_check` |
 | `tst_CameraProjection`, `tst_Annotations`, `tst_PickTools` | camera projection round trips (perspective, orthographic, image corners); drawing primitives and font, labels, grid, compass and player at their projected places through `view_snapshot` with the fake renderer; `view_pick` on `two_rooms.map` (brush, face, normal, pixel lists, misses, `ignore`, `maxDistance`, `kinds`, visibility of the snapshot, kept snapshots, errors) |
-| `tst_SpaceAnalysis`, `tst_SpaceTools` | on `spaces.map` (two rooms, a doorway with a `func_door`, a `Chair` group, a `Lights` layer): two spaces and one doorway with size and position, floor and ceiling, stable ids across an unrelated edit and new ids after moving a wall, leak prediction (sealed, a removed wall with its gap, an entity outside without a gap, timing); `spaces_list`, `surroundings`, `free_spots` (a poster on a wall with the face id and normal), `walkable_plan` text and image, invalid input |
+| `tst_SpaceAnalysis`, `tst_SpaceTools` | on `spaces.map` (two rooms, a doorway with a `func_door`, a `Chair` group, a `Lights` layer): two spaces and one doorway with size and position, floor and ceiling, stable ids across an unrelated edit and new ids after moving a wall, leak prediction (sealed, a removed wall with its gap, an entity outside without a gap, timing); regressions over
+rooms built in the test: a cafe whose wall details (trims, posters, a lamp) left a diagonal core link next to a double
+door with a trigger (one room, one 96 × 112 doorway with both leaves), corner gaps that touch a room only along an edge
+(sealed, `edgeGap`, no leak finding) and a real gap (not sealed), a pool with 16 × 16 steps and a floor of 2 unit
+tiles (every node reachable, one node per column); `spaces_list` (also `EDGE_ONLY_GAPS`), `surroundings`, `free_spots` (a poster on a wall with the face id and normal), `walkable_plan` text and image, invalid input |
 | `tst_PlacementChecks`, `tst_ValidationTools` | z-fighting rules (overlap, hidden by a touching face, tool materials and triggers ignored, different planes); per-call reports (`Z_FIGHTING` once with both faces, dry run, `ENTITY_OUTSIDE_HULL`, model placement, UV distortion, de-duplication with tool warnings; a `[.][benchmark]` case on 2,000 brushes); `issues_list` sources, filters, paging, hidden issues, ids and fixes of MCP issues; `issue_fix` on `issues.map`: every editor quick fix (Delete Objects, Delete Property with several issues on one object, `Replace \ with /`, Snap Vertices, Reset UV Scale on six faces of one brush, Move Brushes to World, Remove Mod, `Replace " with '`, Truncate Property Values reported as not fixed, a fix of another type), issues with several fixes, by id, by object, one undo step for several codes, dry run, checks without fixes, invalid input; `Apply Suggested Move` and `Apply Suggested UV Fix`; `issue_hide` / `issue_show` (hidden issues skipped by code, MCP issues, dry run); `validators_list` / `validators_set` (listing and issues introduced per call skip turned-off validators, dry run, `enableAll`); the issues resource (content equals `issues_list`, template listed, coalesced notifications on map changes, hiding and validator changes) |
 | `tst_MapCheckTools` | `map_check` on `map_check.map` (one room, an ogre in a wall, a floating soldier, a light inside a pillar, a broken target, an untriggered door, an unnamed relay, a missing material, health outside the room, no player start): every code with positive and negative cases, following each suggested fix until the finding disappears, model placement with `models.fgd`, deathmatch-only starts, multi_manager keys, a leak with a gap, `checks` / `ids` filters, pagination, progress, cancellation, invalid input |
 | `tst_EngineTools` | engine tools over `FakeEngineHost`: listing per game and the document's game, save/replace (id and parameters kept), path warnings, `FILE_EXISTS`, invalid input, dry runs; launch of the only / a named / an id-selected profile with interpolated and overridden parameters, unsaved-changes warning, never-saved map, unknown or ambiguous profile, missing engine, interpolation and start failures, host without engine support |
@@ -1988,7 +2015,8 @@ spatial, selection and resource tests, and by `SceneQuestions`, which answers E3
 tool calls only), `mcp/wads/cr8_a_excerpt.wad`, `mcp/wads/materials.wad` (`wall_old_a/b/c`, `wall_new_a/b`, `floor_tile`;
 material and S3 tests), `mcp/maps/rooms.map` (Valve, several groups including Armory; import and S4),
 `mcp/maps/crate_quake2.map` (Quake 2 import), `mcp/maps/uv_check.map` (knowledge.wad materials with UV problems), `mcp/corpus/` (a Valve and a Standard reference map and a
-broken one for `material_corpus_scan`), `mcp/wads/knowledge.wad` (`k_tile`, `k_panel`, `k_trim`, `{k_decal`),
+broken one for `material_corpus_scan`), `mcp/corpus_split/split_panels.map` (a floor and four panels split into
+pieces like a decompiled map), `mcp/wads/knowledge.wad` (`k_tile`, `k_panel`, `k_trim`, `{k_decal`),
 `mcp/models.fgd` with `mdl/Game/Quake/id1/progs/person.mdl` (a Quake model with the frames `stand` and `sit`)
 and `mdl/Game/Quake/id1/models/cube.mdl` (a Half-Life studio model with three sequences), `mcp/maps/spaces.map` (two rooms with a doorway and a door, a chair group, a light in a custom layer; E12), `mcp/maps/no_header.map` (format detection without a header
 comment), `mcp/maps/issues.map` (Standard; editor issues of most validators, z-fighting and a floating

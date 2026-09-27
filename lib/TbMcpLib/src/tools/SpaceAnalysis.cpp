@@ -949,10 +949,13 @@ namespace
 /**
  * Grows the labels over unassigned empty cells by BFS, up to maxDepth steps, over the
  * 26 neighbours of a cell (the chessboard metric of the erosion) or its 6 face
- * neighbours.
+ * neighbours. A diagonal step never joins a cell connected to the outside with one that
+ * is not: air that touches only along an edge or a corner is not connected (a compiler
+ * does not leak through it either).
  */
 void growLabels(
   const VoxelGrid& grid,
+  const std::vector<uint8_t>& outside,
   std::vector<int32_t>& labels,
   const size_t maxDepth,
   const bool diagonal)
@@ -973,7 +976,9 @@ void growLabels(
     {
       const auto label = labels[index];
       const auto visit = [&](const size_t neighbourIndex) {
-        if (labels[neighbourIndex] == Unassigned)
+        if (
+          labels[neighbourIndex] == Unassigned
+          && outside[neighbourIndex] == outside[index])
         {
           labels[neighbourIndex] = label;
           next.push_back(neighbourIndex);
@@ -992,9 +997,15 @@ void growLabels(
   }
 }
 
-/** Connected components (face neighbours) of the cells with the given label. */
+/**
+ * Connected components of the cells with the given label, over the 6 face neighbours of a
+ * cell or over all 26 neighbours.
+ */
 std::vector<std::vector<size_t>> components(
-  const VoxelGrid& grid, const std::vector<int32_t>& labels, const int32_t label)
+  const VoxelGrid& grid,
+  const std::vector<int32_t>& labels,
+  const int32_t label,
+  const bool diagonal = false)
 {
   auto result = std::vector<std::vector<size_t>>{};
   auto visited = std::vector<uint8_t>(labels.size(), 0);
@@ -1008,13 +1019,21 @@ std::vector<std::vector<size_t>> components(
     visited[start] = 1;
     for (size_t head = 0; head < component.size(); ++head)
     {
-      forEachFaceNeighbour(grid, component[head], [&](const size_t next) {
+      const auto visit = [&](const size_t next) {
         if (labels[next] == label && !visited[next])
         {
           visited[next] = 1;
           component.push_back(next);
         }
-      });
+      };
+      if (diagonal)
+      {
+        forEachBlockNeighbour(grid, component[head], false, visit);
+      }
+      else
+      {
+        forEachFaceNeighbour(grid, component[head], visit);
+      }
     }
     result.push_back(std::move(component));
   }
@@ -1143,8 +1162,11 @@ Result<SpaceMap, ToolError> analyzeSpaces(
       labels[index] = SpaceMap::Void;
     }
   });
+  // the cores are connected like the erosion measures distances (chessboard metric):
+  // details such as posters and lamps can leave parts of a room's core that touch only
+  // diagonally, and they belong to the same room
   auto nextLabel = int32_t(0);
-  for (const auto& component : components(grid, labels, Core))
+  for (const auto& component : components(grid, labels, Core, true))
   {
     // a core connected to the outside is a leaking room if it is mostly enclosed (most
     // of its cells see solid cells in at least 5 of the 6 axis directions), otherwise it
@@ -1214,9 +1236,9 @@ Result<SpaceMap, ToolError> analyzeSpaces(
 
   // 4. grow the cores back up to the erosion distance; this reconstructs the rooms up to
   // their walls, which give the inner bounds; one more step enters the openings
-  growLabels(grid, labels, erosion, true);
+  growLabels(grid, outside, labels, erosion, true);
   const auto innerBounds = accumulate(size_t(nextLabel));
-  growLabels(grid, labels, 1, true);
+  growLabels(grid, outside, labels, 1, true);
 
   // 5. long narrow passages that no core reached become spaces of their own
   const auto minPassageLength = 2 * (erosion + 1);
@@ -1255,7 +1277,7 @@ Result<SpaceMap, ToolError> analyzeSpaces(
   }
 
   // 6. grow everything
-  growLabels(grid, labels, std::numeric_limits<size_t>::max(), false);
+  growLabels(grid, outside, labels, std::numeric_limits<size_t>::max(), false);
 
   // 7. isolated pockets without a core
   const auto minPocketCells = size_t(16);
@@ -1329,6 +1351,28 @@ Result<SpaceMap, ToolError> analyzeSpaces(
     {
       space.id += fmt::format("-{}", n);
     }
+  }
+
+  // edge gaps: sealed spaces that touch outside air only along an edge or a corner
+  for (size_t i = 0; i < count; ++i)
+  {
+    const auto label = labels[i];
+    if (label < 0 || outside[i])
+    {
+      continue;
+    }
+    auto& space = result.spaces[size_t(label)];
+    if (!space.sealed || space.edgeGap)
+    {
+      continue;
+    }
+    forEachBlockNeighbour(grid, i, false, [&](const size_t neighbourIndex) {
+      if (!space.edgeGap && outside[neighbourIndex] && !grid.solid[neighbourIndex])
+      {
+        space.edgeGap = vm::merge(
+          grid.cellBounds(grid.cellOf(i)), grid.cellBounds(grid.cellOf(neighbourIndex)));
+      }
+    });
   }
 
   // openings: faces between cells of different labels
@@ -2526,12 +2570,29 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
         }
       }
       std::ranges::sort(zs);
-      for (const auto z : zs)
+      auto standing = std::vector<uint8_t>(zs.size(), 0);
+      for (size_t i = 0; i < zs.size(); ++i)
       {
-        if (standable(x, y, z))
+        standing[i] = standable(x, y, zs[i]) ? 1 : 0;
+      }
+      for (size_t i = 0; i < zs.size(); ++i)
+      {
+        // like the game, the player's box rests on the highest surface under it: a floor
+        // with a higher one within step height under the box (a step, a tile) is not a
+        // position of its own
+        auto supportedAbove = false;
+        for (size_t j = i + 1; j < zs.size() && zs[j] <= zs[i] + plan.stepHeight; ++j)
+        {
+          supportedAbove = supportedAbove || standing[j];
+        }
+        if (supportedAbove)
+        {
+          continue;
+        }
+        if (standing[i])
         {
           plan.columnNodes[index].push_back(plan.nodes.size());
-          plan.nodes.push_back(WalkNode{index, z, false, false});
+          plan.nodes.push_back(WalkNode{index, zs[i], false, false});
         }
         else
         {
