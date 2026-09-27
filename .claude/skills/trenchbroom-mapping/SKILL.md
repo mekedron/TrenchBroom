@@ -68,6 +68,9 @@ in one picture.
   `view_snapshot {"keepAs":"before"}` … change … `view_snapshot_compare {"before":"before"}`;
   the changed-pixel mask shows exactly what moved.
 - What the user is looking at: `view_snapshot_user` (returns their camera too).
+- Showing the user something: `camera_focus` *(untested)* moves the **user's** camera to objects;
+  `camera_set` *(untested)* places it. Use this only when you want the user to look; for your own
+  checks use agent cameras and snapshots.
 - From picture to object: every snapshot has a `snapshotId`; `view_pick {"snapshotId":..,"pixels":[[x,y],..]}`
   *(untested)* returns the object, face id, group, layer, hit point and normal under each pixel —
   no need to search by region.
@@ -222,6 +225,15 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   poses always touch their seat — judge them with a snapshot. Check the NPC's hull with
   `space_check` one unit above the floor.
 - Items and props: `dropToFloor` onto floors and furniture.
+
+## Anything else the editor can do
+
+- `actions_list` *(untested)* lists every editor action (menus, map view shortcuts, tag and
+  entity actions) with its state; `action_invoke` *(untested)* runs one by path. Actions that need
+  a dialog name the tool to use instead.
+- `preferences_get` / `preferences_set` *(untested)* read and change any preference.
+- `manual_search` / `manual_section` *(untested)* answer "how does TrenchBroom do X" from the
+  user manual.
 
 ## Checking and fixing the map
 
