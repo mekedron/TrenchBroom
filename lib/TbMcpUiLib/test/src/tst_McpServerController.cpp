@@ -19,18 +19,24 @@
 
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QStandardPaths>
+#include <QStatusBar>
 #include <QTcpServer>
 #include <QTcpSocket>
 
+#include "McpUiTestUtils.h"
 #include "base/PreferenceManager.h"
 #include "mcp/CallLog.h"
 #include "mcp/Json.h"
 #include "mcp/McpServer.h"
 #include "mdl/EnvironmentConfig.h"
-#include "prefs/Preferences.h"
 #include "ui/AppControllerFixture.h"
+#include "ui/MapWindow.h"
+#include "ui/McpPreferencePane.h"
+#include "ui/McpPreferences.h"
 #include "ui/McpServerController.h"
 #include "ui/McpStatusIndicator.h"
+#include "ui/PreferenceDialog.h"
 
 #include <chrono>
 #include <filesystem>
@@ -57,12 +63,12 @@ struct McpPreferenceGuard
   static void reset()
   {
     auto& prefs = PreferenceManager::instance();
-    prefs.resetToDefault(Preferences::McpServerEnabled);
-    prefs.resetToDefault(Preferences::McpServerPort);
-    prefs.resetToDefault(Preferences::McpServerBindAddress);
-    prefs.resetToDefault(Preferences::McpServerAccessToken);
-    prefs.resetToDefault(Preferences::McpLogToFile);
-    prefs.resetToDefault(Preferences::McpBusyWaitTimeoutMs);
+    prefs.resetToDefault(McpPreferences::McpServerEnabled);
+    prefs.resetToDefault(McpPreferences::McpServerPort);
+    prefs.resetToDefault(McpPreferences::McpServerBindAddress);
+    prefs.resetToDefault(McpPreferences::McpServerAccessToken);
+    prefs.resetToDefault(McpPreferences::McpLogToFile);
+    prefs.resetToDefault(McpPreferences::McpBusyWaitTimeoutMs);
     prefs.saveChanges();
   }
 };
@@ -79,6 +85,15 @@ std::optional<mcp::Json> readJsonFile(const std::filesystem::path& path)
   return mcp::parseJson(text);
 }
 
+/**
+ * Redirects QSettings to a test location while map windows save their state on close.
+ */
+struct TestModeStandardPaths
+{
+  TestModeStandardPaths() { QStandardPaths::setTestModeEnabled(true); }
+  ~TestModeStandardPaths() { QStandardPaths::setTestModeEnabled(false); }
+};
+
 bool canConnect(const int port)
 {
   auto socket = QTcpSocket{};
@@ -94,10 +109,10 @@ TEST_CASE("McpServerController")
 
   auto appControllerFixture = AppControllerFixture{};
   auto& appController = appControllerFixture.appController();
-  auto& controller = appController.mcpServerController();
+  auto controller = McpServerController{appController};
 
   // Let the operating system choose a free port
-  setPref(Preferences::McpServerPort, 0);
+  setPref(McpPreferences::McpServerPort, 0);
 
   const auto userDataDir = appController.environmentConfig().userDataFolderPath;
   REQUIRE(controller.discoveryFilePath() == userDataDir / "mcp-server.json");
@@ -116,7 +131,7 @@ TEST_CASE("McpServerController")
 
   SECTION("preference starts and stops the server")
   {
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpServerEnabled, true);
 
     CHECK(controller.enabled());
     REQUIRE(controller.listening());
@@ -136,7 +151,7 @@ TEST_CASE("McpServerController")
     CHECK((*json)["version"].is_string());
 
     const auto port = *controller.port();
-    setPref(Preferences::McpServerEnabled, false);
+    setPref(McpPreferences::McpServerEnabled, false);
 
     CHECK(!controller.enabled());
     CHECK(!controller.listening());
@@ -163,7 +178,7 @@ TEST_CASE("McpServerController")
 
   SECTION("changing the port restarts the server")
   {
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpServerEnabled, true);
     REQUIRE(controller.listening());
 
     auto freePortServer = QTcpServer{};
@@ -171,7 +186,7 @@ TEST_CASE("McpServerController")
     const auto freePort = int(freePortServer.serverPort());
     freePortServer.close();
 
-    setPref(Preferences::McpServerPort, freePort);
+    setPref(McpPreferences::McpServerPort, freePort);
 
     REQUIRE(controller.listening());
     CHECK(controller.port() == freePort);
@@ -187,8 +202,8 @@ TEST_CASE("McpServerController")
     REQUIRE(blockingServer.listen(QHostAddress{QHostAddress::LocalHost}, 0));
     const auto port = int(blockingServer.serverPort());
 
-    setPref(Preferences::McpServerPort, port);
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpServerPort, port);
+    setPref(McpPreferences::McpServerEnabled, true);
 
     CHECK(controller.enabled());
     CHECK(!controller.listening());
@@ -197,7 +212,7 @@ TEST_CASE("McpServerController")
 
     // The server starts once the port becomes available
     blockingServer.close();
-    setPref(Preferences::McpServerAccessToken, "retry");
+    setPref(McpPreferences::McpServerAccessToken, "retry");
 
     CHECK(controller.listening());
     CHECK(controller.statusText().isEmpty());
@@ -205,8 +220,8 @@ TEST_CASE("McpServerController")
 
   SECTION("non-loopback bind address requires an access token")
   {
-    setPref(Preferences::McpServerBindAddress, "0.0.0.0");
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpServerBindAddress, "0.0.0.0");
+    setPref(McpPreferences::McpServerEnabled, true);
 
     CHECK(!controller.listening());
     CHECK(!controller.statusText().isEmpty());
@@ -214,22 +229,22 @@ TEST_CASE("McpServerController")
 
   SECTION("busy wait timeout")
   {
-    setPref(Preferences::McpBusyWaitTimeoutMs, 5000);
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpBusyWaitTimeoutMs, 5000);
+    setPref(McpPreferences::McpServerEnabled, true);
     REQUIRE(controller.server() != nullptr);
 
     CHECK(
       controller.server()->options().busyWaitTimeout == std::chrono::milliseconds{5000});
 
-    setPref(Preferences::McpBusyWaitTimeoutMs, 7000);
+    setPref(McpPreferences::McpBusyWaitTimeoutMs, 7000);
     CHECK(
       controller.server()->options().busyWaitTimeout == std::chrono::milliseconds{7000});
   }
 
   SECTION("log to file")
   {
-    setPref(Preferences::McpLogToFile, true);
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpLogToFile, true);
+    setPref(McpPreferences::McpServerEnabled, true);
     REQUIRE(controller.listening());
 
     const auto logFilePath = controller.logFilePath();
@@ -245,13 +260,13 @@ TEST_CASE("McpServerController")
     REQUIRE(json.has_value());
     CHECK((*json)["tool"] == "test_tool");
 
-    setPref(Preferences::McpLogToFile, false);
+    setPref(McpPreferences::McpLogToFile, false);
     CHECK(controller.logFilePath() == std::nullopt);
   }
 
   SECTION("stopAgents keeps the server listening")
   {
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpServerEnabled, true);
     REQUIRE(controller.listening());
 
     controller.stopAgents();
@@ -265,12 +280,72 @@ TEST_CASE("McpServerController")
     auto indicator = McpStatusIndicator{controller};
     CHECK(indicator.isHidden());
 
-    setPref(Preferences::McpServerEnabled, true);
+    setPref(McpPreferences::McpServerEnabled, true);
     CHECK(!indicator.isHidden());
     CHECK(indicator.text() == "AI: 0 clients · idle");
 
-    setPref(Preferences::McpServerEnabled, false);
+    setPref(McpPreferences::McpServerEnabled, false);
     CHECK(indicator.isHidden());
+  }
+}
+
+TEST_CASE("McpServerController editor integration")
+{
+  const auto testModeStandardPaths = TestModeStandardPaths{};
+  const auto preferenceGuard = McpPreferenceGuard{};
+
+  auto appControllerFixture = AppControllerFixture{};
+  auto& appController = appControllerFixture.appController();
+
+  const auto statusIndicatorCount = [](MapWindow& mapWindow) {
+    return mapWindow.statusBar()->findChildren<McpStatusIndicator*>().size();
+  };
+
+  SECTION("adds the status indicator to the open map windows")
+  {
+    auto& mapWindow = createMapWindow(appController);
+    REQUIRE(statusIndicatorCount(mapWindow) == 0);
+
+    {
+      auto controller = McpServerController{appController};
+      CHECK(statusIndicatorCount(mapWindow) == 1);
+    }
+
+    // The controller removes the indicators when it is destroyed
+    CHECK(statusIndicatorCount(mapWindow) == 0);
+
+    closeAllMapWindows(appController);
+  }
+
+  SECTION("adds the status indicator to map windows when they are shown")
+  {
+    auto controller = McpServerController{appController};
+
+    auto& mapWindow = createMapWindow(appController);
+    CHECK(statusIndicatorCount(mapWindow) == 1);
+
+    // Only once
+    sendShowEvent(mapWindow);
+    CHECK(statusIndicatorCount(mapWindow) == 1);
+
+    closeAllMapWindows(appController);
+  }
+
+  SECTION("adds the preference pane to preference dialogs when they are shown")
+  {
+    auto controller = McpServerController{appController};
+
+    auto dialog = PreferenceDialog{appController, nullptr};
+    CHECK(dialog.findChild<McpPreferencePane*>() == nullptr);
+
+    dialog.show();
+    CHECK(dialog.findChildren<McpPreferencePane*>().size() == 1);
+
+    dialog.hide();
+    dialog.show();
+    CHECK(dialog.findChildren<McpPreferencePane*>().size() == 1);
+
+    dialog.hide();
   }
 }
 

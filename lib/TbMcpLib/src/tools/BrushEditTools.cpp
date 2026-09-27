@@ -19,7 +19,6 @@
 
 #include "mcp/tools/BrushEditTools.h"
 
-#include "GeometryUtils.h"
 #include "NodeJson.h"
 #include "base/Macros.h"
 #include "mcp/Args.h"
@@ -29,6 +28,8 @@
 #include "mcp/Schema.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/CsgUtils.h"
+#include "mcp/tools/GeometryUtils.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
@@ -1054,7 +1055,9 @@ ToolResult faceExtrudeNew(CallContext& context, const Args& args)
         return context.operationFailed("Could not add the new brushes.");
       }
 
-      if (auto error = checkInsideWorldBounds(context, *added, "Use a smaller distance."))
+      if (
+        auto error = checkInsideWorldBounds(
+          *added, context.map(), context.ids(), "Use a smaller distance."))
       {
         return std::move(*error);
       }
@@ -1640,7 +1643,7 @@ ToolResult csgIntersect(CallContext& context, const Args& args)
     SelectionAfter::Result);
 }
 
-ToolResult csgHollow(CallContext& context, const Args& args)
+ToolResult csgHollowTool(CallContext& context, const Args& args)
 {
   auto& map = context.map();
   auto& ids = context.ids();
@@ -1665,7 +1668,7 @@ ToolResult csgHollow(CallContext& context, const Args& args)
     context,
     targets.value(),
     [&]() -> ToolResult {
-      if (!mdl::csgHollow(map, thickness))
+      if (!mcp::csgHollow(map, thickness))
       {
         return geometryOperationFailed(
           context,
@@ -2009,7 +2012,7 @@ void registerBrushEditTools(ToolRegistry& registry)
       }))
       .mutation(Mutation::Map)
       .destructive()
-      .handler(csgHollow));
+      .handler(csgHollowTool));
 }
 
 } // namespace tb::mcp

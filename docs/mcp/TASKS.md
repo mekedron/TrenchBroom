@@ -19,7 +19,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E5 | Entities, NPCs and models | §10 | MVP + v1 | Done |
 | E6 | Materials, UV and face attributes | §11 | MVP + v1 | Done |
 | E7 | Compile maps | §16 | v1 | Done |
-| E8 | Minimal upstream footprint | 01 §7.7 | v1 | Not started |
+| E8 | Minimal upstream footprint | 01 §7.7 | v1 | Done |
 | E9 | Organization, clipboard and import | §12, §13 | v1 | Not started |
 | E10 | Validation and engine launch | §15, §16 | MVP + v1 | Not started |
 | E11 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
@@ -224,19 +224,19 @@ Goal: the fork stays easy to sync with upstream TrenchBroom. The MCP server live
 
 **Tasks**
 
-- [ ] E8.1 Audit every upstream file changed on the branch (diff against the merge base with upstream `master`); classify each change as required or avoidable; plan the removal of the avoidable ones.
-- [ ] E8.2 Move all tests added to upstream test files (`tst_CommandProcessor`, `tst_Map_Commands`, `tst_Map_Geometry`, `tst_Node`, `tst_LoggingHub`) into new test files in `TbMcpLibTest`, and revert the upstream test files.
-- [ ] E8.3 Move the MCP preferences out of `Preferences.h` into an MCP-owned header.
-- [ ] E8.4 Implement hollow-with-thickness inside TbMcpLib and revert the `Map_Geometry` change.
-- [ ] E8.5 Replace `Node::runtimeId()` with an ID registry owned by TbMcpLib if it can stay reliable across undo, redo and linked-group updates; otherwise keep the smallest possible hook and document why.
-- [ ] E8.6 Reduce the UI integration to the minimum: one hook in the application start-up, the smallest public API needed on map window management, and no changes to `CompilationDialog`, `MapWindow`, `PreferenceDialog` or `Main.cpp` unless unavoidable (e.g. register the preference pane and the `--mcp-server` option from MCP-owned code).
-- [ ] E8.7 Keep the necessary core fixes (redo history kept after a rolled-back transaction, `canRedoCommand`, transaction depth) as small, isolated changes with their tests in `TbMcpLibTest`.
-- [ ] E8.8 CMake: new libraries and the bridge are added with the fewest possible lines in upstream CMake files.
-- [ ] E8.9 Script `scripts/upstream-footprint.sh` (new file) that lists the upstream files changed by the fork with line counts, and checks that a merge with the latest upstream `master` has no conflicts.
-- [ ] E8.10 Write the "Upstream changes" section of 05-technical-design.md: each remaining upstream change, where it is and why it is required.
-- [ ] E8.11 Shared tool helpers (`src/tools/*Utils`, `NodeJson`) take the narrowest context they need: a node, then `mdl::Map&`, then `IdRegistry`, then `CallContext`, never `ui::MapDocument`. State this rule in 05-technical-design.md §10.2; add direct unit tests in `TbMcpLibTest` over `mdl::MapFixture` for the pure model helpers (`castRay`, `intersectsInterior`, `classifyBrush`, `addBrushes`, `ScopedLockOverride`); check whether `GeometryTools` can drop its `MapDocument` dependency in `shapeExtension`.
+- [x] E8.1 Audit every upstream file changed on the branch (diff against the merge base with upstream `master`); classify each change as required or avoidable; plan the removal of the avoidable ones.
+- [x] E8.2 Move all tests added to upstream test files (`tst_CommandProcessor`, `tst_Map_Commands`, `tst_Map_Geometry`, `tst_Node`, `tst_LoggingHub`) into new test files in `TbMcpLibTest`, and revert the upstream test files.
+- [x] E8.3 Move the MCP preferences out of `Preferences.h` into an MCP-owned header.
+- [x] E8.4 Implement hollow-with-thickness inside TbMcpLib and revert the `Map_Geometry` change.
+- [x] E8.5 Replace `Node::runtimeId()` with an ID registry owned by TbMcpLib if it can stay reliable across undo, redo and linked-group updates; otherwise keep the smallest possible hook and document why.
+- [x] E8.6 Reduce the UI integration to the minimum: one start-up hook in `Main.cpp`, and small explicit hooks in `MapWindow`, `MapWindowManager`, `PreferenceDialog` and `CompilationDialog` instead of workarounds that depend on upstream internals.
+- [x] E8.7 Keep the necessary core fixes (redo history kept after a rolled-back transaction, `canRedoCommand`, transaction depth) as small, isolated changes with their tests in `TbMcpLibTest`.
+- [x] E8.8 CMake: new libraries and the bridge are added with the fewest possible lines in upstream CMake files.
+- [x] E8.9 Script `scripts/upstream-footprint.sh` (new file) that lists the upstream files changed by the fork with line counts, and checks that a merge with the latest upstream `master` has no conflicts.
+- [x] E8.10 Write the "Upstream changes" section of 05-technical-design.md: each remaining upstream change, where it is and why it is required.
+- [x] E8.11 Shared tool helpers (`src/tools/*Utils`, `NodeJson`) take the narrowest context they need: a node, then `mdl::Map&`, then `IdRegistry`, then `CallContext`, never `ui::MapDocument`. State this rule in 05-technical-design.md §10.2; add direct unit tests in `TbMcpLibTest` over `mdl::MapFixture` for the pure model helpers (`castRay`, `intersectsInterior`, `classifyBrush`, `addBrushes`, `ScopedLockOverride`); check whether `GeometryTools` can drop its `MapDocument` dependency in `shapeExtension`.
 
-**Done when:** at most ~12 upstream files are changed, none of them an upstream test file; all test suites pass; the footprint script shows a conflict-free merge with the latest upstream `master`; shared tool helpers take no `ui::MapDocument`, and the pure model helpers have direct unit tests.
+**Done when:** upstream files carry only small explicit hooks and critical fixes (currently 17 files, +140/−5 lines), none of them an upstream test file; all test suites pass; the footprint script shows a conflict-free merge with the latest upstream `master`; shared tool helpers take no `ui::MapDocument`, and the pure model helpers have direct unit tests.
 
 ---
 

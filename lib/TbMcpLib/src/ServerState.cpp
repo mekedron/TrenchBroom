@@ -25,6 +25,7 @@
 #include "mcp/CallRunner.h"
 #include "mcp/JsonRpc.h"
 #include "mcp/Scheduler.h"
+#include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
 #include "mdl/Node.h"
 #include "mdl/WorldNode.h"
@@ -193,7 +194,8 @@ ServerState::~ServerState()
   {
     if (
       state->transaction
-      && document->map().transactionDepth() == state->transaction->depth)
+      && document->map().commandProcessor().transactionDepth()
+           == state->transaction->depth)
     {
       document->map().cancelTransaction();
     }
@@ -280,12 +282,12 @@ void ServerState::rollbackAgentTransaction(ui::MapDocument& document)
   auto& state = *it->second;
   auto& map = document.map();
   const auto depth = state.transaction->depth;
-  if (map.transactionDepth() == depth)
+  if (map.commandProcessor().transactionDepth() == depth)
   {
     map.cancelTransaction();
     state.transaction.reset();
   }
-  else if (map.transactionDepth() < depth)
+  else if (map.commandProcessor().transactionDepth() < depth)
   {
     // the transaction is already gone
     state.transaction.reset();
@@ -396,7 +398,9 @@ void ServerState::documentWillClose(ui::MapDocument& document)
   }
 
   auto& state = *it->second;
-  if (state.transaction && document.map().transactionDepth() == state.transaction->depth)
+  if (
+    state.transaction
+    && document.map().commandProcessor().transactionDepth() == state.transaction->depth)
   {
     document.map().cancelTransaction();
   }

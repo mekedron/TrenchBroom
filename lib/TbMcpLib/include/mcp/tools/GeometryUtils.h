@@ -126,7 +126,10 @@ std::optional<ToolError> checkBox(
  * reported as well. Returns OUT_OF_WORLD_BOUNDS naming all offending ids.
  */
 std::optional<ToolError> checkInsideWorldBounds(
-  CallContext& context, const std::vector<mdl::Node*>& nodes, std::string hint = {});
+  const std::vector<mdl::Node*>& nodes,
+  const mdl::Map& map,
+  const IdRegistry& ids,
+  std::string hint = {});
 
 /**
  * Turns an mdl error message (e.g. "Brush is empty") about the given objects into an

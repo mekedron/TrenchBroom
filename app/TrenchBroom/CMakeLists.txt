@@ -132,6 +132,7 @@ target_link_libraries(TrenchBroom
     Qt6::Svg
     Qt6::Widgets
     TbBaseLib
+    TbMcpUiLib
     TbPreferencesLib
     TbUiLib
 )
@@ -148,9 +149,7 @@ endif()
 # so we must make TrenchBroom depend on GenerateManual (see #3608)
 add_dependencies(TrenchBroom GenerateManual)
 
-# The MCP stdio bridge is shipped next to the editor executable (inside the bundle on
-# macOS) so that it can find and launch the editor.
-add_dependencies(TrenchBroom TrenchBroomMcp)
+# Ship the MCP stdio bridge next to the editor executable (see app/TrenchBroomMcp)
 add_custom_command(TARGET TrenchBroom POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:TrenchBroomMcp>" "$<TARGET_FILE_DIR:TrenchBroom>")
 
@@ -363,7 +362,6 @@ if(WIN32)
     endif()
 
     install(TARGETS TrenchBroom RUNTIME DESTINATION . COMPONENT TrenchBroom)
-    install(TARGETS TrenchBroomMcp RUNTIME DESTINATION . COMPONENT TrenchBroom)
     install(CODE [[
         # The regexes are a workaround for https://gitlab.kitware.com/cmake/cmake/-/issues/22431
         file(GET_RUNTIME_DEPENDENCIES
@@ -476,7 +474,6 @@ elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 
     # add files
     install(TARGETS TrenchBroom RUNTIME DESTINATION bin COMPONENT TrenchBroom)
-    install(TARGETS TrenchBroomMcp RUNTIME DESTINATION bin COMPONENT TrenchBroom)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fonts"           DESTINATION ${LINUX_RESOURCE_LOCATION} COMPONENT TrenchBroom)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/defaults"        DESTINATION ${LINUX_RESOURCE_LOCATION} COMPONENT TrenchBroom)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/games"           DESTINATION ${LINUX_RESOURCE_LOCATION} COMPONENT TrenchBroom)

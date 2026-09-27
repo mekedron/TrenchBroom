@@ -20,8 +20,10 @@
 #include <QApplication>
 #include <QDialog>
 #include <QStandardPaths>
+#include <QStatusBar>
 
-#include "gl/GlManager.h"
+#include "McpUiTestUtils.h"
+#include "fs/TestEnvironment.h"
 #include "mdl/BrushNode.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/Map.h"
@@ -42,6 +44,8 @@
 #include "ui/Tool.h"
 #include "ui/ToolChain.h"
 #include "ui/ToolController.h"
+
+#include "vm/bbox.h"
 
 #include <algorithm>
 #include <memory>
@@ -95,49 +99,6 @@ struct TestModeStandardPaths
   TestModeStandardPaths() { QStandardPaths::setTestModeEnabled(true); }
   ~TestModeStandardPaths() { QStandardPaths::setTestModeEnabled(false); }
 };
-
-/**
- * Creates a map window and registers it with the map window manager. The window is not
- * shown because the offscreen platform used in CI doesn't support OpenGL.
- */
-MapWindow& createMapWindow(AppController& appController)
-{
-  auto document = MapDocument::createDocument(
-                    appController.environmentConfig(),
-                    mdl::QuakeGameInfo,
-                    mdl::MapFormat::Valve,
-                    vm::bbox3d{8192.0},
-                    appController.taskManager(),
-                    appController.glManager().resourceManager())
-                  | kdl::value();
-
-  // Deleted on close because MapWindow sets Qt::WA_DeleteOnClose
-  auto* mapWindow = new MapWindow{appController, std::move(document)};
-  appController.mapWindowManager().addMapWindow(mapWindow);
-  return *mapWindow;
-}
-
-void closeMapWindow(MapWindow& mapWindow)
-{
-  REQUIRE(mapWindow.close());
-  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-}
-
-void closeAllMapWindows(AppController& appController)
-{
-  for (auto* mapWindow : appController.mapWindowManager().mapWindows())
-  {
-    // Undo all changes so that the window doesn't ask whether to save them
-    auto& map = mapWindow->document().map();
-    while (map.modified() && map.canUndoCommand())
-    {
-      map.undoCommand();
-    }
-    REQUIRE(!map.modified());
-    mapWindow->close();
-  }
-  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-}
 
 std::vector<std::string> documentIds(QtMcpHost& host)
 {
@@ -195,31 +156,42 @@ TEST_CASE("QtMcpHost")
   {
     auto didChangeCount = 0;
     auto closedDocuments = std::vector<const MapDocument*>{};
-    auto closedDocumentWasListed = false;
+    auto closedDocumentHadMap = false;
 
     auto connection =
       host.documentsDidChangeNotifier.connect([&]() { ++didChangeCount; });
     connection += host.documentWillCloseNotifier.connect([&](auto& document) {
       closedDocuments.push_back(&document);
 
-      // The document is still alive and listed while the notifier runs
-      closedDocumentWasListed = std::ranges::any_of(
-        host.documents(), [&](const auto& info) { return info.document == &document; });
+      // The document is still alive while the notifier runs
+      closedDocumentHadMap = document.map().filename() == "unnamed.map";
     });
 
+    // Showing a window opens its document
     auto& window1 = createMapWindow(appController);
-    CHECK(didChangeCount > 0);
+    CHECK(didChangeCount == 1);
+
+    // Showing it again changes nothing
+    sendShowEvent(window1);
+    CHECK(didChangeCount == 1);
 
     auto& window2 = createMapWindow(appController);
+    CHECK(didChangeCount == 2);
     REQUIRE(documentIds(host) == std::vector<std::string>{"doc:1", "doc:2"});
 
     didChangeCount = 0;
     auto* document1 = &window1.document();
-    closeMapWindow(window1);
+    REQUIRE(window1.close());
 
+    // The closed window's document isn't listed anymore, but the host only reports it
+    // as closed when the window is deleted
+    CHECK(documentIds(host) == std::vector<std::string>{"doc:2"});
+    CHECK(closedDocuments.empty());
+
+    processDeferredDeletes();
     CHECK(closedDocuments == std::vector<const MapDocument*>{document1});
-    CHECK(closedDocumentWasListed);
-    CHECK(didChangeCount > 0);
+    CHECK(closedDocumentHadMap);
+    CHECK(didChangeCount == 1);
     CHECK(documentIds(host) == std::vector<std::string>{"doc:2"});
 
     // Ids are never reused
@@ -227,6 +199,49 @@ TEST_CASE("QtMcpHost")
     CHECK(documentIds(host) == std::vector<std::string>{"doc:2", "doc:3"});
 
     static_cast<void>(window2);
+    closeAllMapWindows(appController);
+  }
+
+  SECTION("documentsDidChangeNotifier on focus change")
+  {
+    auto& window1 = createMapWindow(appController);
+    auto& window2 = createMapWindow(appController);
+    REQUIRE(host.documents()[1].focused);
+
+    auto didChangeCount = 0;
+    auto connection =
+      host.documentsDidChangeNotifier.connect([&]() { ++didChangeCount; });
+
+    // The map window manager moves the window that receives the focus to the top
+    emit qApp->focusChanged(window2.statusBar(), window1.statusBar());
+    CHECK(didChangeCount == 1);
+    CHECK(host.documents()[0].focused);
+
+    // A focus change within the top window doesn't change the order
+    emit qApp->focusChanged(window1.statusBar(), &window1);
+    CHECK(didChangeCount == 1);
+
+    closeAllMapWindows(appController);
+  }
+
+  SECTION("documentsDidChangeNotifier when a document is created in place")
+  {
+    auto& window = createMapWindow(appController);
+    auto& document = window.document();
+
+    auto didChangeCount = 0;
+    auto connection =
+      host.documentsDidChangeNotifier.connect([&]() { ++didChangeCount; });
+
+    // Single window mode creates and loads documents in the top window
+    REQUIRE(document.create(
+      appController.environmentConfig(),
+      mdl::QuakeGameInfo,
+      mdl::MapFormat::Valve,
+      vm::bbox3d{8192.0}));
+    CHECK(didChangeCount == 1);
+    CHECK(documentIds(host) == std::vector<std::string>{"doc:1"});
+
     closeAllMapWindows(appController);
   }
 
@@ -389,12 +404,36 @@ TEST_CASE("QtMcpHost")
       REQUIRE(map.modified());
 
       documentHost.closeDocument(document);
-      // the document is still alive until the event loop deletes the window
-      CHECK(closedDocuments == std::vector<const MapDocument*>{&document});
       CHECK(host.documents().empty());
-
-      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
       CHECK(appController.mapWindowManager().allMapWindowsClosed());
+
+      // the document is still alive until the event loop deletes the window
+      CHECK(closedDocuments.empty());
+      processDeferredDeletes();
+      CHECK(closedDocuments == std::vector<const MapDocument*>{&document});
+    }
+
+    SECTION("closeDocument keeps unsaved changes if the window refuses to close")
+    {
+      auto& window = createMapWindow(appController);
+      auto& document = window.document();
+      auto& map = document.map();
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {mdl::createBrushNode(map)}}});
+      REQUIRE(map.modified());
+      const auto modificationCount = map.modificationCount();
+
+      auto refuseClose = RefuseClose{};
+      window.installEventFilter(&refuseClose);
+
+      documentHost.closeDocument(document);
+      processDeferredDeletes();
+
+      CHECK(documentIds(host) == std::vector<std::string>{"doc:1"});
+      CHECK(map.modified());
+      CHECK(map.modificationCount() == modificationCount);
+
+      window.removeEventFilter(&refuseClose);
+      closeAllMapWindows(appController);
     }
 
     SECTION("recentDocuments")
@@ -407,8 +446,26 @@ TEST_CASE("QtMcpHost")
 
   SECTION("isCompileRunning")
   {
+    auto env = fs::TestEnvironment{};
+    // The map refers to its game info
+    const auto gameInfo = withCompilationProfile(mdl::QuakeGameInfo, env.dir());
+    auto& window = createMapWindow(appController, gameInfo);
+    auto& document = window.document();
+    CHECK(!host.isCompileRunning(document));
+
+    const auto& dialog = startCompilation(window);
+    CHECK(host.isCompileRunning(document));
+
+    waitForCompilation(dialog);
+    CHECK(!host.isCompileRunning(document));
+
+    closeAllMapWindows(appController);
+  }
+
+  SECTION("logTarget")
+  {
     auto& window = createMapWindow(appController);
-    CHECK(!host.isCompileRunning(window.document()));
+    CHECK(host.logTarget(window.document()) == &window.logger());
 
     closeAllMapWindows(appController);
   }

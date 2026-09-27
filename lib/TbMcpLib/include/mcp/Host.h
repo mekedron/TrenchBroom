@@ -249,6 +249,13 @@ public:
    * with UNSUPPORTED_IN_HOST). The default implementation returns nullptr.
    */
   virtual CompileHost* compileHost();
+
+  /**
+   * Returns the logger that receives the document's messages outside of a log capture
+   * (the console of the document's window), or nullptr. The default implementation
+   * returns nullptr.
+   */
+  virtual Logger* logTarget(ui::MapDocument& document);
 };
 
 } // namespace tb::mcp

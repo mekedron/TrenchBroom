@@ -3,7 +3,7 @@
 Contains the Qt-free core of TrenchBroom's [Model Context Protocol](https://modelcontextprotocol.io)
 server, which lets AI agents inspect and edit maps. It links no `Qt6::` target, like
 `TbAppLib`; the editor glue (TCP sockets, the Qt scheduler, preferences, the status bar
-indicator) lives in `TbUiLib` (`McpServerController`, `McpTcpTransport`, `QtMcpHost`,
+indicator) lives in `TbMcpUiLib` (`McpServerController`, `McpTcpTransport`, `QtMcpHost`,
 ...), and the stdio bridge is the `TrenchBroomMcp` executable in `app/`.
 
 The design is described in `docs/mcp/05-technical-design.md`.
@@ -69,16 +69,16 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `CallLog`: the ring buffer behind `session_log` plus sinks (console, JSONL file).
 - `Host`: the editor as seen by the server (`McpHost`, with the `DocumentHost` sub-interface
   that creates, loads and closes documents and the `CompileHost` sub-interface that runs
-  compile profiles as `CompileJob`s). The editor implements it in `TbUiLib` (`QtMcpHost`,
+  compile profiles as `CompileJob`s). The editor implements it in `TbMcpUiLib` (`QtMcpHost`,
   `McpCompileHost`); tests use `FakeHost` and `FakeCompileHost` from `TbMcpTestUtilsLib`.
 - `CompileRuns`: the compile runs (`run:<n>`) with their jobs and logs, owned by `ServerState`.
 - `LogCapture`: records the warnings and errors the editor logs during a call or while a
   document loads.
 - `src/tools/ToolUtils`: small helpers shared by the tool files (game lookup, paths, times).
-- `src/tools/GeometryUtils`: helpers of the geometry, brush editing and transform tools
-  (brush builder with game defaults, material argument, world bounds and validity errors,
-  `intersectsInterior`, `castRay`, brush classification, non-integer vertex warnings,
-  `ScopedLockOverride`).
+- `tools/GeometryUtils` (public header, model helpers tested directly): helpers of the
+  geometry, brush editing and transform tools (brush builder with game defaults, material
+  argument, world bounds and validity errors, `intersectsInterior`, `castRay`, brush
+  classification, non-integer vertex warnings, `ScopedLockOverride`).
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type
   descriptions, value validation with X14 warnings, flag lookup by name, `resolveEntities` /
   `withEntities` for tools that act on entities including worldspawn).

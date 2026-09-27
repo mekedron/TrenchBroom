@@ -82,36 +82,15 @@ public:
   MapWindow* topMapWindow() const;
   bool allMapWindowsClosed() const;
 
-  /**
-   * Registers the given window as the top window. The window must have been created with
-   * this manager's app controller. The manager does not show the window.
-   */
-  void addMapWindow(MapWindow* mapWindow);
-
-  /**
-   * Whether a new or loaded document gets its own window. Otherwise, it replaces the
-   * document of the top window (single window mode).
-   */
-  bool shouldCreateWindowForDocument() const;
-
-  /** Creates, registers and shows a window for the given document. */
-  MapWindow* createMapWindow(std::unique_ptr<MapDocument> document);
-
-signals:
-  /**
-   * Emitted when the given window is about to close, before its document is destroyed.
-   */
-  void mapWindowWillClose(MapWindow* mapWindow);
-
-  /**
-   * Emitted after a window was opened or closed, after a window's document was replaced,
-   * or when the window order changed because another window received the focus.
-   */
-  void mapWindowsDidChange();
-
 private:
   void onFocusChange(QWidget* old, QWidget* now);
 
+public:
+  bool shouldCreateWindowForDocument() const;
+  MapWindow* createMapWindow(std::unique_ptr<MapDocument> document);
+  void addMapWindow(MapWindow* mapWindow);
+
+private:
   void removeMapWindow(MapWindow* mapWindow);
 
   friend class MapWindow;

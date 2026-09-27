@@ -20,7 +20,6 @@
 #include "mcp/tools/EntityCreateTools.h"
 
 #include "EntityUtils.h"
-#include "GeometryUtils.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
 #include "mcp/JsonVm.h"
@@ -28,6 +27,7 @@
 #include "mcp/Schema.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/GeometryUtils.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EditorContext.h"
 #include "mdl/Entity.h"

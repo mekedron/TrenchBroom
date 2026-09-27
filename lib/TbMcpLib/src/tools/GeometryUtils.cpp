@@ -17,7 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "GeometryUtils.h"
+#include "mcp/tools/GeometryUtils.h"
 
 #include "NodeJson.h"
 #include "gl/MaterialManager.h"
@@ -312,9 +312,12 @@ std::optional<ToolError> checkBox(
 }
 
 std::optional<ToolError> checkInsideWorldBounds(
-  CallContext& context, const std::vector<mdl::Node*>& nodes, std::string hint)
+  const std::vector<mdl::Node*>& nodes,
+  const mdl::Map& map,
+  const IdRegistry& ids,
+  std::string hint)
 {
-  const auto& worldBounds = context.map().worldBounds();
+  const auto& worldBounds = map.worldBounds();
   auto offending = std::vector<std::string>{};
   for (const auto* node : nodes)
   {
@@ -327,7 +330,7 @@ std::optional<ToolError> checkInsideWorldBounds(
     }
     if (!inside)
     {
-      offending.push_back(context.ids().format(*node));
+      offending.push_back(ids.format(*node));
     }
   }
 

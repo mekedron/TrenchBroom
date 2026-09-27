@@ -235,15 +235,8 @@ bool parseCommandLineAndOpenFiles(AppController& appController)
   auto parser = QCommandLineParser{};
   parser.addOption(QCommandLineOption("portable"));
   parser.addOption(QCommandLineOption("enableDraftReleaseUpdates"));
-  parser.addOption(QCommandLineOption(
-    "mcp-server",
-    "Enable the MCP server for this process, regardless of the preferences."));
+  parser.addOption(QCommandLineOption("mcp-server"));
   parser.process(*qApp);
-
-  if (parser.isSet("mcp-server"))
-  {
-    appController.mcpServerController().setForceEnabled(true);
-  }
 
   if (parser.isSet("enableDraftReleaseUpdates"))
   {
@@ -343,6 +336,7 @@ int main(int argc, char* argv[])
   auto appController = createAppController();
   auto crashReporter = CrashReporter{*appController};
   setContractViolationHandler(crashReporter);
+  auto mcpServerController = McpServerController{*appController};
 
 #ifdef __APPLE__
   app.setQuitOnLastWindowClosed(false);

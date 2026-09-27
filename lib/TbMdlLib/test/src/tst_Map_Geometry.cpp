@@ -1411,42 +1411,6 @@ TEST_CASE("Map_Geometry")
       CHECK(map.editorContext().currentLayer()->childCount() == 2);
       CHECK(!map.modified());
     }
-
-    SECTION("With an explicit thickness")
-    {
-      auto* largeBrushNode = map.editorContext().currentLayer()->children().at(1);
-      const auto bounds = largeBrushNode->logicalBounds();
-      selectNodes(map, {largeBrushNode});
-
-      SECTION("Walls have the given thickness")
-      {
-        CHECK(csgHollow(map, 4.0));
-        CHECK(map.editorContext().currentLayer()->childCount() == 7);
-
-        const auto brushes = map.selection().brushes;
-        REQUIRE(brushes.size() == 6);
-        for (const auto* brushNode : brushes)
-        {
-          const auto size = brushNode->logicalBounds().size();
-          CHECK(vm::get_max_component(size, 2) == 4.0);
-          CHECK(bounds.contains(brushNode->logicalBounds()));
-        }
-      }
-
-      SECTION("A thickness that is too large doesn't hollow the brush")
-      {
-        CHECK(!csgHollow(map, vm::get_max_component(bounds.size())));
-        CHECK(map.editorContext().currentLayer()->childCount() == 2);
-        CHECK(!map.modified());
-      }
-
-      SECTION("A non-positive thickness is rejected")
-      {
-        CHECK(!csgHollow(map, 0.0));
-        CHECK(!csgHollow(map, -4.0));
-        CHECK(!map.modified());
-      }
-    }
   }
 
   SECTION("extrudeBrushes")

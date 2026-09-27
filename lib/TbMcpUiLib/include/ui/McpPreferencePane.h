@@ -28,7 +28,7 @@ class QSpinBox;
 
 namespace tb::ui
 {
-class AppController;
+class McpServerController;
 
 /**
  * The "AI Agents (MCP)" preference pane: enables the MCP server and configures its
@@ -38,7 +38,7 @@ class McpPreferencePane : public PreferencePane
 {
   Q_OBJECT
 private:
-  AppController& m_appController;
+  McpServerController& m_controller;
   QCheckBox* m_enabled = nullptr;
   QSpinBox* m_port = nullptr;
   QLineEdit* m_bindAddress = nullptr;
@@ -48,7 +48,7 @@ private:
   QLabel* m_status = nullptr;
 
 public:
-  explicit McpPreferencePane(AppController& appController, QWidget* parent = nullptr);
+  explicit McpPreferencePane(McpServerController& controller, QWidget* parent = nullptr);
 
 private:
   void createGui();

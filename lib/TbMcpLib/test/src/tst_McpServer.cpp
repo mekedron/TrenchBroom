@@ -26,6 +26,7 @@
 #include "mcp/ProtocolVersion.h"
 #include "mcp/ServerState.h"
 #include "mcp/ToolRegistry.h"
+#include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
 #include "ui/MapDocument.h"
 
@@ -470,7 +471,7 @@ TEST_CASE("McpServer")
   {
     auto& document = fixture.create();
     fixture.call("transaction_begin", Json{{"name", "work"}});
-    CHECK(document.map().transactionDepth() == 1);
+    CHECK(document.map().commandProcessor().transactionDepth() == 1);
 
     fixture.host().busy = BusyState::Busy;
     auto pending = fixture.post(
@@ -481,7 +482,7 @@ TEST_CASE("McpServer")
     server.stopAgents();
 
     CHECK(server.sessionCount() == 0);
-    CHECK(document.map().transactionDepth() == 0);
+    CHECK(document.map().commandProcessor().transactionDepth() == 0);
     REQUIRE(pending->response);
     CHECK(
       (*pending->response)["result"]["structuredContent"]["error"]["code"]

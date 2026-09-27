@@ -1533,11 +1533,6 @@ void Map::cancelTransaction()
   m_repeatStack->commitTransaction();
 }
 
-size_t Map::transactionDepth() const
-{
-  return m_commandProcessor->transactionDepth();
-}
-
 bool Map::isCurrentDocumentStateObservable() const
 {
   return m_commandProcessor->isCurrentDocumentStateObservable();

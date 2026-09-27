@@ -12,3 +12,12 @@ target_link_libraries(TrenchBroomMcp
     Qt6::Network
     TbMcpLib
 )
+
+# The bridge is shipped next to the editor executable (inside the bundle on macOS, see
+# app/TrenchBroom/CMakeLists.txt) so that it can find and launch the editor.
+add_dependencies(TrenchBroom TrenchBroomMcp)
+if(WIN32)
+    install(TARGETS TrenchBroomMcp RUNTIME DESTINATION . COMPONENT TrenchBroom)
+elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    install(TARGETS TrenchBroomMcp RUNTIME DESTINATION bin COMPONENT TrenchBroom)
+endif()

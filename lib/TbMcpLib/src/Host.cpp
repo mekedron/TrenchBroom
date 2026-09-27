@@ -35,4 +35,9 @@ CompileHost* McpHost::compileHost()
   return nullptr;
 }
 
+Logger* McpHost::logTarget(ui::MapDocument&)
+{
+  return nullptr;
+}
+
 } // namespace tb::mcp

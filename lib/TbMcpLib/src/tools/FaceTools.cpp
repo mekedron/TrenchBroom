@@ -19,7 +19,6 @@
 
 #include "mcp/tools/FaceTools.h"
 
-#include "GeometryUtils.h"
 #include "NodeJson.h"
 #include "base/Color.h"
 #include "mcp/Args.h"
@@ -30,6 +29,7 @@
 #include "mcp/Schema.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/GeometryUtils.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushFaceHandle.h"

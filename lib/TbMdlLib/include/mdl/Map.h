@@ -405,11 +405,6 @@ public: // command processing
   bool commitTransaction();
   void cancelTransaction();
 
-  /**
-   * Returns the number of currently executing (possibly nested) transactions.
-   */
-  size_t transactionDepth() const;
-
   bool isCurrentDocumentStateObservable() const;
 
   bool throwExceptionDuringCommand();

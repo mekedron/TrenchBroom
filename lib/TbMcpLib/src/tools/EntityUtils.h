@@ -42,6 +42,7 @@ namespace tb::mcp
 {
 class Args;
 class CallContext;
+class IdRegistry;
 
 // Shared helpers of the entity tools (epic E5): definition lookup, property type
 // descriptions, value validation (spec X14) and entity targeting. Keep this small; it
@@ -141,7 +142,7 @@ void validateProperty(
  * duplicates.
  */
 Result<std::vector<mdl::EntityNodeBase*>, ToolError> resolveEntities(
-  CallContext& context, const Args& args, std::string_view key = "ids");
+  mdl::Map& map, const IdRegistry& ids, const Args& args, std::string_view key = "ids");
 
 /**
  * Runs the function so that `map.selection().allEntities()` yields the given entities,

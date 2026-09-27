@@ -59,7 +59,7 @@ std::optional<ToolError> checkNoOpenTransaction(CallContext& context)
       "Commit or roll back the transaction first (transaction_commit or "
       "transaction_rollback).");
   }
-  if (context.map().transactionDepth() > 0)
+  if (context.map().commandProcessor().transactionDepth() > 0)
   {
     return makeError(
       ErrorCode::TransactionActive,
@@ -186,7 +186,7 @@ ToolResult transactionBegin(CallContext& context, const Args& args)
     context.session().id,
     context.session().clientDisplayName(),
     name,
-    map.transactionDepth()};
+    map.commandProcessor().transactionDepth()};
   context.server().updateOpenTransactions();
 
   return Json{{"transaction", name}, {"document", context.documentInfo().id}};
@@ -202,7 +202,7 @@ std::optional<ToolError> checkOwnTransaction(CallContext& context)
       "This session has no open transaction on " + context.documentInfo().id + ".",
       "Start one with transaction_begin.");
   }
-  if (context.map().transactionDepth() != state.transaction->depth)
+  if (context.map().commandProcessor().transactionDepth() != state.transaction->depth)
   {
     return makeError(
       ErrorCode::TransactionActive,

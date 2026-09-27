@@ -19,7 +19,6 @@
 
 #include "mcp/tools/TransformTools.h"
 
-#include "GeometryUtils.h"
 #include "NodeJson.h"
 #include "base/NotifierConnection.h"
 #include "mcp/Args.h"
@@ -28,6 +27,7 @@
 #include "mcp/ObjectIds.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/GeometryUtils.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/EntityProperties.h"
 #include "mdl/Map.h"
@@ -192,7 +192,7 @@ Json objectsResult(CallContext& context, const std::vector<mdl::Node*>& nodes)
 std::optional<ToolError> checkTransformed(
   CallContext& context, const std::vector<mdl::Node*>& nodes)
 {
-  if (auto error = checkInsideWorldBounds(context, nodes))
+  if (auto error = checkInsideWorldBounds(nodes, context.map(), context.ids()))
   {
     return error;
   }
@@ -946,8 +946,9 @@ ToolResult objectsArray(CallContext& context, const Args& args)
       }
       if (
         auto error = checkInsideWorldBounds(
-          context,
           all,
+          map,
+          ids,
           "Use a smaller count, offset or radius so that all instances stay inside the "
           "world bounds."))
       {
@@ -988,7 +989,7 @@ ToolResult commandRepeat(CallContext& context, const Args& args)
   auto& ids = context.ids();
   const auto times = args.get<size_t>("times");
 
-  if (map.transactionDepth() > 0)
+  if (map.commandProcessor().transactionDepth() > 0)
   {
     return makeError(
       ErrorCode::TransactionActive,
@@ -1032,7 +1033,7 @@ ToolResult commandRepeat(CallContext& context, const Args& args)
   const auto problems = context.loggedProblems();
   const auto failed = std::ranges::any_of(
     problems, [](const auto& message) { return message.level == LogLevel::Error; });
-  auto outOfBounds = checkInsideWorldBounds(context, selected);
+  auto outOfBounds = checkInsideWorldBounds(selected, map, ids);
 
   if (failed || outOfBounds || context.dryRun())
   {
@@ -1077,7 +1078,7 @@ ToolResult commandRepeat(CallContext& context, const Args& args)
 ToolResult commandRepeatClear(CallContext& context, const Args&)
 {
   auto& map = context.map();
-  if (map.transactionDepth() > 0)
+  if (map.commandProcessor().transactionDepth() > 0)
   {
     return makeError(
       ErrorCode::TransactionActive,

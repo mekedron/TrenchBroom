@@ -324,7 +324,7 @@ ToolResult entityPropertiesSet(CallContext& context, const Args& args)
     }
   }
 
-  auto resolved = resolveEntities(context, args);
+  auto resolved = resolveEntities(context.map(), context.ids(), args);
   if (resolved.is_error())
   {
     return errorOf(resolved);
@@ -415,7 +415,7 @@ ToolResult entityPropertyRemove(CallContext& context, const Args& args)
     }
   }
 
-  auto resolved = resolveEntities(context, args);
+  auto resolved = resolveEntities(context.map(), context.ids(), args);
   if (resolved.is_error())
   {
     return errorOf(resolved);
@@ -486,7 +486,7 @@ ToolResult entityPropertyRename(CallContext& context, const Args& args)
     }
   }
 
-  auto resolved = resolveEntities(context, args);
+  auto resolved = resolveEntities(context.map(), context.ids(), args);
   if (resolved.is_error())
   {
     return errorOf(resolved);
@@ -645,7 +645,7 @@ ToolResult entitySpawnflagsSet(CallContext& context, const Args& args)
     return *error;
   }
 
-  auto resolved = resolveEntities(context, args);
+  auto resolved = resolveEntities(context.map(), context.ids(), args);
   if (resolved.is_error())
   {
     return errorOf(resolved);
@@ -783,7 +783,7 @@ ToolResult entityDefaultsApply(CallContext& context, const Args& args)
                     : modeName == "all"    ? mdl::SetDefaultPropertyMode::SetAll
                                            : mdl::SetDefaultPropertyMode::SetMissing;
 
-  auto resolved = resolveEntities(context, args);
+  auto resolved = resolveEntities(context.map(), context.ids(), args);
   if (resolved.is_error())
   {
     return errorOf(resolved);
@@ -917,7 +917,7 @@ ToolResult entityLinksGet(CallContext& context, const Args& args)
   auto scope = std::unordered_set<const mdl::EntityNodeBase*>{};
   if (args.has("ids"))
   {
-    auto resolved = resolveEntities(context, args);
+    auto resolved = resolveEntities(context.map(), context.ids(), args);
     if (resolved.is_error())
     {
       return errorOf(resolved);
@@ -1050,7 +1050,8 @@ ToolResult entityLinksGet(CallContext& context, const Args& args)
 Result<mdl::EntityNodeBase*, ToolError> resolveEntity(
   CallContext& context, const std::string& id)
 {
-  auto resolved = resolveEntities(context, Args{Json{{"ids", Json::array({id})}}}, "ids");
+  auto resolved = resolveEntities(
+    context.map(), context.ids(), Args{Json{{"ids", Json::array({id})}}}, "ids");
   if (resolved.is_error())
   {
     return errorOf(resolved);
@@ -1295,7 +1296,7 @@ ToolResult entityColorSet(CallContext& context, const Args& args)
     }
   }
 
-  auto resolved = resolveEntities(context, args);
+  auto resolved = resolveEntities(context.map(), context.ids(), args);
   if (resolved.is_error())
   {
     return errorOf(resolved);

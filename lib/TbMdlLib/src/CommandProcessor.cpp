@@ -25,12 +25,10 @@
 #include "mdl/UndoableCommand.h"
 
 #include "kd/contracts.h"
-#include "kd/ranges/to.h"
 #include "kd/set_temp.h"
 #include "kd/vector_utils.h"
 
 #include <algorithm>
-#include <ranges>
 
 namespace tb::mdl
 {
@@ -212,16 +210,22 @@ const std::string* CommandProcessor::redoCommandName() const
 
 std::vector<std::string> CommandProcessor::undoCommandNames() const
 {
-  return m_undoStack | std::views::reverse
-         | std::views::transform([](const auto& command) { return command->name(); })
-         | kdl::ranges::to<std::vector>();
+  auto result = std::vector<std::string>{};
+  for (auto it = m_undoStack.rbegin(); it != m_undoStack.rend(); ++it)
+  {
+    result.push_back((*it)->name());
+  }
+  return result;
 }
 
 std::vector<std::string> CommandProcessor::redoCommandNames() const
 {
-  return m_redoStack | std::views::reverse
-         | std::views::transform([](const auto& command) { return command->name(); })
-         | kdl::ranges::to<std::vector>();
+  auto result = std::vector<std::string>{};
+  for (auto it = m_redoStack.rbegin(); it != m_redoStack.rend(); ++it)
+  {
+    result.push_back((*it)->name());
+  }
+  return result;
 }
 
 void CommandProcessor::startTransaction(std::string name, const TransactionScope scope)
@@ -390,9 +394,7 @@ bool CommandProcessor::storeCommand(
 {
   if (m_transactionStack.empty())
   {
-    // The redo stack is only cleared once a command reaches the undo stack. Commands
-    // executed within a transaction may still be rolled back, and in that case, the redo
-    // stack must remain intact.
+    // commands in a transaction may be rolled back, so they must not clear the redo stack
     m_redoStack.clear();
     return pushToUndoStack(std::move(command), collate);
   }

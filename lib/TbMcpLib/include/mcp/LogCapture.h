@@ -77,17 +77,19 @@ private:
 
 /**
  * Records the warnings and errors that a document logs while this object exists. The
- * messages still reach the document's current target logger (e.g. the console).
+ * capture becomes the document's target logger and forwards all messages to the given
+ * target (e.g. the console, may be null). The destructor makes the given target the
+ * document's target logger again.
  */
 class ScopedLogCapture
 {
 private:
   ui::MapDocument& m_document;
-  Logger* m_previousTarget;
+  Logger* m_target;
   CapturingLogger m_logger;
 
 public:
-  explicit ScopedLogCapture(ui::MapDocument& document);
+  ScopedLogCapture(ui::MapDocument& document, Logger* target);
   ~ScopedLogCapture();
 
   ScopedLogCapture(const ScopedLogCapture&) = delete;

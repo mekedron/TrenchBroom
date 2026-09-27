@@ -177,17 +177,14 @@ public:
   const std::string* redoCommandName() const;
 
   /**
-   * Returns the names of all commands on the undo stack, the most recently executed
-   * command first.
+   * Returns the names of the commands on the undo stack, the next one to undo first.
    */
   std::vector<std::string> undoCommandNames() const;
 
   /**
-   * Returns the names of all commands on the redo stack, the command that `redo` would
-   * execute first.
+   * Returns the names of the commands on the redo stack, the next one to redo first.
    */
   std::vector<std::string> redoCommandNames() const;
-
   /**
    * Starts a new transaction. If a transaction is currently executing, then the newly
    * started transaction becomes a nested transaction and will be added as a command to
@@ -229,7 +226,7 @@ public:
   bool isTransactionActive() const;
 
   /**
-   * Returns the number of currently executing (possibly nested) transactions.
+   * Returns the number of currently executing (nested) transactions.
    */
   size_t transactionDepth() const;
 

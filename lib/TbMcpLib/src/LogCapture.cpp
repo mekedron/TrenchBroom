@@ -21,8 +21,6 @@
 
 #include "ui/MapDocument.h"
 
-#include "kd/contracts.h"
-
 namespace tb::mcp
 {
 namespace
@@ -102,10 +100,10 @@ void CapturingLogger::doLog(const LogLevel level, const std::string_view message
   }
 }
 
-ScopedLogCapture::ScopedLogCapture(ui::MapDocument& document)
+ScopedLogCapture::ScopedLogCapture(ui::MapDocument& document, Logger* target)
   : m_document{document}
-  , m_previousTarget{document.targetLogger()}
-  , m_logger{m_previousTarget}
+  , m_target{target}
+  , m_logger{m_target}
 {
   m_document.setTargetLogger(&m_logger);
   // setting a target logger flushes cached messages that predate the capture
@@ -114,7 +112,7 @@ ScopedLogCapture::ScopedLogCapture(ui::MapDocument& document)
 
 ScopedLogCapture::~ScopedLogCapture()
 {
-  m_document.setTargetLogger(m_previousTarget);
+  m_document.setTargetLogger(m_target);
 }
 
 const std::vector<LogMessage>& ScopedLogCapture::messages() const
@@ -129,8 +127,6 @@ const std::vector<std::string>& ScopedLogCapture::texts() const
 
 std::vector<LogMessage> collectCachedMessages(ui::MapDocument& document)
 {
-  contract_pre(document.targetLogger() == nullptr);
-
   // setting a target logger flushes the cache into it
   auto recorder = RecordingLogger{};
   document.setTargetLogger(&recorder);

@@ -43,14 +43,6 @@ inline auto EnableDraftReleaseUpdates = Preference<bool>{
 inline auto IncludeDraftReleaseUpdates = Preference<bool>{
   "updater/Include draft releases", false, PreferencePersistencePolicy::Transient};
 
-inline auto McpServerEnabled = Preference<bool>{"MCP/Enabled", false};
-inline auto McpServerPort = Preference<int>{"MCP/Port", 47100};
-inline auto McpServerBindAddress =
-  Preference<std::string>{"MCP/Bind address", "127.0.0.1"};
-inline auto McpServerAccessToken = Preference<std::string>{"MCP/Access token", ""};
-inline auto McpLogToFile = Preference<bool>{"MCP/Log to file", true};
-inline auto McpBusyWaitTimeoutMs = Preference<int>{"MCP/Busy wait timeout", 30000};
-
 inline auto MapViewLayout = Preference<int>{"Views/Map view layout", 0};
 
 inline const auto SystemTheme = std::string{"System"};

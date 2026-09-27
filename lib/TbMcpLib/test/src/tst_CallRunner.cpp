@@ -222,7 +222,7 @@ TEST_CASE("CallRunner")
     CHECK(entityCount(document) == 0);
     CHECK(map.modificationCount() == modificationCount);
     CHECK(!map.canUndoCommand());
-    CHECK(map.transactionDepth() == 0);
+    CHECK(map.commandProcessor().transactionDepth() == 0);
   }
 
   SECTION("an exception becomes INTERNAL_ERROR and leaves no trace")
@@ -232,7 +232,7 @@ TEST_CASE("CallRunner")
     CHECK(error.code == ErrorCode::InternalError);
     CHECK(error.message.find("boom") != std::string::npos);
     CHECK(entityCount(document) == 0);
-    CHECK(map.transactionDepth() == 0);
+    CHECK(map.commandProcessor().transactionDepth() == 0);
   }
 
   SECTION("operationFailed includes the messages the editor logged")
@@ -309,7 +309,7 @@ TEST_CASE("CallRunner")
     {
       fixture.callExpectingError("test_add_entity", Json{{"fail", true}});
       CHECK(entityCount(document) == 2);
-      CHECK(map.transactionDepth() == 1);
+      CHECK(map.commandProcessor().transactionDepth() == 1);
     }
 
     SECTION("commit creates one undo step")
@@ -345,14 +345,14 @@ TEST_CASE("CallRunner")
     SECTION("closing the session rolls the transaction back")
     {
       fixture.server().deleteSession(fixture.sessionId());
-      CHECK(map.transactionDepth() == 0);
+      CHECK(map.commandProcessor().transactionDepth() == 0);
       CHECK(entityCount(document) == 0);
     }
 
     SECTION("closing the document drops the transaction")
     {
       fixture.host().removeDocument(document);
-      CHECK(map.transactionDepth() == 0);
+      CHECK(map.commandProcessor().transactionDepth() == 0);
       CHECK(fixture.server().activity().openTransactions.empty());
     }
   }

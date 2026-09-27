@@ -27,6 +27,7 @@
 #include "mcp/ProtocolVersion.h"
 #include "mcp/Scheduler.h"
 #include "mcp/ServerState.h"
+#include "mdl/CommandProcessor.h"
 #include "mdl/Grid.h"
 #include "mdl/Map.h"
 #include "mdl/TransactionScope.h"
@@ -92,7 +93,8 @@ Result<std::optional<DocumentInfo>, ToolError> resolveDocument(
 bool isBusy(ServerState& server, ui::MapDocument& document)
 {
   return server.host.busyState(document) == BusyState::Busy
-         || document.map().transactionDepth() > server.agentDepth(document);
+         || document.map().commandProcessor().transactionDepth()
+              > server.agentDepth(document);
 }
 
 } // namespace
@@ -467,7 +469,7 @@ Json CallRunner::execute(const CallRequest& request)
   auto collector = std::optional<ChangeCollector>{};
   if (mapDocument)
   {
-    logCapture.emplace(*mapDocument);
+    logCapture.emplace(*mapDocument, m_server.host.logTarget(*mapDocument));
     context.setLogCapture(&*logCapture);
   }
   if (tool->mutation() == Mutation::Map && mapDocument)
@@ -479,7 +481,8 @@ Json CallRunner::execute(const CallRequest& request)
 
   const auto transactional = tool->transactional() && mapDocument;
   const auto undoStepName = "AI: " + tool->title();
-  const auto depthBefore = mapDocument ? mapDocument->map().transactionDepth() : 0;
+  const auto depthBefore =
+    mapDocument ? mapDocument->map().commandProcessor().transactionDepth() : 0;
   if (transactional)
   {
     mapDocument->map().startTransaction(undoStepName, mdl::TransactionScope::Oneshot);
@@ -515,7 +518,7 @@ Json CallRunner::execute(const CallRequest& request)
     auto& map = mapDocument->map();
 
     // close any transaction the handler leaked
-    while (map.transactionDepth() > depthBefore + 1)
+    while (map.commandProcessor().transactionDepth() > depthBefore + 1)
     {
       map.cancelTransaction();
     }
@@ -692,7 +695,8 @@ bool CallRunner::startAsync(CallRequest request)
 
   if (call->document)
   {
-    call->logCapture = std::make_unique<ScopedLogCapture>(*call->document);
+    call->logCapture = std::make_unique<ScopedLogCapture>(
+      *call->document, m_server.host.logTarget(*call->document));
     call->context->setLogCapture(call->logCapture.get());
 
     // the document may be closed between two steps

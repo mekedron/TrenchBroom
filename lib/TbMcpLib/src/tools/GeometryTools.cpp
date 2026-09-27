@@ -19,7 +19,6 @@
 
 #include "mcp/tools/GeometryTools.h"
 
-#include "GeometryUtils.h"
 #include "NodeJson.h"
 #include "ToolUtils.h"
 #include "mcp/Args.h"
@@ -29,6 +28,7 @@
 #include "mcp/Schema.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/GeometryUtils.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
@@ -43,18 +43,18 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
 #include "mdl/WorldNode.h"
-#include "ui/DrawShapeToolExtensions.h"
 #include "ui/DrawShapeToolParameters.h"
-#include "ui/MapDocument.h"
+
+#include "kd/result_fold.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <map>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -119,17 +119,6 @@ Result<std::vector<mdl::Node*>, ToolError> addAndSelectBrushes(
 Json groupJson(CallContext& context, const mdl::GroupNode* group)
 {
   return group ? Json(context.ids().format(*group)) : Json(nullptr);
-}
-
-void setMaterial(std::vector<mdl::Brush>& brushes, const std::string& material)
-{
-  for (auto& brush : brushes)
-  {
-    for (auto& face : brush.faces())
-    {
-      face.setMaterialName(material);
-    }
-  }
 }
 
 vm::bbox3d shrink(const vm::bbox3d& box, const double amount)
@@ -281,34 +270,112 @@ ui::DrawShapeToolParameters::StairDirection stairDirectionFromString(
                              : StairDirection::PosX;
 }
 
-std::unique_ptr<ui::DrawShapeToolExtension> shapeExtension(
-  const std::string& shape, ui::MapDocument& document)
+Result<std::vector<mdl::Brush>> single(Result<mdl::Brush> brush)
 {
+  return std::move(brush).transform([](auto b) { return std::vector{std::move(b)}; });
+}
+
+/**
+ * Builds stairs like the editor's stairs shape: steps of `stepHeight` that rise in the
+ * stair direction, each reaching down to the bottom of the box.
+ */
+Result<std::vector<mdl::Brush>> buildStairs(
+  const mdl::BrushBuilder& builder,
+  const vm::bbox3d& box,
+  const ui::DrawShapeToolParameters& parameters,
+  const std::string& material)
+{
+  using StairDirection = ui::DrawShapeToolParameters::StairDirection;
+  const auto direction = parameters.stairDirection();
+  const auto axis = direction == StairDirection::PosY || direction == StairDirection::NegY
+                      ? vm::axis::y
+                      : vm::axis::x;
+  const auto positive =
+    direction == StairDirection::PosX || direction == StairDirection::PosY;
+
+  const auto stepHeight = std::max(1.0, std::abs(parameters.stepHeight()));
+  const auto size = box.size();
+  const auto numSteps = std::max(size_t{1}, size_t(std::ceil(size.z() / stepHeight)));
+  const auto treadDepth = size[axis] / double(numSteps);
+
+  auto steps = std::vector<Result<mdl::Brush>>{};
+  for (size_t i = 0; i < numSteps; ++i)
+  {
+    auto stepBox = vm::bbox3d{
+      box.min,
+      {box.max.xy(), std::min(box.min.z() + stepHeight * double(i + 1), box.max.z())},
+    };
+    stepBox.min[axis] = positive ? box.min[axis] + treadDepth * double(i)
+                                 : box.max[axis] - treadDepth * double(i + 1);
+    stepBox.max[axis] = positive ? box.min[axis] + treadDepth * double(i + 1)
+                                 : box.max[axis] - treadDepth * double(i);
+
+    steps.push_back(builder.createCuboid(stepBox, material));
+  }
+  return std::move(steps) | kdl::fold;
+}
+
+/**
+ * Builds the brushes of a shape with the same brush builder calls as the editor's shape
+ * tool extensions, which need a ui::MapDocument.
+ */
+Result<std::vector<mdl::Brush>> buildShape(
+  const mdl::Map& map,
+  const std::string& shape,
+  const vm::bbox3d& box,
+  const ui::DrawShapeToolParameters& parameters,
+  const std::string& material)
+{
+  const auto builder = brushBuilder(map);
+  const auto& circleShape = parameters.circleShape();
+  const auto axis = parameters.axis();
+
   if (shape == "stairs")
   {
-    return std::make_unique<ui::DrawShapeToolStairsExtension>(document);
+    return buildStairs(builder, box, parameters, material);
   }
   if (shape == "arch")
   {
-    return std::make_unique<ui::DrawShapeToolArchExtension>(document);
+    const auto thickness = parameters.thickness();
+    auto arch = builder.createArch(box, thickness, circleShape, axis, material);
+    if (arch.is_error() || !parameters.createSpandrel())
+    {
+      return arch;
+    }
+    auto spandrel =
+      builder.createSpandrelForArch(box, thickness, circleShape, axis, material);
+    if (spandrel.is_error())
+    {
+      return spandrel;
+    }
+    auto brushes = std::move(arch).value();
+    for (auto& brush : std::move(spandrel).value())
+    {
+      brushes.push_back(std::move(brush));
+    }
+    return brushes;
   }
   if (shape == "cylinder")
   {
-    return std::make_unique<ui::DrawShapeToolCylinderExtension>(document);
+    return parameters.hollow()
+             ? builder.createHollowCylinder(
+                 box, parameters.thickness(), circleShape, axis, material)
+             : single(builder.createCylinder(box, circleShape, axis, material));
   }
   if (shape == "cone")
   {
-    return std::make_unique<ui::DrawShapeToolConeExtension>(document);
+    return single(builder.createCone(box, circleShape, axis, material));
   }
   if (shape == "uvSphere")
   {
-    return std::make_unique<ui::DrawShapeToolUvSphereExtension>(document);
+    return single(
+      builder.createUvSphere(box, circleShape, parameters.numRings(), axis, material));
   }
   if (shape == "icoSphere")
   {
-    return std::make_unique<ui::DrawShapeToolIcoSphereExtension>(document);
+    return single(builder.createIcoSphere(box, parameters.accuracy(), material));
   }
-  return std::make_unique<ui::DrawShapeToolCuboidExtension>(document);
+  return single(builder.createCuboid(box, material));
 }
 
 /** The extents of the cross section of a circular shape, i.e. perpendicular to `axis`. */
@@ -444,8 +511,7 @@ ToolResult brushCreateShape(CallContext& context, const Args& args)
   }
 
   const auto material = materialArgument(context, args);
-  const auto extension = shapeExtension(shape, context.document());
-  auto brushes = extension->createBrushes(box, parameters.value());
+  auto brushes = buildShape(context.map(), shape, box, parameters.value(), material);
   if (brushes.is_error())
   {
     return geometryError(
@@ -462,14 +528,9 @@ ToolResult brushCreateShape(CallContext& context, const Args& args)
       "Make the bounds larger along the axes of the cross section.");
   }
 
-  // The extensions use the current material; apply the requested one to the result
-  // instead of changing the editor's current material.
-  auto result = std::move(brushes).value();
-  setMaterial(result, material);
-
   auto* group = static_cast<mdl::GroupNode*>(nullptr);
   auto added = addAndSelectBrushes(
-    context, std::move(result), args.getOptional<std::string>("group"), &group);
+    context, std::move(brushes).value(), args.getOptional<std::string>("group"), &group);
   if (added.is_error())
   {
     return errorOf(added);

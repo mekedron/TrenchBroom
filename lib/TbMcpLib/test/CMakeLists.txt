@@ -12,6 +12,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityCreateTools.cpp
@@ -20,6 +21,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FaceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpResponse.cpp
@@ -45,6 +47,9 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TransformTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamCommandProcessor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamMap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamNode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewTools.cpp
 )
 

@@ -116,8 +116,7 @@ private:
   QPointer<ObjExportDialog> m_objExportDialog;
 
   std::optional<std::string> m_lastCompilationProfileName;
-
-  bool m_closeWithoutConfirmation = false;
+  bool m_discardChanges = false;
 
   NotifierConnection m_notifierConnection;
 
@@ -147,6 +146,7 @@ public:
 
   const MapViewToolBox& toolBox() const;
   MapViewToolBox& toolBox();
+  const SwitchableMapViewContainer& mapView() const;
 
 public: // getters and such
   Logger& logger() const;
@@ -211,18 +211,13 @@ private: // menu event handlers
   void bindEvents();
 
 public:
-  /**
-   * Closes the window without asking whether to save unsaved changes, which are
-   * discarded. Returns whether the window was closed.
-   */
-  bool closeWithoutConfirmation();
-
   bool saveDocument();
   bool saveDocumentAs();
   void revertDocument();
   bool exportDocumentAsObj();
   bool exportDocumentAsMap();
   bool exportDocument(const mdl::ExportOptions& options);
+  bool closeDiscardingChanges();
 
 private:
   bool confirmOrDiscardChanges();
@@ -374,8 +369,8 @@ public:
   bool currentViewMaximized() const;
 
   void showCompileDialog();
+  CompilationDialog* compilationDialog() const;
   bool closeCompileDialog();
-  bool compilationRunning() const;
   void rerunLastCompilation();
   bool hasLastCompilationProfile() const;
 

@@ -349,27 +349,6 @@ TEST_CASE("Node")
     CHECK(childDestroyed);
   }
 
-  SECTION("runtimeId")
-  {
-    const auto worldBounds = vm::bbox3d{8192.0};
-
-    auto nodeA = std::make_unique<TestNode>();
-    auto nodeB = std::make_unique<TestNode>();
-
-    CHECK(nodeA->runtimeId() != 0u);
-    CHECK(nodeA->runtimeId() != nodeB->runtimeId());
-
-    auto clone = std::unique_ptr<Node>{nodeA->clone(worldBounds)};
-    CHECK(clone->runtimeId() != nodeA->runtimeId());
-    CHECK(clone->runtimeId() != nodeB->runtimeId());
-
-    const auto idA = nodeA->runtimeId();
-    nodeA.reset();
-
-    auto nodeC = std::make_unique<TestNode>();
-    CHECK(nodeC->runtimeId() != idA);
-  }
-
   SECTION("clone")
   {
     const auto worldBounds = vm::bbox3d{8192.0};

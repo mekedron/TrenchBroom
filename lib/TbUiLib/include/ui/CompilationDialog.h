@@ -74,8 +74,7 @@ public:
   void selectFirstProfile();
 
   void runSelectedProfile();
-
-  bool compilationRunning() const;
+  bool running() const;
 
 signals:
   void compilationProfileStarted(const std::string& profileName);

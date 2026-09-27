@@ -28,7 +28,6 @@
 #include "vm/util.h"
 #include "vm/vec.h"
 
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -76,11 +75,7 @@ bool snapVertices(Map& map, double snapTo);
 bool csgConvexMerge(Map& map);
 bool csgSubtract(Map& map);
 bool csgIntersect(Map& map);
-/**
- * Hollows the selected brushes. The walls of the resulting brushes are the given
- * thickness, or the current grid size if no thickness is given.
- */
-bool csgHollow(Map& map, std::optional<double> thickness = std::nullopt);
+bool csgHollow(Map& map);
 
 bool extrudeBrushes(
   Map& map, const std::vector<vm::polygon3d>& faces, const vm::vec3d& delta);

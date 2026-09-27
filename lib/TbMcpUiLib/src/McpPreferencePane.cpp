@@ -29,9 +29,8 @@
 
 #include "base/PreferenceManager.h"
 #include "mcp/StreamableHttp.h"
-#include "prefs/Preferences.h"
-#include "ui/AppController.h"
 #include "ui/FormWithSectionsLayout.h"
+#include "ui/McpPreferences.h"
 #include "ui/McpServerController.h"
 #include "ui/ViewConstants.h"
 
@@ -70,20 +69,19 @@ bool isLoopbackAddress(const std::string& address)
 
 } // namespace
 
-McpPreferencePane::McpPreferencePane(AppController& appController, QWidget* parent)
+McpPreferencePane::McpPreferencePane(McpServerController& controller, QWidget* parent)
   : PreferencePane{parent}
-  , m_appController{appController}
+  , m_controller{controller}
 {
   createGui();
 
-  auto& controller = m_appController.mcpServerController();
   connect(
-    &controller,
+    &m_controller,
     &McpServerController::statusChanged,
     this,
     &McpPreferencePane::updateStatus);
   connect(
-    &controller,
+    &m_controller,
     &McpServerController::clientsChanged,
     this,
     &McpPreferencePane::updateStatus);
@@ -113,7 +111,7 @@ Every change an agent makes is a regular undo step. The status bar shows what th
   m_enabled = new QCheckBox{};
   connect(m_enabled, &QCheckBox::checkStateChanged, this, [](const auto state) {
     PreferenceManager::instance().set(
-      Preferences::McpServerEnabled, state == Qt::Checked);
+      McpPreferences::McpServerEnabled, state == Qt::Checked);
   });
 
   m_status = new QLabel{};
@@ -123,16 +121,16 @@ Every change an agent makes is a regular undo step. The status bar shows what th
   m_port->setRange(1, 65535);
   m_port->setKeyboardTracking(false);
   connect(m_port, &QSpinBox::valueChanged, this, [](const int value) {
-    PreferenceManager::instance().set(Preferences::McpServerPort, value);
+    PreferenceManager::instance().set(McpPreferences::McpServerPort, value);
   });
 
   m_bindAddress = new QLineEdit{};
   m_bindAddress->setPlaceholderText("127.0.0.1");
-  connectLineEdit(m_bindAddress, Preferences::McpServerBindAddress);
+  connectLineEdit(m_bindAddress, McpPreferences::McpServerBindAddress);
 
   m_accessToken = new QLineEdit{};
   m_accessToken->setEchoMode(QLineEdit::PasswordEchoOnEdit);
-  connectLineEdit(m_accessToken, Preferences::McpServerAccessToken);
+  connectLineEdit(m_accessToken, McpPreferences::McpServerAccessToken);
 
   auto* networkInfo = new QLabel{tr(
     R"(By default, the server only accepts connections from this computer (127.0.0.1).
@@ -141,7 +139,7 @@ If you bind it to another address, agents must send the access token as a bearer
 
   m_logToFile = new QCheckBox{};
   connect(m_logToFile, &QCheckBox::checkStateChanged, this, [](const auto state) {
-    PreferenceManager::instance().set(Preferences::McpLogToFile, state == Qt::Checked);
+    PreferenceManager::instance().set(McpPreferences::McpLogToFile, state == Qt::Checked);
   });
 
   m_busyWaitTimeout = new QSpinBox{};
@@ -149,7 +147,7 @@ If you bind it to another address, agents must send the access token as a bearer
   m_busyWaitTimeout->setSuffix(tr(" s"));
   m_busyWaitTimeout->setKeyboardTracking(false);
   connect(m_busyWaitTimeout, &QSpinBox::valueChanged, this, [](const int value) {
-    PreferenceManager::instance().set(Preferences::McpBusyWaitTimeoutMs, value * 1000);
+    PreferenceManager::instance().set(McpPreferences::McpBusyWaitTimeoutMs, value * 1000);
   });
 
   auto* busyInfo = new QLabel{tr(
@@ -187,20 +185,19 @@ If you bind it to another address, agents must send the access token as a bearer
 
 void McpPreferencePane::updateStatus()
 {
-  const auto& controller = m_appController.mcpServerController();
-  if (controller.listening())
+  if (m_controller.listening())
   {
     m_status->setText(tr("Listening on port %1 (%2)")
-                        .arg(*controller.port())
-                        .arg(controller.activityText()));
+                        .arg(*m_controller.port())
+                        .arg(m_controller.activityText()));
   }
-  else if (!controller.statusText().isEmpty())
+  else if (!m_controller.statusText().isEmpty())
   {
-    m_status->setText(controller.statusText());
+    m_status->setText(m_controller.statusText());
   }
   else
   {
-    m_status->setText(controller.enabled() ? tr("Not running") : tr("Disabled"));
+    m_status->setText(m_controller.enabled() ? tr("Not running") : tr("Disabled"));
   }
 }
 
@@ -212,12 +209,12 @@ bool McpPreferencePane::canResetToDefaults()
 void McpPreferencePane::doResetToDefaults()
 {
   auto& prefs = PreferenceManager::instance();
-  prefs.resetToDefault(Preferences::McpServerEnabled);
-  prefs.resetToDefault(Preferences::McpServerPort);
-  prefs.resetToDefault(Preferences::McpServerBindAddress);
-  prefs.resetToDefault(Preferences::McpServerAccessToken);
-  prefs.resetToDefault(Preferences::McpLogToFile);
-  prefs.resetToDefault(Preferences::McpBusyWaitTimeoutMs);
+  prefs.resetToDefault(McpPreferences::McpServerEnabled);
+  prefs.resetToDefault(McpPreferences::McpServerPort);
+  prefs.resetToDefault(McpPreferences::McpServerBindAddress);
+  prefs.resetToDefault(McpPreferences::McpServerAccessToken);
+  prefs.resetToDefault(McpPreferences::McpLogToFile);
+  prefs.resetToDefault(McpPreferences::McpBusyWaitTimeoutMs);
 }
 
 void McpPreferencePane::updateControls()
@@ -231,26 +228,26 @@ void McpPreferencePane::updateControls()
 
   auto& prefs = PreferenceManager::instance();
 
-  m_enabled->setChecked(prefs.getPendingValue(Preferences::McpServerEnabled));
-  m_port->setValue(prefs.getPendingValue(Preferences::McpServerPort));
+  m_enabled->setChecked(prefs.getPendingValue(McpPreferences::McpServerEnabled));
+  m_port->setValue(prefs.getPendingValue(McpPreferences::McpServerPort));
 
   const auto bindAddress =
-    QString::fromStdString(prefs.getPendingValue(Preferences::McpServerBindAddress));
+    QString::fromStdString(prefs.getPendingValue(McpPreferences::McpServerBindAddress));
   if (m_bindAddress->text().trimmed() != bindAddress)
   {
     m_bindAddress->setText(bindAddress);
   }
 
   const auto accessToken =
-    QString::fromStdString(prefs.getPendingValue(Preferences::McpServerAccessToken));
+    QString::fromStdString(prefs.getPendingValue(McpPreferences::McpServerAccessToken));
   if (m_accessToken->text().trimmed() != accessToken)
   {
     m_accessToken->setText(accessToken);
   }
 
-  m_logToFile->setChecked(prefs.getPendingValue(Preferences::McpLogToFile));
+  m_logToFile->setChecked(prefs.getPendingValue(McpPreferences::McpLogToFile));
   m_busyWaitTimeout->setValue(
-    prefs.getPendingValue(Preferences::McpBusyWaitTimeoutMs) / 1000);
+    prefs.getPendingValue(McpPreferences::McpBusyWaitTimeoutMs) / 1000);
 
   updateStatus();
 }
@@ -258,11 +255,11 @@ void McpPreferencePane::updateControls()
 bool McpPreferencePane::validate()
 {
   auto& prefs = PreferenceManager::instance();
-  const auto& bindAddress = prefs.getPendingValue(Preferences::McpServerBindAddress);
-  const auto& accessToken = prefs.getPendingValue(Preferences::McpServerAccessToken);
+  const auto& bindAddress = prefs.getPendingValue(McpPreferences::McpServerBindAddress);
+  const auto& accessToken = prefs.getPendingValue(McpPreferences::McpServerAccessToken);
 
   if (
-    prefs.getPendingValue(Preferences::McpServerEnabled)
+    prefs.getPendingValue(McpPreferences::McpServerEnabled)
     && !isLoopbackAddress(bindAddress) && accessToken.empty())
   {
     QMessageBox::warning(

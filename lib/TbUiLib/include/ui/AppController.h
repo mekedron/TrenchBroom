@@ -62,7 +62,6 @@ namespace ui
 class AboutDialog;
 class ActionManager;
 class MapWindowManager;
-class McpServerController;
 class RecentDocuments;
 class WelcomeWindow;
 
@@ -91,7 +90,6 @@ private:
   std::unique_ptr<ActionManager> m_actionManager;
   std::unique_ptr<WelcomeWindow> m_welcomeWindow;
   std::unique_ptr<AboutDialog> m_aboutDialog;
-  std::unique_ptr<McpServerController> m_mcpServerController;
 
 public:
   AppController(
@@ -126,8 +124,6 @@ public:
   RecentDocuments& recentDocuments();
 
   ActionManager& actionManager();
-
-  McpServerController& mcpServerController();
 
   void askForAutoUpdates();
   void triggerAutoUpdateCheck();

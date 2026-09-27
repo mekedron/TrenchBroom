@@ -219,11 +219,6 @@ Logger& MapDocument::logger()
   return *m_loggingHub;
 }
 
-Logger* MapDocument::targetLogger() const
-{
-  return m_loggingHub->targetLogger();
-}
-
 void MapDocument::setTargetLogger(Logger* targetLogger)
 {
   m_loggingHub->setTargetLogger(targetLogger);

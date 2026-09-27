@@ -319,7 +319,7 @@ Result<OpenedDocument> FakeHost::createDocument(
 {
   if (auto replaced = documentToReplace())
   {
-    auto capture = ScopedLogCapture{*replaced->document};
+    auto capture = ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
     return replaced->document->create(environmentConfig, gameInfo, mapFormat, WorldBounds)
            | kdl::transform([&]() {
                processResources();
@@ -357,7 +357,7 @@ Result<OpenedDocument> FakeHost::loadDocument(
 
   if (auto replaced = documentToReplace())
   {
-    auto capture = ScopedLogCapture{*replaced->document};
+    auto capture = ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
     return replaced->document->load(
              environmentConfig, gameInfo, mapFormat, WorldBounds, path)
            | kdl::transform([&]() {

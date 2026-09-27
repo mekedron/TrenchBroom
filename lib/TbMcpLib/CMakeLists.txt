@@ -1,3 +1,5 @@
+include(${CMAKE_SOURCE_DIR}/cmake/dependencies/nlohmann_json.cmake)
+
 add_library(TbMcpLib STATIC)
 
 target_sources(TbMcpLib
@@ -37,6 +39,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityCreateTools.cpp
@@ -47,7 +50,6 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.cpp
@@ -100,6 +102,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileUtils.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CsgUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h
@@ -107,6 +110,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/FaceTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h

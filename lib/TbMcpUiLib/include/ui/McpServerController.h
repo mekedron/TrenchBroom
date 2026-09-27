@@ -19,7 +19,9 @@
 
 #pragma once
 
+#include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 
 #include "base/NotifierConnection.h"
@@ -62,6 +64,10 @@ QString formatMcpActivity(const mcp::ServerActivity& activity, size_t clientCoun
  * Owns the MCP server and its transport. Starts and stops the server according to the
  * preferences (or the `--mcp-server` command line option), writes the discovery file
  * while the server listens, and exposes the server state to the UI.
+ *
+ * This is the editor's only hook for the MCP server: it watches the application's events
+ * and adds the MCP status indicator to every map window's status bar and the "AI
+ * Agents" pane to every preference dialog when they are shown.
  */
 class McpServerController : public QObject
 {
@@ -93,10 +99,17 @@ private:
 
   QString m_statusText;
 
+  /** The status indicators and preference panes added to the editor's windows. */
+  QList<QPointer<QWidget>> m_addedWidgets;
+
   NotifierConnection m_notifierConnection;
   NotifierConnection m_serverNotifierConnection;
 
 public:
+  /**
+   * Enables the server for this process if the application's command line contains
+   * `--mcp-server`.
+   */
   explicit McpServerController(AppController& appController, QObject* parent = nullptr);
   ~McpServerController() override;
 
@@ -153,7 +166,12 @@ signals:
   void activityChanged(const QString& activityText);
   void statusChanged();
 
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
+  void addWidget(QWidget* widget);
+
   void preferenceDidChange(const std::filesystem::path& path);
 
   /** Starts, restarts or stops the server to match the preferences. */

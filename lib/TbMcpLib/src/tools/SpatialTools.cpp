@@ -19,13 +19,13 @@
 
 #include "mcp/tools/SpatialTools.h"
 
-#include "GeometryUtils.h"
 #include "NodeJson.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
 #include "mcp/JsonVm.h"
 #include "mcp/ObjectIds.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/GeometryUtils.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"

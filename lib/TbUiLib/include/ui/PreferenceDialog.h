@@ -24,6 +24,7 @@
 #include "base/NotifierConnection.h"
 
 class QDialogButtonBox;
+class QIcon;
 class QStackedWidget;
 class QToolBar;
 class QWidget;
@@ -51,6 +52,8 @@ private:
 public:
   PreferenceDialog(
     AppController& appController, MapDocument* document, QWidget* parent = nullptr);
+
+  void addPane(const QIcon& icon, const QString& name, PreferencePane* pane);
 
 protected: // QWidget overrides
   void closeEvent(QCloseEvent* event) override;

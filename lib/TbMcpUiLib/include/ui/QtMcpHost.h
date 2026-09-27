@@ -47,6 +47,10 @@ std::optional<std::string> activeModalToolName(const MapViewToolBox& toolBox);
 /**
  * Implements the MCP server's view of the editor using the application controller and its
  * map windows.
+ *
+ * The host observes the map windows from the outside: it watches the application's events
+ * for map windows being shown (opened) and deleted (closed), and the application's focus
+ * changes, which change the window order.
  */
 class QtMcpHost : public QObject, public mcp::McpHost, public mcp::DocumentHost
 {
@@ -55,8 +59,13 @@ private:
   AppController& m_appController;
   std::unordered_map<const MapDocument*, size_t> m_documentIds;
   size_t m_nextDocumentId = 1;
-  /** Observes the tool box of each map window to report tool changes. */
-  std::unordered_map<const MapWindow*, NotifierConnection> m_toolBoxConnections;
+  /**
+   * Observes the tool box of each known map window to report tool changes, and its
+   * document to report documents that were created or loaded in place.
+   */
+  std::unordered_map<const MapWindow*, NotifierConnection> m_mapWindowConnections;
+  /** The top map window when the documents last changed, to detect order changes. */
+  const MapWindow* m_topMapWindow = nullptr;
   /** Runs compilations with the camera of the document's 3D view. */
   McpCompileHost m_compileHost;
 
@@ -77,6 +86,7 @@ public: // mcp::McpHost
   mcp::DocumentHost& documentHost() override;
   mdl::GameManager& gameManager() override;
   mcp::CompileHost* compileHost() override;
+  Logger* logTarget(MapDocument& document) override;
 
 public: // mcp::DocumentHost
   std::optional<mcp::DocumentInfo> documentToReplace() override;
@@ -89,13 +99,17 @@ public: // mcp::DocumentHost
   void closeDocument(MapDocument& document) override;
   std::vector<std::filesystem::path> recentDocuments() override;
 
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
   mcp::DocumentInfo documentInfo(const MapDocument& document);
   void assignDocumentIds();
   size_t documentId(const MapDocument& document);
-  void connectToolBoxes();
+  void connectMapWindows();
 
-  void mapWindowWillClose(MapWindow* mapWindow);
+  void mapWindowWillBeDeleted(MapWindow& mapWindow);
+  void focusDidChange();
   void mapWindowsDidChange();
 };
 

@@ -86,6 +86,11 @@ void CompilationDialog::runSelectedProfile()
   }
 }
 
+bool CompilationDialog::running() const
+{
+  return m_run.running();
+}
+
 void CompilationDialog::createGui()
 {
   setWindowIconTB(this);
@@ -177,11 +182,6 @@ void CompilationDialog::createGui()
     dialog.exec();
   });
   connect(m_closeButton, &QPushButton::clicked, this, &CompilationDialog::close);
-}
-
-bool CompilationDialog::compilationRunning() const
-{
-  return m_run.running();
 }
 
 void CompilationDialog::keyPressEvent(QKeyEvent* event)

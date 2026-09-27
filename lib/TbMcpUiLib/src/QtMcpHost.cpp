@@ -20,11 +20,13 @@
 #include "ui/QtMcpHost.h"
 
 #include <QApplication>
+#include <QEvent>
 
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
 #include "mdl/Map.h"
 #include "ui/AppController.h"
+#include "ui/CompilationDialog.h"
 #include "ui/GetVersion.h"
 #include "ui/MapDocument.h"
 #include "ui/MapViewToolBox.h"
@@ -114,25 +116,19 @@ QtMcpHost::QtMcpHost(AppController& appController, QObject* parent)
   , m_appController{appController}
   , m_compileHost{[this](const MapDocument& document) {
     const auto* mapWindow = findMapWindow(document);
-    const auto* mapView =
-      mapWindow ? mapWindow->findChild<SwitchableMapViewContainer*>() : nullptr;
-    return mapView ? copyPerspectiveCamera(mapView->perspectiveCamera()) : nullptr;
+    return mapWindow ? copyPerspectiveCamera(mapWindow->mapView().perspectiveCamera())
+                     : nullptr;
   }}
 {
-  auto& mapWindowManager = m_appController.mapWindowManager();
-  connect(
-    &mapWindowManager,
-    &MapWindowManager::mapWindowWillClose,
-    this,
-    &QtMcpHost::mapWindowWillClose);
-  connect(
-    &mapWindowManager,
-    &MapWindowManager::mapWindowsDidChange,
-    this,
-    &QtMcpHost::mapWindowsDidChange);
+  qApp->installEventFilter(this);
+
+  // The map window manager connected to this signal before, so it has already updated
+  // the window order when this host is notified
+  connect(qApp, &QApplication::focusChanged, this, &QtMcpHost::focusDidChange);
 
   assignDocumentIds();
-  connectToolBoxes();
+  connectMapWindows();
+  m_topMapWindow = m_appController.mapWindowManager().topMapWindow();
 }
 
 QtMcpHost::~QtMcpHost() = default;
@@ -228,7 +224,8 @@ std::optional<std::string> QtMcpHost::currentToolName(MapDocument& document)
 bool QtMcpHost::isCompileRunning(MapDocument& document)
 {
   const auto* mapWindow = findMapWindow(document);
-  return mapWindow && mapWindow->compilationRunning();
+  const auto* dialog = mapWindow ? mapWindow->compilationDialog() : nullptr;
+  return dialog && dialog->running();
 }
 
 mcp::DocumentHost& QtMcpHost::documentHost()
@@ -244,6 +241,12 @@ mdl::GameManager& QtMcpHost::gameManager()
 mcp::CompileHost* QtMcpHost::compileHost()
 {
   return &m_compileHost;
+}
+
+Logger* QtMcpHost::logTarget(MapDocument& document)
+{
+  const auto* mapWindow = findMapWindow(document);
+  return mapWindow ? &mapWindow->logger() : nullptr;
 }
 
 std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()
@@ -265,7 +268,8 @@ Result<mcp::OpenedDocument> QtMcpHost::createDocument(
   if (const auto replaced = documentToReplace())
   {
     // single window mode: the document is recreated in place, logging to its console
-    const auto capture = mcp::ScopedLogCapture{*replaced->document};
+    const auto capture =
+      mcp::ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
     return mapWindowManager.createDocument(
              gameInfo, mapFormat, MapDocument::DefaultWorldBounds)
            | kdl::transform([&]() {
@@ -299,7 +303,8 @@ Result<mcp::OpenedDocument> QtMcpHost::loadDocument(
   auto& mapWindowManager = m_appController.mapWindowManager();
   if (const auto replaced = documentToReplace())
   {
-    const auto capture = mcp::ScopedLogCapture{*replaced->document};
+    const auto capture =
+      mcp::ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
     return mapWindowManager.loadDocument(
              gameInfo, mapFormat, MapDocument::DefaultWorldBounds, path)
            | kdl::transform([&]() {
@@ -329,7 +334,7 @@ void QtMcpHost::closeDocument(MapDocument& document)
   if (auto* mapWindow = findMapWindow(document))
   {
     // the window is deleted later, when control returns to the event loop
-    mapWindow->closeWithoutConfirmation();
+    mapWindow->closeDiscardingChanges();
   }
 }
 
@@ -379,26 +384,62 @@ size_t QtMcpHost::documentId(const MapDocument& document)
   return m_documentIds.emplace(&document, m_nextDocumentId++).first->second;
 }
 
-void QtMcpHost::mapWindowWillClose(MapWindow* mapWindow)
+bool QtMcpHost::eventFilter(QObject* watched, QEvent* event)
 {
-  auto& document = mapWindow->document();
+  switch (event->type())
+  {
+  case QEvent::Show:
+    // MapWindowManager::createMapWindow registers a new window before showing it
+    if (auto* mapWindow = qobject_cast<MapWindow*>(watched);
+        mapWindow && !m_mapWindowConnections.contains(mapWindow))
+    {
+      mapWindowsDidChange();
+    }
+    break;
+  case QEvent::DeferredDelete:
+    // A closed map window is deleted later (Qt::WA_DeleteOnClose); its document is
+    // destroyed with it
+    if (auto* mapWindow = qobject_cast<MapWindow*>(watched))
+    {
+      mapWindowWillBeDeleted(*mapWindow);
+    }
+    break;
+  default:
+    break;
+  }
+  return QObject::eventFilter(watched, event);
+}
+
+void QtMcpHost::mapWindowWillBeDeleted(MapWindow& mapWindow)
+{
+  auto& document = mapWindow.document();
   documentWillCloseNotifier(document);
   m_documentIds.erase(&document);
-  m_toolBoxConnections.erase(mapWindow);
+  m_mapWindowConnections.erase(&mapWindow);
+  mapWindowsDidChange();
+}
+
+void QtMcpHost::focusDidChange()
+{
+  if (m_appController.mapWindowManager().topMapWindow() != m_topMapWindow)
+  {
+    mapWindowsDidChange();
+  }
 }
 
 void QtMcpHost::mapWindowsDidChange()
 {
   assignDocumentIds();
-  connectToolBoxes();
+  connectMapWindows();
+  m_topMapWindow = m_appController.mapWindowManager().topMapWindow();
   documentsDidChangeNotifier();
 }
 
-void QtMcpHost::connectToolBoxes()
+void QtMcpHost::connectMapWindows()
 {
   for (auto* mapWindow : m_appController.mapWindowManager().mapWindows())
   {
-    if (!m_toolBoxConnections.contains(mapWindow))
+    if (!m_mapWindowConnections.contains(mapWindow))
     {
       // the window's document can be replaced (single window mode), so look it up
       // when the tool changes
@@ -410,7 +451,12 @@ void QtMcpHost::connectToolBoxes()
       auto connection = NotifierConnection{};
       connection += toolBox.toolActivatedNotifier.connect(toolDidChange);
       connection += toolBox.toolDeactivatedNotifier.connect(toolDidChange);
-      m_toolBoxConnections.emplace(mapWindow, std::move(connection));
+
+      // a document created or loaded in place (single window mode) changes the title
+      connection += mapWindow->document().documentWasLoadedNotifier.connect(
+        [this]() { documentsDidChangeNotifier(); });
+
+      m_mapWindowConnections.emplace(mapWindow, std::move(connection));
     }
   }
 }

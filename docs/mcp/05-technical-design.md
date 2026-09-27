@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-27 · Status: implemented for E1–E7; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-27 · Status: implemented for E1–E8; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint of the MCP server. It describes the current design and
 implementation. When the code and this document disagree, fix the code or update this document in the
@@ -13,7 +13,7 @@ same change.
 | Topic | Design |
 |---|---|
 | Core library | Qt-free static library `lib/TbMcpLib`, namespace `tb::mcp`, headers in `include/mcp/`. It contains JSON-RPC, the MCP lifecycle, the HTTP/SSE protocol state machine, the registries, the call runner, the ID registry, and **all** tool implementations. |
-| Editor glue | `lib/TbUiLib`: `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `McpCompileHost` (compiles with the editor's `CompilationRun`), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`. |
+| Editor glue | `lib/TbMcpUiLib` (links `TbUiLib`): `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `McpCompileHost` (compiles with the editor's `CompilationRun`), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`, `McpUiIntegration`. |
 | stdio | Executable `app/TrenchBroomMcp`: a stdio ↔ Streamable HTTP proxy (Qt Core + Network). |
 | JSON | nlohmann/json 3.12.0 via CPM (`cmake/dependencies/nlohmann_json.cmake`). |
 | Protocol | MCP revision `2025-11-25`; also accepts `2025-06-18` and `2025-03-26`. Streamable HTTP on `127.0.0.1:47100` (configurable), endpoint `/mcp`. |
@@ -23,7 +23,7 @@ same change.
 | Change report | Collected from `MapDocument` notifiers during the call, reduced to net created/modified/removed sets plus the selection and the issues the call introduced. |
 | Errors | Tool failures are `CallToolResult{isError:true}` with a structured `error` object (`code`, `message`, `objectIds`, `hint`). JSON-RPC errors are used only for protocol faults. |
 | Schemas | A C++ builder DSL produces both the JSON Schema that `tools/list` publishes and the validator/decoder of the call. One source of truth. |
-| Tests | `TbMcpLibTest` (Catch2), headless over `MapDocumentFixture` with `FakeHost`, `FakeScheduler` and an in-process client (`McpToolFixture`). Qt transport and host tests are in `TbUiLibTest`. |
+| Tests | `TbMcpLibTest` (Catch2), headless over `MapDocumentFixture` with `FakeHost`, `FakeScheduler` and an in-process client (`McpToolFixture`). Qt transport, host and editor integration tests are in `TbMcpUiLibTest`. |
 
 ---
 
@@ -32,9 +32,10 @@ same change.
 ### 1.1 Dependency graph
 
 ```
-app/TrenchBroom ──► TbUiLib ──► TbMcpLib ──► TbAppLib ──► TbMdlLib, TbRenderLib, TbPreferencesLib, ...
-                        │            └──────► nlohmann_json (PUBLIC)
-                        └──► Qt6::Network
+app/TrenchBroom ──► TbMcpUiLib ──► TbMcpLib ──► TbAppLib ──► TbMdlLib, TbRenderLib, TbPreferencesLib, ...
+       │               │  │              └──────► nlohmann_json (PUBLIC)
+       │               │  └──► Qt6::Network, Qt6::Widgets
+       └──► TbUiLib ◄──┘
 app/TrenchBroomMcp ──► TbMcpLib (Qt-free HttpParser/SseParser/JsonRpc parts) + Qt6::Core + Qt6::Network
 ```
 
@@ -99,28 +100,24 @@ lib/TbMcpLib/
 `TbAppLibTest`. It links `Catch2::Catch2WithMain TbMcpLib TbMcpTestUtilsLib TbAppTestUtilsLib
 TbBaseTestUtilsLib TbFsTestUtilsLib TbMdlTestUtilsLib` and calls `catch_discover_tests(TbMcpLibTest)`.
 
-### 1.3 `lib/TbUiLib` (namespace `tb::ui`)
+### 1.3 `lib/TbMcpUiLib` (namespace `tb::ui`)
+
+A `STATIC` library with the editor glue, separate from `TbUiLib` so that `TbUiLib` and its CMake files stay
+unchanged. Headers are in `include/ui/` (included as `ui/...`); it links `TbUiLib`, `TbMcpLib`,
+`Qt6::Network` and `Qt6::Widgets`. Its tests are `TbMcpUiLibTest` (§11.2).
 
 | File | Responsibility |
 |---|---|
-| `McpServerController.{h,cpp}` | Owned by `AppController` (destroyed first in its destructor). Creates `mcp::McpServer` (with `registerAll`), `QtMcpHost`, `QtScheduler` and `McpTcpTransport` when enabled and destroys them when disabled. Watches all `MCP/*` preferences: bind address, port or token changes restart the server; the busy timeout is applied with `McpServer::setOptions`; `MCP/Log to file` toggles the JSONL sink. `setForceEnabled(true)` implements `--mcp-server`. Writes and removes the discovery file (§3.4). `stopAgents()` → `McpServer::stopAgents` + close all connections. Signals `clientsChanged(int)`, `activityChanged(QString)`, `statusChanged()`. |
+| `McpServerController.{h,cpp}` | The single start-up hook: created in `main()` after the `AppController` and destroyed before it, while the windows and documents still exist. Reads `--mcp-server` from `QCoreApplication::arguments()` (`setForceEnabled(true)`). Installs an application event filter that adds the status indicator to every `MapWindow` and the preference pane to every `PreferenceDialog` when they are shown (`McpUiIntegration`). Creates `mcp::McpServer` (with `registerAll`), `QtMcpHost`, `QtScheduler` and `McpTcpTransport` when enabled and destroys them when disabled. Watches all `MCP/*` preferences: bind address, port or token changes restart the server; the busy timeout is applied with `McpServer::setOptions`; `MCP/Log to file` toggles the JSONL sink. Writes and removes the discovery file (§3.4). `stopAgents()` → `McpServer::stopAgents` + close all connections. Signals `clientsChanged(int)`, `activityChanged(QString)`, `statusChanged()`. |
 | `McpTcpTransport.{h,cpp}` | Adapts `StreamableHttpServer` to `QTcpServer`/`QTcpSocket` (§3.3). Byte I/O only. |
-| `QtMcpHost.{h,cpp}` | Implements `mcp::McpHost` and `mcp::DocumentHost` over `AppController`, `MapWindowManager` and `MapWindow::toolBox()` (§4.3). |
+| `QtMcpHost.{h,cpp}` | Implements `mcp::McpHost` and `mcp::DocumentHost` over `AppController`, `MapWindowManager` and `MapWindow::toolBox()` (§4.3). Tracks the map windows with its own application event filter. |
 | `QtScheduler.{h,cpp}` | `mcp::Scheduler` via `QTimer::singleShot` on the main thread. |
-| `McpStatusIndicator.{h,cpp}` | Status bar widget next to the update indicator (`MapWindow::createStatusBar()`): "AI: n clients · <current tool> / waiting for you / idle", and a **Stop agent** button. |
+| `McpStatusIndicator.{h,cpp}` | Status bar widget after the update indicator: "AI: n clients · <current tool> / waiting for you / idle", and a **Stop agent** button. |
 | `McpCompileHost.{h,cpp}` | Implements `mcp::CompileHost` with the editor's `CompilationRun` (§10.10). Owned by `QtMcpHost`. |
-| `McpPreferencePane.{h,cpp}` | "AI Agents (MCP)" pane in `PreferenceDialog` (icon `McpPreferences.svg`): enable, port, bind address, access token (required only for non-loopback binding), log to file, busy-wait timeout. |
+| `McpPreferencePane.{h,cpp}` | "AI Agents" pane added to `PreferenceDialog` (icon `McpPreferences.svg`): enable, port, bind address, access token (required only for non-loopback binding), log to file, busy-wait timeout. |
 
-Supporting editor APIs:
-
-- `MapWindowManager`: signals `mapWindowWillClose(MapWindow*)` (emitted in `removeMapWindow` before the
-  window and its document are deleted) and `mapWindowsDidChange()` (window created or closed, focus order
-  changed, document created or loaded into an existing window); public `addMapWindow`, `createMapWindow`
-  and `shouldCreateWindowForDocument`.
-- `MapWindow::closeWithoutConfirmation()` and `MapWindow::compilationRunning()` (forwards to the
-  compilation dialog).
-
-Preferences (`lib/TbPreferencesLib/include/prefs/Preferences.h`):
+| `McpUiIntegration.{h,cpp}` | Adds the MCP widgets to editor windows and dialogs: `addMcpStatusIndicator` (appends the indicator to the window's status bar once); `addMcpPreferencePane` (adds the pane once with `PreferenceDialog::addPane`, §15). |
+| `McpPreferences.h` | The MCP preferences, namespace `tb::McpPreferences` (below). |
 
 ```cpp
 inline auto McpServerEnabled     = Preference<bool>{"MCP/Enabled", false};
@@ -131,14 +128,15 @@ inline auto McpLogToFile         = Preference<bool>{"MCP/Log to file", true};
 inline auto McpBusyWaitTimeoutMs = Preference<int>{"MCP/Busy wait timeout", 30000};
 ```
 
-`app/TrenchBroom/src/Main.cpp` has a `--mcp-server` option that enables the server for this process
+`app/TrenchBroom/src/Main.cpp` registers the `--mcp-server` option, which enables the server for this process
 regardless of the preference. The stdio bridge passes it when it launches the editor.
 
 ### 1.4 `app/TrenchBroomMcp`
 
 Like `app/CmdTool`: `add_executable(TrenchBroomMcp)`, `EMBED_UTF8_MANIFEST`, links `CompilerConfig Qt6::Core
-Qt6::Network TbMcpLib`. `app/CMakeLists.txt` adds it before `TrenchBroom`, which copies the bridge next to
-the editor after building (into `TrenchBroom.app/Contents/MacOS/` on macOS) and installs it. Behavior: §3.5.
+Qt6::Network TbMcpLib`. Its CMake file makes `TrenchBroom` depend on it and installs it on Windows and Linux;
+`app/TrenchBroom/CMakeLists.txt` copies it next to the editor after building (into
+`TrenchBroom.app/Contents/MacOS/` on macOS) and passes it to `macdeployqt`. Behavior: §3.5.
 
 ### 1.5 Build note
 
@@ -280,7 +278,7 @@ of modifying calls:
 
 1. The document is busy when `host.busyState(document)` returns `Busy` (`QtMcpHost`: a modal widget is
    open — `QApplication::activeModalWidget()` — or the window's `ToolBox::dragging()`), or when
-   `map.transactionDepth()` exceeds the depth the server itself opened (the human has a transaction open,
+   `map.commandProcessor().transactionDepth()` exceeds the depth the server itself opened (the human has a transaction open,
    e.g. a drag gesture).
 2. While busy, the call stays queued and is re-checked every 50 ms; the status bar shows "AI waiting for
    you…". After `McpBusyWaitTimeoutMs` the call fails with `BUSY_TIMEOUT`.
@@ -364,16 +362,21 @@ Game and format detection (`readMapHeader`) happens in the core. Game paths are 
 game's `gamePathPreference` directly (Qt-free; open documents react through their preference observer).
 
 `QtMcpHost`:
-- Document handles `doc:<n>` follow window open order. `mapWindowWillClose` → `documentWillCloseNotifier`,
-  `mapWindowsDidChange` → `documentsDidChangeNotifier`, each window's `ToolBox`
-  `toolActivatedNotifier`/`toolDeactivatedNotifier` → `currentToolDidChangeNotifier`.
+- Document handles `doc:<n>` follow window open order. An application event filter tracks the windows: the
+  `Show` event of a new `MapWindow` and `QApplication::focusChanged` (window order) → `documentsDidChangeNotifier`;
+  the `DeferredDelete` event of a `MapWindow` (closed windows use `WA_DeleteOnClose`; the document is still
+  alive, but the manager no longer lists the window) → `documentWillCloseNotifier`, then
+  `documentsDidChangeNotifier`; each document's `documentWasLoadedNotifier` (created or loaded in place) →
+  `documentsDidChangeNotifier`; each window's `ToolBox` `toolActivatedNotifier`/`toolDeactivatedNotifier` →
+  `currentToolDidChangeNotifier`. `logTarget` returns the window's console (`MapWindow::logger()`).
 - Creates documents with `MapDocument::createDocument/loadDocument` and shows them with
   `MapWindowManager::createMapWindow`; in single-window mode the top window's document is recreated in
-  place. `closeDocument` calls `MapWindow::closeWithoutConfirmation()`. Agent-created documents do not close
-  the welcome window. `isCompileRunning` asks `MapWindow::compilationRunning()`.
+  place. `closeDocument` calls `MapWindow::closeDiscardingChanges` (§15). Agent-created documents do not
+  close the welcome window. `isCompileRunning` asks the window's compilation dialog
+  (`MapWindow::compilationDialog()`, `CompilationDialog::running()`, §15).
 
 `QtMcpHost::compileHost()` returns its `McpCompileHost`, whose camera provider copies the perspective camera
-of the document's map window (used by export tasks that add an entity at the camera position).
+of the document's map window (`MapWindow::mapView()`, §15) (used by export tasks that add an entity at the camera position).
 
 `FakeHost` implements both interfaces with its own task and resource managers and a `GameManager` with the
 games "Test", "Quake", "Quake 2", "Half-Life" and "Quake 3" (the real configurations from the fixture's
@@ -383,7 +386,7 @@ folder (`configDir()`), removed with the host. `singleWindow` simulates single-w
 `recentDocumentList` is the recent list, and closed documents stay alive. `compile` is a `FakeCompileHost`
 whose `FakeCompileJob`s the test drives with `append` / `finish` (`onStart` can finish a job synchronously
 like a test run, `startError` makes the start fail); `compileHostOverride` substitutes another compile host
-(TbUiLibTest uses the real `McpCompileHost`), and `supportsCompile = false` simulates a host without one.
+(`TbMcpUiLibTest` uses the real `McpCompileHost`), and `supportsCompile = false` simulates a host without one.
 
 Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost` (E11), the snapshot renderer (E12). A host that does not
 implement a capability maps to `UNSUPPORTED_IN_HOST`.
@@ -470,7 +473,8 @@ else commit with command collation disabled                  // failure → OPER
 - Handlers fail by returning `ToolError`. When a `Map_*` call returns `false`, `ctx.operationFailed(...)`
   builds `OPERATION_FAILED` with the messages the document logged during the call. `ScopedLogCapture`
   (`LogCapture.h`) re-targets the document's `LoggingHub` to a capturing logger that forwards to the original
-  target (`LoggingHub::targetLogger()`, `MapDocument::targetLogger()`); `ctx.loggedProblems()` returns the
+  target, which the host provides (`McpHost::logTarget(document)`: the console of the document's window, or
+  `nullptr`); `ctx.loggedProblems()` returns the
   warnings and errors. `collectCachedMessages(document)` reads the messages a document without a target
   logger has cached, and caches them again for its console.
 - Exceptions are caught, the transaction is cancelled, and the call returns `INTERNAL_ERROR`. A server
@@ -579,19 +583,19 @@ saved selection, sharing the save/restore code with `withTargets`.
 undoable and get no transaction. They honor `ctx.dryRun()` by validating and describing the effect (e.g.
 `"wouldDo": "overwrite /maps/a.map"`) without side effects.
 
-### 6.6 TbMdlLib and TbBaseLib support
+### 6.6 TbMdlLib support
 
 - `Node::runtimeId()` (§5.2).
-- `CommandProcessor::transactionDepth()` and `Map::transactionDepth()` (busy gate).
+- `CommandProcessor::transactionDepth()` (busy gate; the server reads it through `Map::commandProcessor()`).
 - `CommandProcessor::undoCommandNames()` / `redoCommandNames()`, most recent first (`history_get`,
   `undo`/`redo`).
 - The redo stack is cleared only when a command or transaction reaches the top-level undo stack
   (`storeCommand` / `createAndStoreTransaction`), so rolling back a transaction (dry run, failed call) keeps
   the human's redo history.
 - `Map::canRedoCommand()` checks `redoCommandName()`.
-- `LoggingHub::targetLogger()` (§6.1).
-- `csgHollow(Map&, std::optional<double> thickness = std::nullopt)`: thickness defaults to the grid size;
-  ≤ 0 fails.
+
+Hollowing with a wall thickness is `mcp::csgHollow(Map&, double thickness)` (`include/mcp/tools/CsgUtils.h`),
+the editor's `csgHollow` with the thickness as a parameter; thickness ≤ 0 fails.
 
 ---
 
@@ -772,23 +776,38 @@ shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `
 
 ### 10.2 Shared helpers (`src/tools/`)
 
+Each helper takes the narrowest context it needs, in this order: the node (or nodes) it works on,
+then `mdl::Map&` (or `const mdl::Map&`), then `IdRegistry`, and `CallContext` only when it warns,
+reads the call's logged problems or changes the selection for the call. No helper takes
+`ui::MapDocument`, so the model helpers run over a plain `mdl::Map` (`mdl::MapFixture` in tests).
+
 - **`ToolUtils.{h,cpp}`**: game lookup (`findGame`, `gameNames`, `unknownGameError`, `gamePath`,
   `isGamePathValid`), ISO times, `absolutePathArgument` (`INVALID_ARGUMENT` for relative paths),
   `toJson(LogMessage...)`, percent-encoding, `pathExists`.
 - **`NodeJson.{h,cpp}`**: `nodeSummary` (`{id, kind, label, bounds, layer, classname | name | materials,
   entity}`; every list item that describes an object uses it), `nodeState`, `faceJson` (every face),
   `nodeLabel`, `nodeMaterials`, tag names, `layerIdOf`, `groupIdOf`.
-- **`GeometryUtils.{h,cpp}`**: `brushBuilder` (game face defaults), `materialArgument` (`UNKNOWN_MATERIAL`
-  warning), `checkBox`, `checkInsideWorldBounds`, `geometryError` / `geometryOperationFailed`, `addBrushes`,
-  `nodeSummaries`, `formatIds`, `warnNonIntegerVertices` (`NON_INTEGER_VERTICES`), `ScopedLockOverride`
-  (per-call `alignmentLock` / `uvLock`), `intersectsInterior` (exact brush/box overlap), `classifyBrush`,
-  `owningBrushEntity`, `isPointEntity`, `castRay`.
+- **`GeometryUtils.{h,cpp}`** (header in `include/mcp/tools/`; `tst_GeometryUtils` tests the model
+  helpers directly over `mdl::MapFixture`): `brushBuilder` (game face defaults), `materialArgument`
+  (`UNKNOWN_MATERIAL` warning), `checkBox`, `checkInsideWorldBounds`, `geometryError` /
+  `geometryOperationFailed`, `addBrushes`, `nodeSummaries`, `formatIds`, `warnNonIntegerVertices`
+  (`NON_INTEGER_VERTICES`), `ScopedLockOverride` (per-call `alignmentLock` / `uvLock`),
+  `intersectsInterior` (exact brush/box overlap), `classifyBrush`, `owningBrushEntity`, `isPointEntity`,
+  `castRay`. `CallContext` remains only in `materialArgument` and `warnNonIntegerVertices` (they warn)
+  and `geometryOperationFailed` (it reads the logged problems).
 - **`EntityUtils.{h,cpp}`**: definition lookup, property type names and definition JSON, color ranges, flag
   lookup by name, bit (`bit8`) or value, value validation (`checkPropertyValue`, `validateProperty`,
-  `warnUnknownClassname`), entity targeting (`resolveEntities`, `withEntities`).
+  `warnUnknownClassname`), entity targeting (`resolveEntities` over `mdl::Map` and `IdRegistry`;
+  `withEntities`). `validateProperty` and `warnUnknownClassname` take `CallContext` because they warn,
+  `withEntities` because it selects through `withTargets`.
 - **`CompileUtils.{h,cpp}`** and **`CompileLog.{h,cpp}`** (headers in `include/mcp/tools/` so that
   `TbMcpLibTest` can test them directly): compile presets, tool path checks, profile JSON and schemas; log
   analysis (§10.10).
+
+`brush_create_shape` (`GeometryTools.cpp`) builds its shapes with `mdl::BrushBuilder` (via `brushBuilder`)
+and the requested material, using the same builder calls and the same step layout for stairs as the
+editor's shape tool extensions (`ui::DrawShapeTool*Extension`). It does not use those extensions because
+they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParameters` is shared with them.
 
 ### 10.3 Documents and games
 
@@ -1054,6 +1073,8 @@ tag/entity actions. The path is the action's preference path; `enabled`/`checked
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
 | `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
+| `tst_GeometryUtils`, `tst_CsgUtils` | the pure model helpers over `mdl::MapFixture`: `intersectsInterior`, `owningBrushEntity`, `classifyBrush`, `isPointEntity`, `castRay`, `checkBox`, `geometryError`, `addBrushes`, `ScopedLockOverride`; hollowing with a thickness |
+| `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId` |
 | `tst_Scenarios` | scripted scenarios: S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
@@ -1081,13 +1102,21 @@ spatial, selection and resource tests, and by `SceneQuestions`, which answers E3
 tool calls only), `mcp/wads/cr8_a_excerpt.wad`, `mcp/wads/materials.wad` (`wall_old_a/b/c`, `wall_new_a/b`, `floor_tile`;
 material and S3 tests), and game paths in `mdl/Game/`.
 
-### 11.2 `TbUiLibTest` (Qt, `RunAllTests.cpp` QApplication)
+### 11.2 `TbMcpUiLibTest` (Qt, `RunAllTests.cpp` QApplication, offscreen)
 
 - `tst_McpTcpTransport.cpp`: listen on port 0, drive with `QTcpSocket`/`QNetworkAccessManager`, wait with
   `QTest::qWaitFor`.
-- `tst_QtMcpHost.cpp`: with a `MapWindow` added via `MapWindowManager::addMapWindow` (showing a window under
-  the offscreen platform fails on OpenGL): document listing, busy detection, `prepareForAgentEdit`. Creating
-  and loading documents are not covered here for the same reason.
+- `McpUiTestUtils.{h,cpp}`: showing a window under the offscreen platform fails on OpenGL, so
+  `createMapWindow` registers an unshown `MapWindow` with `MapWindowManager::addMapWindow` and
+  `sendShowEvent` sends a synthetic `Show` event. `withCompilationProfile`, `startCompilation` and
+  `waitForCompilation` run a compilation profile with the `CmdTool` stub in a window's compilation dialog.
+- `tst_QtMcpHost.cpp`: document listing, the document notifiers (open, close, focus change, created in
+  place), busy detection, `prepareForAgentEdit`, `closeDocument` (with and without a window that refuses to
+  close), `isCompileRunning`, `logTarget`. Creating and loading documents in new windows are not covered.
+- `tst_McpUiIntegration.cpp`: status indicator and preference pane injection (this also tests
+  `PreferenceDialog::addPane`).
+- `tst_UpstreamHooks.cpp`: the hooks in upstream editor classes (§15): `MapWindowManager::addMapWindow`,
+  `MapWindow::mapView`, `closeDiscardingChanges` and `compilationDialog`, `CompilationDialog::running`.
 - `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
 - `tst_McpCompileHost.cpp`: `McpCompileHost` with the `CmdTool` stub (`--printArgs`, `--exit`, `--crash`):
   success, failure, crash, cancel, test mode, export of unsaved changes, tool variables, copy tasks, reload,
@@ -1157,7 +1186,7 @@ commit buildable and tested.
 - **E10** ValidationTools and engine launch; issues resource.
 - **E11** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
   (`PreferenceHost`), KnowledgeTools, action coverage check.
-- **E12 — agent vision and editor console.** `McpSnapshotRenderer` (TbUiLib) renders `MapRenderer` into a
+- **E12 — agent vision and editor console.** `McpSnapshotRenderer` (TbMcpUiLib) renders `MapRenderer` into a
   `QOpenGLFramebufferObject` with the shared GL context and returns PNG bytes, independent of any map window
   so E14 can reuse it; agent cameras with their own render state; snapshot tools; `map_plan_view` image form;
   `console_read`/`console_clear` and the subscribable `trenchbroom://console` resource.
@@ -1171,9 +1200,9 @@ commit buildable and tested.
 
 ## 14. Rules for implementation
 
-**Rule 0 — minimal upstream footprint.** This project is maintained as a fork of TrenchBroom and must stay easy to sync with upstream. All MCP code lives in new files (`lib/TbMcpLib`, `Mcp*` files in other libraries, `app/TrenchBroomMcp`). Original TrenchBroom files are changed only when there is no other way (a critical bug fix, or a hook that cannot be added from outside), and each such change is as small as possible and listed with its reason in the "Upstream changes" section. Tests are never added to existing upstream test files; they go into new test files, preferably in `TbMcpLibTest`.
+**Rule 0 — minimal upstream footprint.** This project is maintained as a fork of TrenchBroom and must stay easy to sync with upstream. All MCP code lives in new files (`lib/TbMcpLib`, `Mcp*` files in other libraries, `app/TrenchBroomMcp`). Original TrenchBroom files are changed only when there is no other way (a critical bug fix, or a hook that cannot be added from outside), and each such change is as small as possible and listed with its reason in the "Upstream changes" section. A small explicit hook in an upstream file (for example a public accessor or query) is preferred over a workaround that depends on upstream internals (widget structure, object names or button texts, private members, brute force), because a hook fails loudly on upstream changes (a merge conflict or a compile error) where such a workaround fails silently. Tests are never added to existing upstream test files; they go into new test files, preferably in `TbMcpLibTest`.
 
-1. No Qt includes in `lib/TbMcpLib`. No MCP protocol logic in `lib/TbUiLib`.
+1. No Qt includes in `lib/TbMcpLib`. No MCP protocol logic in `lib/TbMcpUiLib`.
 2. Map changes happen only through `mdl::` free functions/commands inside `CallRunner`'s transaction. Never
    mutate nodes directly.
 3. Every tool has a description with an example, declared input and output schemas, and tests for success,
@@ -1187,12 +1216,26 @@ commit buildable and tested.
 
 ## 15. Upstream changes
 
-Changes to original TrenchBroom files made for compiling (E7); the other epics' changes are described in
-§1.3 and §6.6:
+These are all changes to original TrenchBroom files (compared with the merge base with upstream `master`).
+`scripts/upstream-footprint.sh` lists them with line counts and checks that a merge with the latest upstream
+`master` has no conflicts. Everything else is in new files.
 
-| File | Change | Reason |
+| File | Change | Why it is required |
 |---|---|---|
-| `lib/TbUiLib/CMakeLists.txt` | lists `McpCompileHost.{h,cpp}` | new source files of the library |
-| `lib/TbUiLib/test/CMakeLists.txt` | lists `tst_McpCompileHost.cpp`, `tst_McpCompile.cpp` | the tests need Qt and `CmdTool`, which `TbMcpLibTest` does not have |
+| `lib/CMakeLists.txt` | `add_subdirectory(TbMcpLib)`, `add_subdirectory(TbMcpUiLib)` | the only place where libraries are added to the build |
+| `app/CMakeLists.txt` | `add_subdirectory(TrenchBroomMcp)` | the only place where applications are added to the build |
+| `app/TrenchBroom/CMakeLists.txt` | links `TbMcpUiLib`; copies `TrenchBroomMcp` next to the editor after building; passes it to `macdeployqt` (`-executable=`) in both macOS signing variants | `add_custom_command(TARGET TrenchBroom ...)` and the `macdeployqt` commands can only be changed in the directory that defines `TrenchBroom`; the bridge must ship inside the bundle and be signed with it |
+| `app/TrenchBroom/src/Main.cpp` | include; `--mcp-server` option; `McpServerController` created after the `AppController` | the start-up hook: `QCommandLineParser::process` rejects unknown options, and nothing else can create the controller with the right lifetime |
+| `lib/TbUiLib/include/ui/MapWindowManager.h`, `src/MapWindowManager.cpp` | `shouldCreateWindowForDocument()` and `createMapWindow()` are public; new public `addMapWindow()`, which `createMapWindow()` uses to register the window | the host creates and loads a document itself to capture its load messages before a window console takes them, and then needs a window for that document; no other public function adopts an existing document. The tests register unshown windows with `addMapWindow()` because showing a window needs OpenGL |
+| `lib/TbUiLib/include/ui/MapWindow.h`, `src/MapWindow.cpp` | `closeDiscardingChanges()` (a flag that makes `confirmOrDiscardChanges()` skip the save prompt during `close()`); `mapView()`; `compilationDialog()` | `document_close` closes a window without the save prompt, and a window that refuses to close keeps its changes; the compile tools need the perspective camera, and the compile, document and session tools check whether the human's compilation dialog is compiling; the map view and the dialog are private members |
+| `lib/TbUiLib/include/ui/CompilationDialog.h`, `src/CompilationDialog.cpp` | `running()` | the dialog's `CompilationRun` is private; its *Stop* button state is the only other indication of a running compilation |
+| `lib/TbUiLib/include/ui/PreferenceDialog.h`, `src/PreferenceDialog.cpp` | `addPane(icon, name, pane)`: adds a pane and its tool bar button, which switches to the pane like the built-in buttons; the button is removed with the pane; the dialog grows to fit the pane | the "AI Agents" pane lives in `TbMcpUiLib`, which `TbUiLib` cannot depend on, and the dialog's tool bar, stacked widget and pane switching are private |
+| `lib/TbMdlLib/include/mdl/Node.h`, `src/Node.cpp` | `Node::runtimeId()`: a process-unique ID from an atomic counter in the constructor | a registry keyed by `Node*` cannot be reliable: removed nodes live on in undo/redo commands and are freed at times the server cannot observe (redo stack cleared, rolled-back transactions, collation), so a freed address can be reused by a new node and a stale ID would resolve to an unrelated object; an ID assigned in the constructor is never reused (§5) |
+| `lib/TbMdlLib/include/mdl/CommandProcessor.h`, `src/CommandProcessor.cpp` | `undoCommandNames()`, `redoCommandNames()`, `transactionDepth()` | the undo/redo stacks and the transaction stack are private; `history_get` lists them, and the busy gate and agent transactions need the depth |
+| `lib/TbMdlLib/src/CommandProcessor.cpp` | the redo stack is cleared only when a command or transaction reaches the top-level undo stack | bug fix: a cancelled transaction (dry run, failed call, the human's cancelled gesture) cleared the redo history |
+| `lib/TbMdlLib/src/Map.cpp` | `canRedoCommand()` checks `redoCommandName()` | bug fix: it checked the undo stack |
 
-No compilation code of the editor was changed.
+The tests of these changes are in `TbMcpLibTest` (`tst_UpstreamCommandProcessor.cpp`, `tst_UpstreamMap.cpp`,
+`tst_UpstreamNode.cpp`) and `TbMcpUiLibTest` (`tst_UpstreamHooks.cpp`, `tst_McpUiIntegration.cpp`); no
+upstream test file is changed. The editor classes `AppController`, `LoggingHub`, `MapDocument` and the
+preferences are unchanged; the MCP code integrates with them from the outside (§1.3, §4.3, §6.1).

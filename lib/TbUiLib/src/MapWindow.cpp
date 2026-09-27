@@ -96,7 +96,6 @@
 #include "ui/MapViewBase.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindowManager.h"
-#include "ui/McpStatusIndicator.h"
 #include "ui/ObjExportDialog.h"
 #include "ui/QPathUtils.h"
 #include "ui/QStringUtils.h"
@@ -281,6 +280,11 @@ const MapViewToolBox& MapWindow::toolBox() const
 MapViewToolBox& MapWindow::toolBox()
 {
   return KDL_CONST_OVERLOAD(toolBox());
+}
+
+const SwitchableMapViewContainer& MapWindow::mapView() const
+{
+  return *m_mapView;
 }
 
 Logger& MapWindow::logger() const
@@ -529,7 +533,6 @@ void MapWindow::createStatusBar()
   m_statusBarLabel = new QLabel{};
   statusBar()->addWidget(m_statusBarLabel, 1);
   statusBar()->addWidget(m_appController.updater().createUpdateIndicator());
-  statusBar()->addWidget(new McpStatusIndicator{m_appController.mcpServerController()});
 }
 
 namespace
@@ -992,14 +995,6 @@ void MapWindow::bindEvents()
     &MapWindow::updateStatusBar);
 }
 
-bool MapWindow::closeWithoutConfirmation()
-{
-  m_closeWithoutConfirmation = true;
-  const auto closed = close();
-  m_closeWithoutConfirmation = false;
-  return closed;
-}
-
 bool MapWindow::saveDocument()
 {
   auto& map = m_document->map();
@@ -1140,12 +1135,23 @@ bool MapWindow::exportDocument(const mdl::ExportOptions& options)
 }
 
 /**
+ * Closes the window without asking whether to save the changes, which are discarded.
+ */
+bool MapWindow::closeDiscardingChanges()
+{
+  m_discardChanges = true;
+  const auto closed = close();
+  m_discardChanges = false;
+  return closed;
+}
+
+/**
  * Returns whether the window should close.
  */
 bool MapWindow::confirmOrDiscardChanges()
 {
   const auto& map = m_document->map();
-  if (!map.modified())
+  if (m_discardChanges || !map.modified())
   {
     return true;
   }
@@ -2120,6 +2126,11 @@ void MapWindow::showCompileDialog()
   showModelessDialog(m_compilationDialog);
 }
 
+CompilationDialog* MapWindow::compilationDialog() const
+{
+  return m_compilationDialog;
+}
+
 void MapWindow::rerunLastCompilation()
 {
   if (m_lastCompilationProfileName)
@@ -2215,11 +2226,6 @@ bool MapWindow::closeCompileDialog()
   }
 
   return false;
-}
-
-bool MapWindow::compilationRunning() const
-{
-  return m_compilationDialog && m_compilationDialog->compilationRunning();
 }
 
 void MapWindow::showLaunchEngineDialog()
@@ -2497,8 +2503,7 @@ void MapWindow::changeEvent(QEvent*)
 
 void MapWindow::closeEvent(QCloseEvent* event)
 {
-  if (
-    !closeCompileDialog() || (!m_closeWithoutConfirmation && !confirmOrDiscardChanges()))
+  if (!closeCompileDialog() || !confirmOrDiscardChanges())
   {
     event->ignore();
     return;

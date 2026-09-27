@@ -44,21 +44,11 @@ namespace tb::mdl
 
 kdl_reflect_impl(NodePath);
 
-namespace
-{
-
-IdType nextRuntimeId()
+Node::Node()
 {
   // atomic because nodes may be created on worker threads, e.g. when parsing a map
-  static auto counter = std::atomic<IdType>{1};
-  return counter.fetch_add(1, std::memory_order_relaxed);
-}
-
-} // namespace
-
-Node::Node()
-  : m_runtimeId{nextRuntimeId()}
-{
+  static auto nextRuntimeId = std::atomic<IdType>{1};
+  m_runtimeId = nextRuntimeId++;
 }
 
 Node::~Node()

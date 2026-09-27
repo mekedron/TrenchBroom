@@ -145,7 +145,7 @@ TEST_CASE("HistoryTools")
   {
     const auto result = fixture.call("transaction_begin", Json{{"name", "Build"}});
     CHECK(result["result"]["transaction"] == "Build");
-    CHECK(map.transactionDepth() == 1);
+    CHECK(map.commandProcessor().transactionDepth() == 1);
     CHECK(
       fixture.server().activity().openTransactions == std::vector<std::string>{"Build"});
 
@@ -162,7 +162,7 @@ TEST_CASE("HistoryTools")
       const auto dryRun =
         fixture.call("transaction_begin", Json{{"name", "Build"}, {"dryRun", true}});
       CHECK(dryRun["result"]["wouldBegin"] == "Build");
-      CHECK(map.transactionDepth() == 0);
+      CHECK(map.commandProcessor().transactionDepth() == 0);
     }
   }
 
@@ -179,7 +179,7 @@ TEST_CASE("HistoryTools")
       CHECK(result["result"]["committed"] == "Build");
       CHECK(result["result"]["empty"] == true);
       CHECK(result["undoStep"].is_null());
-      CHECK(map.transactionDepth() == 0);
+      CHECK(map.commandProcessor().transactionDepth() == 0);
       CHECK(!map.canUndoCommand());
     }
 
@@ -201,7 +201,7 @@ TEST_CASE("HistoryTools")
         fixture.call(
           "transaction_commit", Json{{"dryRun", true}})["result"]["wouldCommit"]
         == "Build");
-      CHECK(map.transactionDepth() == 1);
+      CHECK(map.commandProcessor().transactionDepth() == 1);
     }
 
     SECTION("only the owning session can commit")
@@ -233,7 +233,7 @@ TEST_CASE("HistoryTools")
         fixture.call(
           "transaction_rollback", Json{{"dryRun", true}})["result"]["wouldRollBack"]
         == "Build");
-      CHECK(map.transactionDepth() == 1);
+      CHECK(map.commandProcessor().transactionDepth() == 1);
     }
 
     SECTION("discards the changes and keeps the redo history")
@@ -241,7 +241,7 @@ TEST_CASE("HistoryTools")
       const auto result = fixture.call("transaction_rollback");
       CHECK(result["result"]["rolledBack"] == "Build");
       CHECK(result["changes"]["removed"] == Json::array({brushId}));
-      CHECK(map.transactionDepth() == 0);
+      CHECK(map.commandProcessor().transactionDepth() == 0);
       CHECK(!map.canUndoCommand());
       CHECK(map.canRedoCommand());
 

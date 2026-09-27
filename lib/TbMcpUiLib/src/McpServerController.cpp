@@ -19,8 +19,9 @@
 
 #include "ui/McpServerController.h"
 
-#include <QCoreApplication>
+#include <QApplication>
 #include <QDateTime>
+#include <QEvent>
 #include <QtGlobal>
 
 #include "base/Logger.h"
@@ -31,12 +32,16 @@
 #include "mcp/RegisterAll.h"
 #include "mcp/StreamableHttp.h"
 #include "mdl/EnvironmentConfig.h"
-#include "prefs/Preferences.h"
 #include "ui/AppController.h"
 #include "ui/GetVersion.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
+#include "ui/McpPreferencePane.h"
+#include "ui/McpPreferences.h"
+#include "ui/McpStatusIndicator.h"
 #include "ui/McpTcpTransport.h"
+#include "ui/McpUiIntegration.h"
+#include "ui/PreferenceDialog.h"
 #include "ui/QtMcpHost.h"
 #include "ui/QtScheduler.h"
 
@@ -136,12 +141,27 @@ McpServerController::McpServerController(AppController& appController, QObject* 
     this,
     &McpServerController::stop);
 
+  // Add the status indicator to map windows and the preference pane to preference
+  // dialogs when they are shown, and the status indicator to the open map windows now
+  qApp->installEventFilter(this);
+  for (auto* mapWindow : m_appController.mapWindowManager().mapWindows())
+  {
+    addWidget(addMcpStatusIndicator(*mapWindow, *this));
+  }
+
+  m_forceEnabled = QCoreApplication::arguments().contains("--mcp-server");
   update();
 }
 
 McpServerController::~McpServerController()
 {
   stop();
+
+  // The added widgets refer to this controller
+  for (auto& widget : m_addedWidgets)
+  {
+    delete widget.data();
+  }
 }
 
 void McpServerController::setForceEnabled(const bool forceEnabled)
@@ -160,7 +180,7 @@ bool McpServerController::forceEnabled() const
 
 bool McpServerController::enabled() const
 {
-  return m_forceEnabled || pref(Preferences::McpServerEnabled);
+  return m_forceEnabled || pref(McpPreferences::McpServerEnabled);
 }
 
 bool McpServerController::listening() const
@@ -223,6 +243,31 @@ void McpServerController::stopAgents()
   }
 }
 
+bool McpServerController::eventFilter(QObject* watched, QEvent* event)
+{
+  if (event->type() == QEvent::Show)
+  {
+    if (auto* mapWindow = qobject_cast<MapWindow*>(watched))
+    {
+      addWidget(addMcpStatusIndicator(*mapWindow, *this));
+    }
+    else if (auto* preferenceDialog = qobject_cast<PreferenceDialog*>(watched))
+    {
+      addWidget(addMcpPreferencePane(*preferenceDialog, *this));
+    }
+  }
+  return QObject::eventFilter(watched, event);
+}
+
+void McpServerController::addWidget(QWidget* widget)
+{
+  if (widget && !m_addedWidgets.contains(widget))
+  {
+    m_addedWidgets.removeIf([](const auto& addedWidget) { return addedWidget.isNull(); });
+    m_addedWidgets.append(widget);
+  }
+}
+
 void McpServerController::preferenceDidChange(const std::filesystem::path& path)
 {
   if (isMcpPreference(path))
@@ -241,9 +286,9 @@ void McpServerController::update()
   }
 
   const auto settings = Settings{
-    .bindAddress = pref(Preferences::McpServerBindAddress),
-    .port = pref(Preferences::McpServerPort),
-    .accessToken = pref(Preferences::McpServerAccessToken),
+    .bindAddress = pref(McpPreferences::McpServerBindAddress),
+    .port = pref(McpPreferences::McpServerPort),
+    .accessToken = pref(McpPreferences::McpServerAccessToken),
   };
 
   if (m_server && m_settings == settings)
@@ -371,7 +416,7 @@ void McpServerController::applyOptions()
   {
     auto options = m_server->options();
     options.busyWaitTimeout =
-      std::chrono::milliseconds{std::max(0, pref(Preferences::McpBusyWaitTimeoutMs))};
+      std::chrono::milliseconds{std::max(0, pref(McpPreferences::McpBusyWaitTimeoutMs))};
     m_server->setOptions(options);
   }
 }
@@ -383,7 +428,7 @@ void McpServerController::updateLogToFile()
     return;
   }
 
-  if (pref(Preferences::McpLogToFile))
+  if (pref(McpPreferences::McpLogToFile))
   {
     if (!m_fileSink)
     {

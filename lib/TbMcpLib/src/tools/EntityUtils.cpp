@@ -527,11 +527,8 @@ void validateProperty(
 }
 
 Result<std::vector<mdl::EntityNodeBase*>, ToolError> resolveEntities(
-  CallContext& context, const Args& args, const std::string_view key)
+  mdl::Map& map, const IdRegistry& ids, const Args& args, const std::string_view key)
 {
-  auto& map = context.map();
-  auto& ids = context.ids();
-
   auto result = std::vector<mdl::EntityNodeBase*>{};
   const auto add = [&](mdl::EntityNodeBase* entityNode) {
     if (entityNode && std::ranges::find(result, entityNode) == result.end())
