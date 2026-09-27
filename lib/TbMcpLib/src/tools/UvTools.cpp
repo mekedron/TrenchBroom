@@ -136,7 +136,11 @@ Result<std::vector<mdl::BrushFaceHandle>, ToolError> facesOfIds(
     const auto ref = parseObjectRef(id);
     if (!ref)
     {
-      return makeError(ErrorCode::InvalidArgument, "'" + id + "' is not a valid id.");
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "'" + id + "' is not a valid id.",
+        "Use face ids such as 'brush:12/face:3' or object ids such as 'brush:12', "
+        "'group:3' or 'entity:7'.");
     }
     if (ref->faceIndex)
     {
@@ -273,7 +277,11 @@ Result<mdl::BrushFaceHandle, ToolError> fitGeometryFace(
     if (handle.value().faceIndex() >= handle.value().node()->brush().faceCount())
     {
       return makeError(
-        ErrorCode::ObjectNotFound, "There is no face " + *id + ".", {}, {*id});
+        ErrorCode::ObjectNotFound,
+        "There is no face " + *id + ".",
+        "Pass a face id such as 'brush:12/face:3'; face_attributes_get lists the faces "
+        "of a brush.",
+        {*id});
     }
     return handle.value();
   }
@@ -786,32 +794,26 @@ void registerUvTools(ToolRegistry& registry)
     ToolDef{"uv_check"}
       .title("Check UV Quality")
       .description(
-        "Finds texturing problems, measured against each material's profile "
-        "(material_usage: notes > corpus > map > image): UV_ASPECT_DISTORTION (texel "
-        "aspect U/V more than 10% off the material's typical ratio, else square "
-        "texels), UV_FRACTIONAL_REPEAT (a panel, or a trim across its short axis, does "
-        "not repeat a whole number of times, at least once, within 1 texel), "
+        "Finds texturing problems on brush faces (read-only), measured against "
+        "each material's profile (material_usage): UV_ASPECT_DISTORTION (texel "
+        "aspect U/V more than 10% off the material's typical ratio, else square), "
+        "UV_FRACTIONAL_REPEAT (a panel, or a trim across its short axis, does not "
+        "repeat a whole number of times >= 1, within 1 texel), "
         "UV_PANEL_NOT_ALIGNED (a panel's texture edge is not on the face edge), "
-        "UV_UNUSUAL_SCALE (scale more than 1.25x outside the typical range from notes, "
-        "the corpus (5+ faces) or the map (20+ faces)), UV_TEXEL_DENSITY_MISMATCH "
-        "(tiles whose texel size differs more than 1.5x from a neighbouring tile face: "
-        "same brush sharing an edge, or coplanar and touching), UV_SEAM (a coplanar "
-        "touching face with the same material does not continue the texture: other "
-        "scale or rotation, or offset more than 1 texel off modulo the texture size). "
-        "Tool, sky and liquid materials are skipped; repeats, alignment and seams need "
-        "the material loaded. Each finding has the face, the measured values and a "
-        "suggested 'fix' (a tool call with arguments) plus 'alternatives'. Targets: "
-        "'ids' (faces, brushes, groups, entities; hidden and locked ones too), "
-        "scope \"map\", or the selection (default). 'codes' limits the checks. "
-        "Example: {\"ids\": [\"brush:12\"]} -> {\"items\": [{\"code\": "
-        "\"UV_FRACTIONAL_REPEAT\", \"face\": \"brush:12/face:1\", \"brush\": "
-        "\"brush:12\", \"material\": \"LAB1_GAD2\", \"message\": \"Panel 'LAB1_GAD2' "
-        "repeats 1.5 x 1 times; ...\", \"measured\": {\"repeats\": [1.5, 1], ...}, "
-        "\"fix\": {\"tool\": \"uv_align\", \"arguments\": {\"ids\": "
-        "[\"brush:12/face:1\"], \"operation\": \"fit\", \"repeatU\": 2, \"repeatV\": "
-        "1}, \"description\": \"...\"}, \"alternatives\": [...]}], \"total\": 1, "
-        "\"nextCursor\": null, \"counts\": {\"UV_FRACTIONAL_REPEAT\": 1, ...}, "
-        "\"facesChecked\": 6, \"scope\": \"ids\"}")
+        "UV_UNUSUAL_SCALE (scale more than 1.25x outside the typical range from "
+        "notes, the corpus (5+ faces) or the map (20+ faces)), "
+        "UV_TEXEL_DENSITY_MISMATCH (a tile's texel size differs more than 1.5x "
+        "from a neighbouring tile face: same brush sharing an edge, or coplanar "
+        "and touching), UV_SEAM (a coplanar touching face with the same material "
+        "does not continue the texture: other scale or rotation, or offset more "
+        "than 1 texel off). Tool, sky and liquid materials are skipped; repeats, "
+        "alignment and seams need the material loaded. Each finding has the face, "
+        "measured values, a suggested 'fix' (a tool call with arguments, usually "
+        "uv_align) and 'alternatives'. Targets: 'ids' (faces, brushes, groups, "
+        "entities; hidden and locked ones too), scope \"map\", or the current "
+        "selection (default). 'codes' limits the checks. Returns items, counts per "
+        "code and facesChecked. Examples: {\"ids\": [\"brush:12\"]}; {\"scope\": "
+        "\"map\", \"codes\": [\"UV_SEAM\"]}")
       .input(object({
         faceTargetsField(
           "Face ids ('brush:1042/face:3') and brush, group or entity ids (all faces of "
@@ -820,7 +822,7 @@ void registerUvTools(ToolRegistry& registry)
         field("scope", enumOf({"selection", "map"}))
           .describe("\"map\" checks every brush face of the map; excludes 'ids'"),
         field("codes", array(enumOf(codes)).nonEmpty())
-          .describe("Only these checks. Default: all"),
+          .describe("Only these checks (see the tool description). Default: all"),
       }))
       .output(object({
         field("items", array(any()))
@@ -831,8 +833,10 @@ void registerUvTools(ToolRegistry& registry)
         field("total", integer()).required(),
         field("nextCursor", any()).required(),
         field("counts", any()).required().describe("Findings per checked code"),
-        field("facesChecked", integer()).required(),
-        field("scope", enumOf({"ids", "selection", "map"})).required(),
+        field("facesChecked", integer()).required().describe("Faces checked"),
+        field("scope", enumOf({"ids", "selection", "map"}))
+          .required()
+          .describe("Where the faces came from"),
       }))
       .paginated()
       .mutation(Mutation::None)
@@ -844,30 +848,21 @@ void registerUvTools(ToolRegistry& registry)
     ToolDef{"material_fit_geometry"}
       .title("Fit Geometry to Material")
       .description(
-        "Adjusts geometry to the texture instead of stretching the texture: for a face "
-        "and a material (default: the face's), the texture size, the material's typical "
-        "scale with its source (notes > corpus > map > the game's default), the panel "
-        "size in world units at that scale (texture size x scale), the face's size "
-        "along its texture axes, and per axis the nearest sizes that fit whole repeats "
-        "(smaller, larger, target: the nearest one, at least 1 repeat), the change "
-        "needed (delta, world units) and how to make it: resize.call extrudes the "
-        "adjacent face at the edge the texture axis points to (resize.opposite: the "
-        "other edge). Afterwards apply the scale with 'then' (uv_align operation "
-        "\"typical\"). For trims only the axis across the strip is relevant. Warns with "
+        "Tells how to resize a face so that its texture fits whole repeats, "
+        "instead of stretching the texture (read-only). For a face and a material "
+        "(default: the face's) it returns the texture size, the material's typical "
+        "scale with its source (notes > corpus > map > the game's default), the "
+        "panel size in map units at that scale (texture size x scale), the face's "
+        "size along its texture axes, and per axis the nearest sizes that fit "
+        "whole repeats (smaller, larger, target: the nearest one, at least 1 "
+        "repeat), the change needed (delta, map units) and how to make it: "
+        "resize.call is a face_extrude call for the adjacent face at the edge the "
+        "texture axis points to (resize.opposite: the other edge). Afterwards "
+        "apply the scale with the 'then' call (uv_align operation \"typical\"). "
+        "For trims only the axis across the strip is relevant. Warns with "
         "MATERIAL_IS_TILE for seamless tiles (fitting is optional) and "
-        "TYPICAL_SCALE_DEFAULT without data. Read-only. Example: {\"face\": "
-        "\"brush:12/face:1\"} -> {\"face\": \"brush:12/face:1\", \"material\": "
-        "\"LAB1_GAD2\", \"kind\": {\"value\": \"panel\", \"source\": \"corpus\"}, "
-        "\"textureSize\": [64, 64], \"typicalScale\": {\"value\": [0.5, 0.5], "
-        "\"source\": \"corpus\", \"samples\": 58}, \"panelSize\": [32, 32], "
-        "\"faceSize\": [48, 32], \"fits\": false, \"axes\": [{\"axis\": \"u\", "
-        "\"faceSize\": 48, \"panelSize\": 32, \"repeats\": 1.5, \"fits\": false, "
-        "\"smaller\": {\"size\": 32, \"repeats\": 1}, \"larger\": {\"size\": 64, "
-        "\"repeats\": 2}, \"target\": {\"size\": 64, \"repeats\": 2}, \"delta\": 16, "
-        "\"resize\": {\"face\": \"brush:12/face:4\", \"distance\": 16, \"call\": "
-        "{\"tool\": \"face_extrude\", \"arguments\": {\"faces\": "
-        "[\"brush:12/face:4\"], \"distance\": 16}}, \"opposite\": {...}}}, {\"axis\": "
-        "\"v\", ...}], \"then\": {\"tool\": \"uv_align\", \"arguments\": {...}}}")
+        "TYPICAL_SCALE_DEFAULT without data. Example: {\"face\": "
+        "\"brush:12/face:1\"}")
       .input(object({
         field("face", objectId({ObjectKind::Brush}))
           .describe("The face, e.g. 'brush:12/face:3'. Default: the one selected face"),
@@ -877,18 +872,20 @@ void registerUvTools(ToolRegistry& registry)
       .output(object({
         field("face", string()).required(),
         field("material", string()).required(),
-        field("kind", any()).required().describe("{value, source}"),
-        field("textureSize", vec2()).required(),
+        field("kind", any())
+          .required()
+          .describe("{value: panel|tile|trim|decal|sky|liquid|tool, source}"),
+        field("textureSize", vec2()).required().describe("[width, height] in texels"),
         field("typicalScale", any()).required().describe("{value, source, samples}"),
         field("typicalFaceSize", any())
           .required()
           .describe("The face size the material is typically used on, or null"),
         field("panelSize", vec2())
           .required()
-          .describe("World units covered by one texture repeat at the typical scale"),
+          .describe("Map units covered by one texture repeat at the typical scale"),
         field("faceSize", vec2())
           .required()
-          .describe("The face's extent along its U and V texture axes"),
+          .describe("The face's extent along its U and V texture axes in map units"),
         field("fits", boolean())
           .required()
           .describe("Whether the face already fits whole repeats on the relevant axes"),

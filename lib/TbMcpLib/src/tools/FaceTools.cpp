@@ -295,7 +295,9 @@ Schema facesOutput(std::vector<Field> fields = {})
       .required()
       .describe("Attributes of the first 50 faces afterwards (the items of "
                 "face_attributes_get)"));
-  fields.push_back(field("truncated", boolean()).required());
+  fields.push_back(field("truncated", boolean())
+                     .required()
+                     .describe("More than 50 faces changed; faces lists the first 50"));
   return object(std::move(fields));
 }
 
@@ -448,7 +450,10 @@ Result<std::vector<mdl::BrushFaceHandle>, ToolError> resolveFacesToRead(
     const auto ref = parseObjectRef(id);
     if (!ref)
     {
-      return invalidArgument("'" + id + "' is not a valid id.");
+      return invalidArgument(
+        "'" + id + "' is not a valid id.",
+        "Use face ids such as 'brush:12/face:3' or object ids such as 'brush:12', "
+        "'group:3' or 'entity:7'.");
     }
     if (ref->faceIndex)
     {
@@ -1353,27 +1358,21 @@ void registerFaceTools(ToolRegistry& registry)
     ToolDef{"face_attributes_get"}
       .title("Get Face Attributes")
       .description(
-        "The attributes of faces: material, materialSize ([width, height] in texels, "
-        "null if the material is not loaded), offset [u, v] (texels), scale [u, v] "
-        "(world units per texel), rotation (degrees; for valve220 UVs derived from the "
-        "UV "
-        "axes, since the value stored in the map drifts on transforms with alignment "
-        "lock), the UV axes uAxis / vAxis, and the face's smart tags. In formats that "
-        "store them (format.storesSurfaceAttributes, "
-        "e.g. Quake 2) or when set, surfaceFlags and contentFlags {bits, names (from "
-        "the game config), unknownBits, fromMaterial (not set on the face; the "
-        "material's default applies)} and surfaceValue (with surfaceValueFromMaterial); "
-        "color [r, g, b] (0-255) if set. format describes the map format "
-        "(mapFormat, uvFormat \"valve220\" or \"standard\", storesSurfaceAttributes, "
-        "storesColor) and the flags the game defines. Explicit ids may name hidden or "
-        "locked faces; brush, group and entity ids stand for all faces of their "
-        "brushes. detail \"full\" adds normal, center, area and vertices. Example: "
-        "{\"ids\":[\"brush:12/face:3\"]} -> {\"items\":[{\"id\":\"brush:12/face:3\","
-        "\"brush\":\"brush:12\",\"material\":\"e1u1/floor1_3\",\"materialSize\":[64,64],"
-        "\"offset\":[0,0],\"scale\":[1,1],\"rotation\":0,\"uAxis\":[1,0,0],\"vAxis\":[0,"
-        "-1,0],\"tags\":[],\"surfaceFlags\":{\"bits\":1,\"names\":[\"light\"],"
-        "\"unknownBits\":[],\"fromMaterial\":false},...}],\"total\":1,\"nextCursor\":"
-        "null,\"format\":{\"mapFormat\":\"Quake2\",\"uvFormat\":\"standard\",...}}")
+        "Returns the texture attributes of faces (read-only): material, "
+        "materialSize ([width, height] in texels, null if not loaded), offset [u, "
+        "v] (texels), scale [u, v] (map units per texel), rotation (degrees; for "
+        "valve220 derived from the UV axes, since the stored value drifts on "
+        "transforms with alignment lock), uAxis / vAxis and the face's smart tags. "
+        "surfaceFlags / contentFlags {bits, names, unknownBits, fromMaterial} and "
+        "surfaceValue appear in formats that store them "
+        "(format.storesSurfaceAttributes, e.g. Quake 2) or when set; color [r, g, "
+        "b] (0-255) if set. 'format' describes the map format (mapFormat, uvFormat "
+        "\"valve220\" or \"standard\", storesSurfaceAttributes, storesColor) and "
+        "the flag names the game defines. Targets: face ids ('brush:12/face:3'), "
+        "or brush, group and entity ids for all their faces (hidden and locked "
+        "ones too); default: the current selection. detail \"full\" adds normal, "
+        "center, area and vertices. Change them with face_attributes_set, uv_align "
+        "or uv_nudge. Example: {\"ids\": [\"brush:12/face:3\", \"brush:14\"]}")
       .input(object({
         faceTargetsField(
           "Face ids ('brush:1042/face:3') and brush, group or entity ids (all faces of "
@@ -1381,7 +1380,11 @@ void registerFaceTools(ToolRegistry& registry)
           "objects"),
       }))
       .output(object({
-        field("items", array(any())).required(),
+        field("items", array(any()))
+          .required()
+          .describe(
+            "Per face: {id, brush, material, materialSize, offset, scale, rotation, "
+            "uAxis, vAxis, tags, surfaceFlags?, contentFlags?, surfaceValue?, color?}"),
         field("total", integer()).required(),
         field("nextCursor", any()).required(),
         field("format", any())
@@ -1400,29 +1403,31 @@ void registerFaceTools(ToolRegistry& registry)
     ToolDef{"face_attributes_set"}
       .title("Set Face Attributes")
       .description(
-        "Sets attributes of faces, like the editor's face inspector. Absolute: offset "
-        "[u, v], scale [u, v], rotation; relative: offsetBy [du, dv] (added), scaleBy "
-        "[fu, fv] (multiplied), rotateBy (degrees, added); each absolute value excludes "
-        "its relative one. material (UNKNOWN_MATERIAL warning if not loaded). "
-        "surfaceFlags / contentFlags: {\"set\": [...]} replaces all flags, {\"add\": "
-        "[...], \"remove\": [...]} changes some; items are flag names from the game "
-        "config (face_attributes_get lists them under format) or raw bit values; unknown "
-        "names are skipped with an UNKNOWN_FLAG warning. surfaceValue (number), color "
-        "[r, g, b] with components 0-255 (Daikatana). unset lists attributes to return "
-        "to the material's defaults (surfaceFlags, contentFlags, surfaceValue) or to "
-        "remove (color). Setting flags or values in a format that does not store them "
-        "(e.g. Standard, Valve) warns with ATTRIBUTE_NOT_SAVED. The uv_check findings "
-        "on the changed faces are added as warnings (UV_* codes). Example: {\"ids\":"
-        "[\"brush:12/face:3\"],\"scale\":[0.5,0.5],\"surfaceFlags\":{\"add\":"
-        "[\"light\"]},\"surfaceValue\":300} -> {\"count\":1,\"faces\":[{\"id\":"
-        "\"brush:12/face:3\",...}],\"truncated\":false}")
+        "Sets texture attributes of faces, like the editor's face inspector; one "
+        "undo step. Absolute: offset [u, v] (texels), scale [u, v], rotation "
+        "(degrees); relative: offsetBy (added), scaleBy (multiplied), rotateBy "
+        "(added); an absolute value excludes its relative one. material "
+        "(UNKNOWN_MATERIAL warning if not loaded). surfaceFlags / contentFlags: "
+        "{\"set\": [...]} replaces all flags, {\"add\": [...], \"remove\": [...]} "
+        "changes some; items are flag names (face_attributes_get lists them under "
+        "format) or raw bits; unknown names are skipped with UNKNOWN_FLAG. "
+        "surfaceValue, color [r, g, b] 0-255 (Daikatana). unset returns "
+        "surfaceFlags, contentFlags or surfaceValue to the material's defaults, or "
+        "removes color. Values a format does not store (e.g. flags in Standard or "
+        "Valve maps) warn with ATTRIBUTE_NOT_SAVED. Targets: face ids, or brush, "
+        "group and entity ids; default: the current selection. Returns count and "
+        "the attributes of the first 50 faces; uv_check findings (UV_* codes) are "
+        "added as warnings. Examples: {\"ids\": [\"brush:12/face:3\"], \"scale\": "
+        "[0.5, 0.5], \"offsetBy\": [16, 0]}; {\"ids\": [\"brush:12/face:3\"], "
+        "\"surfaceFlags\": {\"add\": [\"light\"]}, \"surfaceValue\": 300}")
       .input(object({
         faceTargetsField(),
         field("material", string().nonEmpty()).describe("Material name"),
         field("offset", vec2()).describe("Offset [u, v] in texels"),
-        field("offsetBy", vec2()).describe("Added to the offset"),
-        field("scale", vec2()).describe("Scale [u, v]; negative flips, 0 is invalid"),
-        field("scaleBy", vec2()).describe("Multiplies the scale"),
+        field("offsetBy", vec2()).describe("[du, dv] in texels, added to the offset"),
+        field("scale", vec2())
+          .describe("Scale [u, v] in map units per texel; negative flips, 0 is invalid"),
+        field("scaleBy", vec2()).describe("[fu, fv], multiplies the scale"),
         field("rotation", angle())
           .describe("Rotation in degrees, as face_attributes_get reports it"),
         field("rotateBy", angle()).describe("Added to the rotation (degrees)"),
@@ -1434,7 +1439,8 @@ void registerFaceTools(ToolRegistry& registry)
         field(
           "unset",
           array(enumOf({"surfaceFlags", "contentFlags", "surfaceValue", "color"})))
-          .describe("Return these to the material's defaults (color: remove it)"),
+          .describe("Return surfaceFlags, contentFlags or surfaceValue to the material's "
+                    "defaults; color: remove it"),
       }))
       .output(facesOutput())
       .mutation(Mutation::Map)
@@ -1444,18 +1450,20 @@ void registerFaceTools(ToolRegistry& registry)
     ToolDef{"face_attributes_copy"}
       .title("Copy Face Attributes")
       .description(
-        "Copies the attributes of the source face to the target faces, like the "
-        "editor's alt-click. mode \"project\" (Alt+click): material, offset, scale, "
-        "rotation, surface flags, value and color, and the texture projected from the "
-        "source plane so that it continues seamlessly across coplanar or angled faces; "
-        "\"rotate\" (Alt+Shift+click): the same but the UV axes are rotated around the "
-        "shared edge so that the texture wraps around corners (Valve 220 formats only; "
-        "in Standard formats it works like project and warns with "
-        "ROTATION_NEEDS_VALVE_FORMAT); \"material\" (Alt+Ctrl+click): only the "
-        "material. Content flags are copied only with contentFlags: true. The source is "
-        "never a target. Example: {\"source\":\"brush:12/face:3\",\"ids\":["
-        "\"brush:14\"],\"mode\":\"rotate\"} -> {\"count\":6,\"faces\":[...],"
-        "\"truncated\":false,\"source\":\"brush:12/face:3\",\"mode\":\"rotate\"}")
+        "Copies the texture attributes of the source face to the target faces, "
+        "like the editor's Alt+click; one undo step. mode \"project\" (Alt+click): "
+        "material, offset, scale, rotation, surface flags, value and color, with "
+        "the texture projected from the source plane so that it continues "
+        "seamlessly across coplanar or angled faces; \"rotate\" (Alt+Shift+click): "
+        "the same, but the UV axes are rotated around the shared edge so that the "
+        "texture wraps around corners (Valve 220 only; in Standard maps it works "
+        "like project and warns with ROTATION_NEEDS_VALVE_FORMAT); \"material\" "
+        "(Alt+Ctrl+click): only the material. Content flags are copied only with "
+        "contentFlags: true. Targets: face ids, or brush, group and entity ids; "
+        "default: the current selection; the source face is never a target. "
+        "Returns count and the attributes of the first 50 faces. Example: "
+        "{\"source\": \"brush:12/face:3\", \"ids\": [\"brush:14\"], \"mode\": "
+        "\"rotate\"}")
       .input(object({
         field("source", objectId({ObjectKind::Brush}))
           .required()
@@ -1464,13 +1472,15 @@ void registerFaceTools(ToolRegistry& registry)
           "Target face ids and brush, group or entity ids (all faces of their brushes). "
           "Default: the selected faces, or all faces of the selected objects"),
         field("mode", enumOf({"project", "rotate", "material"}).defaultsTo("project"))
-          .describe("What to copy and how to wrap the texture"),
+          .describe(
+            "project: all attributes, projected from the source plane; rotate: the same, "
+            "wrapped around the shared edge (Valve 220); material: only the material"),
         field("contentFlags", boolean().defaultsTo(false))
           .describe("Also copy the content flags (project and rotate)"),
       }))
       .output(facesOutput({
-        field("source", string()).required(),
-        field("mode", string()).required(),
+        field("source", string()).required().describe("The source face id"),
+        field("mode", string()).required().describe("The mode used"),
       }))
       .mutation(Mutation::Map)
       .handler(faceAttributesCopy));
@@ -1479,35 +1489,31 @@ void registerFaceTools(ToolRegistry& registry)
     ToolDef{"uv_align"}
       .title("Align UV")
       .description(
-        "Aligns textures on faces like the buttons of the editor's face inspector. "
-        "operation: \"justify\" (edge: \"left\", \"right\", \"up\", \"down\" as seen "
-        "when looking at the face, or \"center\" to center the texture on the face); "
-        "\"align\" (rotate the texture to the face edge closest to the U axis); "
-        "\"fit\" (scale so that the texture repeats repeatU times along U and repeatV "
-        "times along V across the face, starting at the face's edge; repeats may be "
-        "fractional, an omitted one leaves that axis unchanged, both omitted means "
-        "1 x 1; keepAspect: true with only repeatU or only repeatV lets the other "
-        "axis follow with undistorted texels (the material's typical aspect ratio "
-        "from notes or corpus, else square); round: true rounds the repeats, "
-        "including the following axis, to whole numbers (at least 1); trimSheet: true "
-        "instead uses the editor's trim sheet fit); \"typical\" (the material's "
-        "typical scale from material_usage, justified to the face's edge like fit; "
-        "TYPICAL_SCALE_DEFAULT if only the game's default is known); "
-        "\"autoFit\" (align, justify and fit to the nearest whole number of repeats); "
-        "\"reset\" (offset 0, rotation 0, the game's default scale, default UV axes); "
-        "\"resetToWorld\" (the same with world-aligned axes); \"flip\" (axis \"u\" or "
-        "\"v\": negates that scale); \"rotate90\" (direction \"cw\" or \"ccw\": "
-        "rotation -90 or +90). policy (\"best\", \"next\", \"prev\") cycles through "
-        "the choices of justify, align and trim sheet fit like repeated clicks. "
-        "Parameters that do not apply are ignored with an IGNORED_ARGUMENT warning. "
-        "Center and fit need the texture size: faces with materials that are not "
-        "loaded are skipped (MATERIAL_NOT_LOADED). fit and typical report the resulting "
-        "scale and repeats per face in 'fits'. The result warns with the uv_check "
-        "findings on the changed faces (UV_* codes). Example: {\"ids\":[\"brush:12\"],"
-        "\"operation\":\"fit\",\"repeatU\":2,\"keepAspect\":true,\"round\":true} -> "
-        "{\"count\":6,\"faces\":[...],\"truncated\":false,\"operation\":\"fit\","
-        "\"fits\":[{\"id\":\"brush:12/face:0\",\"material\":\"LAB1_GAD2\","
-        "\"scale\":[0.5,0.5],\"repeats\":[2,1]},...]}")
+        "Aligns textures on faces like the buttons of the editor's face inspector; "
+        "one undo step. operation: \"justify\" (edge \"left\", \"right\", \"up\", "
+        "\"down\" as seen looking at the face, or \"center\"); \"align\" (rotate "
+        "the texture to the face edge closest to the U axis); \"fit\" (scale so "
+        "the texture repeats repeatU x repeatV times across the face from its "
+        "edge; fractional repeats allowed, an omitted one leaves that axis "
+        "unchanged, both omitted = 1 x 1; keepAspect with only one repeat lets the "
+        "other axis follow with undistorted texels; round rounds the repeats to "
+        "whole numbers >= 1; trimSheet uses the editor's trim sheet fit instead); "
+        "\"typical\" (the material's typical scale from material_usage, justified "
+        "to the face edge; TYPICAL_SCALE_DEFAULT if only the game's default is "
+        "known); \"autoFit\" (align, justify and fit to whole repeats); \"reset\" "
+        "(offset 0, rotation 0, default scale and UV axes); \"resetToWorld\" (the "
+        "same with world-aligned axes); \"flip\" (axis \"u\" or \"v\"); "
+        "\"rotate90\" (direction \"cw\" = -90 or \"ccw\" = +90). policy (\"best\", "
+        "\"next\", \"prev\") cycles through the choices of justify, align and trim "
+        "sheet fit like repeated clicks. Arguments that do not apply warn with "
+        "IGNORED_ARGUMENT. center and fit skip faces whose material is not loaded "
+        "(MATERIAL_NOT_LOADED). Targets: face ids, or brush, group and entity ids; "
+        "default: the current selection. Returns count, the first 50 faces and, "
+        "for fit and typical, 'fits' (scale and repeats per face); uv_check "
+        "findings (UV_* codes) are added as warnings. Examples: {\"ids\": "
+        "[\"brush:12\"], \"operation\": \"fit\", \"repeatU\": 2, \"keepAspect\": "
+        "true, \"round\": true}; {\"ids\": [\"brush:12/face:3\"], \"operation\": "
+        "\"justify\", \"edge\": \"center\"}")
       .input(object({
         faceTargetsField(),
         field(
@@ -1523,7 +1529,9 @@ void registerFaceTools(ToolRegistry& registry)
              "rotate90",
              "typical"}))
           .required()
-          .describe("The alignment operation"),
+          .describe(
+            "The alignment operation; see the tool description for what each one does "
+            "and which arguments it takes"),
         field("edge", enumOf({"left", "right", "up", "down", "center"}))
           .describe("justify: the edge to justify to, or center"),
         field("policy", enumOf({"best", "next", "prev"}))
@@ -1546,7 +1554,7 @@ void registerFaceTools(ToolRegistry& registry)
           .describe("rotate90: clockwise (-90) or counterclockwise (+90)"),
       }))
       .output(facesOutput({
-        field("operation", string()).required(),
+        field("operation", string()).required().describe("The operation applied"),
         field("fits", array(any()))
           .describe(
             "fit and typical: [{id, material, scale, repeats, typicalScale?: {value, "
@@ -1559,24 +1567,28 @@ void registerFaceTools(ToolRegistry& registry)
     ToolDef{"uv_nudge"}
       .title("Nudge UV")
       .description(
-        "Moves or rotates textures on faces by steps, relative to each face's texture "
-        "axes (not the camera). direction \"right\" / \"left\" moves the texture image "
-        "along +U / -U, \"down\" / \"up\" along +V / -V (V points down in the image) "
-        "by distance texels (default: the grid size; the offset changes by that "
-        "amount, taking a negative scale into account). offsetBy [du, dv] instead adds "
-        "exactly that to the offset. rotate \"ccw\" / \"cw\" adds / subtracts angle "
-        "degrees (default: the grid angle, as the editor's rotate keys). Example: "
-        "{\"ids\":[\"brush:12/face:3\"],\"direction\":\"left\",\"distance\":8,"
-        "\"rotate\":\"ccw\",\"angle\":15} -> {\"count\":1,\"faces\":[...],"
-        "\"truncated\":false}")
+        "Moves or rotates textures on faces in steps, relative to each face's "
+        "texture axes (not the camera); one undo step. direction \"right\" / "
+        "\"left\" moves the texture image along +U / -U, \"down\" / \"up\" along "
+        "+V / -V (V points down in the image) by distance texels (default: the "
+        "grid size; a negative scale is taken into account). offsetBy [du, dv] "
+        "instead adds exactly that to the offset. rotate \"ccw\" / \"cw\" adds / "
+        "subtracts angle degrees (default: the grid angle, like the editor's "
+        "rotate keys). Targets: face ids, or brush, group and entity ids; default: "
+        "the current selection. Returns count and the attributes of the first 50 "
+        "faces. Example: {\"ids\": [\"brush:12/face:3\"], \"direction\": \"left\", "
+        "\"distance\": 8, \"rotate\": \"ccw\", \"angle\": 15}")
       .input(object({
         faceTargetsField(),
         field("direction", enumOf({"left", "right", "up", "down"}))
-          .describe("Direction to move the texture in its own axes"),
+          .describe(
+            "Direction to move the texture image in its own axes: right +U, left -U, "
+            "down +V, up -V"),
         field("distance", number().min(0))
           .describe("Texels to move. Default: the grid size"),
         field("offsetBy", vec2()).describe("Exact offset change [du, dv] in texels"),
-        field("rotate", enumOf({"cw", "ccw"})).describe("Rotate the texture"),
+        field("rotate", enumOf({"cw", "ccw"}))
+          .describe("Rotate the texture clockwise or counterclockwise by angle"),
         field("angle", number().min(0))
           .describe("Degrees to rotate. Default: the grid angle"),
       }))

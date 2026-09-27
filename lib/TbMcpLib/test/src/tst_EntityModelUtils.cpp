@@ -25,11 +25,13 @@
 #include "mcp/McpToolFixture.h"
 #include "mcp/ObjectIds.h"
 #include "mcp/tools/EntityModelUtils.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityModel.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Map.h"
+#include "mdl/Map_NodeVisibility.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/ModelDefinition.h"
 #include "ui/MapDocument.h"
@@ -38,6 +40,7 @@
 #include "vm/bbox_io.h"
 #include "vm/vec_io.h"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <string>
@@ -440,6 +443,47 @@ TEST_CASE("EntityModelUtils")
       CHECK(check({{-16, -16, 0}, {16, 16, 64}}).findings.empty());
     }
 
+    SECTION("model bounds may sink a little into the floor")
+    {
+      // studio model animations routinely reach a unit or two below the origin plane
+      CHECK(check({{-16, -16, -1.5}, {16, 16, 64}}).findings.empty());
+      CHECK(
+        codes(check({{-16, -16, -2.5}, {16, 16, 64}}))
+        == std::vector<std::string>{"MODEL_BELOW_FLOOR"});
+
+      // boxes that collide use the stricter tolerance
+      const auto box = checkModelPlacement(
+        {{-16, -16, -1.5}, {16, 16, 64}},
+        map,
+        ids,
+        entityId,
+        "The box",
+        PlacementTolerance);
+      REQUIRE(codes(box) == std::vector<std::string>{"MODEL_BELOW_FLOOR"});
+      CHECK(box.findings.front().distance == 1.5);
+    }
+
+    SECTION("hidden brushes count, layers omitted from export do not")
+    {
+      // the compiler builds hidden objects
+      mdl::hideNodes(map, {fixture.node(floorId)});
+      REQUIRE_FALSE(map.editorContext().visible(*fixture.node(floorId)));
+      const auto hidden = check({{-16, -16, 0}, {16, 16, 64}});
+      CHECK(hidden.findings.empty());
+      REQUIRE(hidden.surface);
+      CHECK(ids.format(*hidden.surface->node) == floorId);
+
+      const auto layer =
+        fixture.call("layer_create", {{"name", "Omitted"}})["result"]["layer"]["id"]
+          .get<std::string>();
+      createBox(fixture, {1000, 1000, -16}, {1100, 1100, 0});
+      CHECK(check({{1016, 1016, 0}, {1048, 1048, 64}}).findings.empty());
+      fixture.call("layer_set_state", {{"layer", layer}, {"omitFromExport", true}});
+      CHECK(
+        codes(check({{1016, 1016, 0}, {1048, 1048, 64}}))
+        == std::vector<std::string>{"MODEL_NO_FLOOR"});
+    }
+
     SECTION("brush entities count")
     {
       const auto wallBrush = createBox(fixture, {-16, -16, 0}, {16, 16, 128});
@@ -449,6 +493,76 @@ TEST_CASE("EntityModelUtils")
       // the rays start inside the wall, so they find the floor below it
       CHECK(codes(result) == std::vector<std::string>{"MODEL_PENETRATES_BRUSHES"});
     }
+  }
+
+  SECTION("placementRule")
+  {
+    const auto ruleOf = [&](Properties properties) {
+      return placementRule(map, addPointEntity(map, std::move(properties))->entity());
+    };
+
+    const auto person = ruleOf({{"classname", "monster_person"}, {"origin", "0 0 24"}});
+    CHECK(person.standing);
+    CHECK_FALSE(person.mayFloat);
+    CHECK_FALSE(person.positionIndependent);
+
+    // lights, sounds and other classes that hang anywhere get no model checks
+    CHECK_FALSE(ruleOf({{"classname", "light_lamp"}}).standing);
+    CHECK_FALSE(ruleOf({{"classname", "ambient_generic"}}).standing);
+    CHECK(ruleOf({{"classname", "info_null"}}).positionIndependent);
+    CHECK_FALSE(ruleOf({{"classname", "info_null"}}).standing);
+
+    // flying monsters and entities in liquids may float
+    CHECK(ruleOf({{"classname", "monster_fish"}}).mayFloat);
+    fixture.call(
+      "brush_create_box",
+      {{"min", {512, 512, 0}}, {"max", {640, 640, 128}}, {"material", "*water1"}});
+    CHECK(ruleOf({{"classname", "monster_person"}, {"origin", "576 576 64"}}).mayFloat);
+
+    // sprites are no bodies
+    auto state = EntityModelState{};
+    state.specification.path = "progs/person.mdl";
+    CHECK(checksModelPlacement(person, state));
+    state.specification.path = "sprites/lightbulb.SPR";
+    CHECK_FALSE(checksModelPlacement(person, state));
+    CHECK_FALSE(checksModelPlacement(PlacementRule{}, state));
+
+    // the rule drops floating findings of entities that may float
+    auto check = PlacementCheck{};
+    check.findings = {
+      {"MODEL_FLOATING", "", {}, 10.0, std::nullopt},
+      {"MODEL_NO_FLOOR", "", {}, std::nullopt, std::nullopt},
+      {"MODEL_PENETRATES_BRUSHES", "", {}, std::nullopt, std::nullopt},
+    };
+    applyPlacementRule(check, person);
+    CHECK(check.findings.size() == 3);
+    applyPlacementRule(check, PlacementRule{false, true, true});
+    CHECK(codes(check) == std::vector<std::string>{"MODEL_PENETRATES_BRUSHES"});
+  }
+
+  SECTION("warnModelPlacement follows the placement rule")
+  {
+    createBox(fixture, {-256, -256, -16}, {256, 256, 0});
+    // a light with a model high above the floor: no warning
+    auto result = fixture.call(
+      "entity_create_point",
+      {{"classname", "light_lamp"}, {"position", {0, 0, 128}}, {"snapToGrid", false}});
+    for (const auto& warning : result["warnings"])
+    {
+      CHECK(!warning["code"].get<std::string>().starts_with("MODEL_"));
+    }
+    // a person at the same height floats
+    result = fixture.call(
+      "entity_create_point",
+      {{"classname", "monster_person"},
+       {"position", {64, 0, 128}},
+       {"snapToGrid", false}});
+    auto codes = std::vector<std::string>{};
+    for (const auto& warning : result["warnings"])
+    {
+      codes.push_back(warning["code"].get<std::string>());
+    }
+    CHECK(std::ranges::find(codes, "MODEL_FLOATING") != codes.end());
   }
 
   SECTION("dropToFloorBounds")

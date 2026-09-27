@@ -29,7 +29,9 @@
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
+#include "mdl/Map_Selection.h"
 #include "mdl/WorldNode.h"
 
 #include "vm/bbox.h"
@@ -245,6 +247,52 @@ TEST_CASE("SpaceAnalysis")
       room2Details.contents, [&](const auto* node) { return node == playerStart; }));
   }
 
+  SECTION("describeOpening lists only the doors in the opening")
+  {
+    // a third room north of room 2, joined by a doorway without a door
+    auto* northWall = findBrush(map, {{512, 384, 0}, {1040, 400, 192}});
+    REQUIRE(northWall);
+    mdl::removeNodes(map, {northWall});
+    addCuboid(map, {{512, 384, 0}, {752, 400, 192}});
+    addCuboid(map, {{816, 384, 0}, {1040, 400, 192}});
+    addCuboid(map, {{752, 384, 112}, {816, 400, 192}});
+    addCuboid(map, {{512, 384, -16}, {1056, 800, 0}});
+    addCuboid(map, {{512, 384, 192}, {1056, 800, 208}});
+    addCuboid(map, {{512, 400, 0}, {528, 800, 192}});
+    addCuboid(map, {{1040, 400, 0}, {1056, 800, 192}});
+    addCuboid(map, {{528, 784, 0}, {1040, 800, 192}});
+
+    // a door standing in room 3 across x = 1024; the octree keeps it in a large cell, so
+    // every search returns it
+    auto* standingDoor = new mdl::EntityNode{mdl::Entity{{{"classname", "func_door"}}}};
+    standingDoor->addChild(new mdl::BrushNode{
+      brushBuilder(map).createCuboid({{1016, 500, 0}, {1032, 520, 64}}, "wall").value()});
+    mdl::addNodes(map, {{&mdl::parentForNodes(map), {standingDoor}}});
+
+    const auto spaces = analyzeSpaces(map).value();
+    REQUIRE(spaces.spaces.size() == 3);
+    REQUIRE(spaces.openings.size() == 2);
+    const auto room3 = spaces.spaceAt({784, 592, 24});
+    REQUIRE(room3);
+
+    auto doorsFound = 0;
+    for (size_t i = 0; i < spaces.openings.size(); ++i)
+    {
+      const auto& opening = spaces.openings[i];
+      const auto details = describeOpening(map, spaces, i);
+      if (opening.spaceA == *room3 || opening.spaceB == room3)
+      {
+        CHECK(details.doors.empty());
+      }
+      else
+      {
+        CHECK(details.doors == std::vector<const mdl::EntityNode*>{door});
+        ++doorsFound;
+      }
+    }
+    CHECK(doorsFound == 1);
+  }
+
   SECTION("space ids are stable across unrelated edits")
   {
     const auto before = analyzeSpaces(map).value();
@@ -409,6 +457,42 @@ TEST_CASE("SpaceAnalysis")
         CHECK(spot.box.min.x() >= 528.0 + 16.0);
         CHECK(spot.box.max.x() <= 1040.0 - 16.0);
         CHECK(spot.clearance[4] == Catch::Approx(0.0));
+      }
+    }
+
+    SECTION("walls in a group that encloses the spot keep wallDistance")
+    {
+      // group the world brushes, like rooms built as groups
+      auto brushes = std::vector<mdl::Node*>{};
+      const auto noNodes = std::vector<mdl::Node*>{};
+      for (auto* child : mdl::parentForNodes(map, noNodes).children())
+      {
+        if (dynamic_cast<mdl::BrushNode*>(child))
+        {
+          brushes.push_back(child);
+        }
+      }
+      mdl::selectNodes(map, brushes);
+      REQUIRE(mdl::groupSelectedNodes(map, "Rooms"));
+      mdl::deselectAll(map);
+      const auto grouped = analyzeSpaces(map).value();
+
+      const auto result = findFreeSpots(
+        map,
+        &grouped,
+        {.size = {32, 32, 32},
+         .space = grouped.spaceAt({784, 192, 24}),
+         .wallDistance = 16.0,
+         .limit = 4});
+      REQUIRE(result.is_success());
+      const auto& spots = result.value().spots;
+      REQUIRE(spots.size() == 4);
+      for (const auto& spot : spots)
+      {
+        CHECK(spot.box.min.x() >= 528.0 + 16.0);
+        CHECK(spot.box.max.x() <= 1040.0 - 16.0);
+        CHECK(spot.box.min.y() >= 16.0);
+        CHECK(spot.box.max.y() <= 384.0 - 16.0);
       }
     }
 

@@ -701,7 +701,11 @@ Result<ReplaceScope, ToolError> resolveReplaceScope(
       const auto ref = parseObjectRef(id);
       if (!ref)
       {
-        return makeError(ErrorCode::InvalidArgument, "'" + id + "' is not a valid id.");
+        return makeError(
+          ErrorCode::InvalidArgument,
+          "'" + id + "' is not a valid id.",
+          "Use ids such as 'brush:12', 'brush:12/face:3', 'group:3', 'entity:7' or "
+          "'layer:2'.");
       }
       auto node = ids.resolve(*ref);
       if (node.is_error())
@@ -1010,10 +1014,10 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"locks_get"}
       .title("Get Locks")
       .description(
-        "Returns the texture lock ('alignmentLock': moving, rotating or scaling brushes "
-        "keeps their texture alignment) and the UV lock ('uvLock': vertex editing keeps "
-        "UV coordinates). Both are editor preferences shared by all documents. "
-        "Example: {}")
+        "Returns the texture lock ('alignmentLock': moving, rotating or scaling "
+        "brushes keeps their texture alignment) and the UV lock ('uvLock': vertex "
+        "editing keeps UV coordinates). Read-only; both are editor preferences "
+        "shared by all documents. Change them with locks_set. Example: {}")
       .input(object({}))
       .output(locksSchema())
       .mutation(Mutation::None)
@@ -1024,19 +1028,24 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"locks_set"}
       .title("Set Locks")
       .description(
-        "Turns the texture lock (alignmentLock) and/or the UV lock (uvLock) on or off, "
-        "like the toolbar buttons. These are editor preferences for all documents and "
-        "are "
-        "not undoable. Transform tools also accept a per-call 'alignmentLock' override. "
-        "Returns the new and the previous values. Example: {\"alignmentLock\": false}")
+        "Turns the texture lock (alignmentLock) and/or the UV lock (uvLock) on or "
+        "off, like the toolbar buttons. Not undoable: these are editor preferences "
+        "for all documents. Transform tools also accept a per-call 'alignmentLock' "
+        "override. Returns the new values and 'previous'. Example: "
+        "{\"alignmentLock\": false}")
       .input(object({
-        field("alignmentLock", boolean()).describe("Texture lock"),
-        field("uvLock", boolean()).describe("UV lock"),
+        field("alignmentLock", boolean())
+          .describe(
+            "Texture lock: transforms keep the texture alignment; omit to keep it"),
+        field("uvLock", boolean())
+          .describe("UV lock: vertex editing keeps the UV coordinates; omit to keep it"),
       }))
       .output(object({
-        field("alignmentLock", boolean()).required(),
-        field("uvLock", boolean()).required(),
-        field("previous", locksSchema()).required(),
+        field("alignmentLock", boolean()).required().describe("The new texture lock"),
+        field("uvLock", boolean()).required().describe("The new UV lock"),
+        field("previous", locksSchema())
+          .required()
+          .describe("The values before the call"),
       }))
       .mutation(Mutation::External)
       .idempotent()
@@ -1046,17 +1055,16 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"materials_list"}
       .title("List Materials")
       .description(
-        "Lists the loaded materials (textures) sorted by name: name, collection (WAD "
-        "file or folder), width and height in pixels (null while the image is not "
-        "loaded yet), usage (brush faces and patches using it in the map) and "
-        "surfaceParms (Quake 3 shaders, if any); detail \"full\" adds path and loaded. "
-        "Filters: search (case-insensitive substring, or a glob with '*' and '?'), "
-        "collection (same matching), usedOnly. includeMissing adds materials the map "
-        "uses that are not loaded ({missing: true}); missingCount always counts them. "
-        "Material names are case-insensitive. Example: {\"search\": \"wall_*\", "
-        "\"usedOnly\": true} -> {\"items\": [{\"name\": \"wall_brick\", \"collection\": "
-        "\"base.wad\", \"width\": 64, \"height\": 64, \"usage\": 36}], \"total\": 1, "
-        "\"nextCursor\": null, \"missingCount\": 0, \"currentMaterial\": \"wall_brick\"}")
+        "Lists the loaded materials (textures) sorted by name (read-only): name, "
+        "collection (WAD file or folder), width and height in pixels (null while "
+        "the image is not loaded yet), usage (brush faces and patches using it) "
+        "and surfaceParms (Quake 3 shaders); detail \"full\" adds path and loaded. "
+        "Filters: search and collection (case-insensitive substring or glob with "
+        "'*' and '?'), usedOnly. includeMissing adds materials the map uses that "
+        "are not loaded ({missing: true}); missingCount always counts them. Also "
+        "returns currentMaterial, the material new brushes get. Use "
+        "material_preview to see one and material_usage for how to scale it. "
+        "Example: {\"search\": \"wall_*\", \"usedOnly\": true}")
       .input(object({
         field("search", string().nonEmpty())
           .describe(
@@ -1091,23 +1099,23 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"material_apply"}
       .title("Apply Material")
       .description(
-        "Applies a material to faces, like clicking a material in the material browser: "
-        "'ids' are face ids ('brush:12/face:3') or brush, group and entity ids (all "
-        "their faces); without ids, the selected faces or all faces of the selected "
-        "objects. Only the material changes; the alignment (offset, scale, rotation) "
-        "stays. A material that is not loaded is applied anyway with an "
-        "UNKNOWN_MATERIAL warning. The uv_check findings on the faces (UV_* codes, e.g. "
-        "a panel that does not fit) are added as warnings. Example: {\"material\": "
-        "\"wall_brick\", \"ids\": "
-        "[\"brush:12\", \"brush:14/face:2\"]} -> {\"material\": \"wall_brick\", "
-        "\"faces\": 7}")
+        "Applies a material to faces, like clicking a material in the material "
+        "browser; one undo step. 'ids' are face ids ('brush:12/face:3') or brush, "
+        "group and entity ids (all their faces); without ids, the selected faces "
+        "or all faces of the selected objects. Only the material changes; offset, "
+        "scale and rotation stay (use uv_align \"typical\" or \"fit\" afterwards). "
+        "A material that is not loaded is applied anyway with an UNKNOWN_MATERIAL "
+        "warning. uv_check findings on the faces (UV_* codes) are added as "
+        "warnings. Returns the material and the number of faces. Example: "
+        "{\"material\": \"wall_brick\", \"ids\": [\"brush:12\", "
+        "\"brush:14/face:2\"]}")
       .input(object({
         field("material", string().nonEmpty()).required().describe("Material name"),
         faceTargetsField(),
       }))
       .output(object({
         field("material", string()).required(),
-        field("faces", integer()).required().describe("Number of faces"),
+        field("faces", integer()).required().describe("Number of faces changed"),
       }))
       .mutation(Mutation::Map)
       .idempotent()
@@ -1117,18 +1125,18 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"material_set_current"}
       .title("Set Current Material")
       .description(
-        "Sets the current material, which new brushes get (like selecting a material "
-        "in the material browser with nothing selected). Not undoable. Warns with "
-        "UNKNOWN_MATERIAL if the material is not loaded. Returns the new and the "
-        "previous material. Example: {\"material\": \"floor_tile\"} -> {\"material\": "
-        "\"floor_tile\", \"loaded\": true, \"previous\": \"wall_brick\"}")
+        "Sets the current material that new brushes get, like selecting a material "
+        "in the material browser with nothing selected. Not undoable. Warns with "
+        "UNKNOWN_MATERIAL if the material is not loaded. Returns the material, "
+        "whether it is loaded, and the previous one. Use material_apply to texture "
+        "existing faces. Example: {\"material\": \"floor_tile\"}")
       .input(object({
         field("material", string().nonEmpty()).required().describe("Material name"),
       }))
       .output(object({
         field("material", string()).required(),
         field("loaded", boolean()).required().describe("Whether the material is loaded"),
-        field("previous", string()).required(),
+        field("previous", string()).required().describe("The material before the call"),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)
@@ -1139,26 +1147,23 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"material_replace"}
       .title("Replace Materials")
       .description(
-        "Replaces materials on brush faces by name, keeping the alignment. 'from' is a "
-        "material name or a pattern (case-insensitive; '*' matches any text, '?' one "
-        "character); each wildcard in 'to' is filled with the text matched by the "
-        "wildcard at the same position in 'from', so {\"from\": \"wall_old*\", \"to\": "
-        "\"wall_new*\"} turns wall_old_2 into wall_new_2. 'rules' ([{from, to}], the "
-        "first matching rule wins) replaces several materials at once. Scope: 'layer' "
-        "(id or name), 'ids' (faces, brushes, groups, entities, layers) or 'scope' "
-        "(\"selection\" or \"map\"); by default the selection, or the whole map if "
-        "nothing is selected, like the Replace Material dialog. Hidden and locked faces "
-        "are skipped (skippedFaces). Targets that are not loaded are not applied but "
-        "reported in 'unmatched' unless allowMissingTargets is true (then they are "
-        "applied with an UNKNOWN_MATERIAL warning). 'noMatch' lists patterns that "
-        "matched no face. The uv_check findings on the changed faces are added as "
-        "warnings (UV_* codes). One undo step. Example: {\"from\": \"wall_old*\", "
-        "\"to\": "
-        "\"wall_new*\", \"layer\": \"Castle\"} -> {\"scope\": {\"kind\": \"layer\", "
-        "\"layer\": {\"id\": \"layer:3\", \"name\": \"Castle\"}, \"faces\": 120}, "
-        "\"replaced\": [{\"from\": \"wall_old_a\", \"to\": \"wall_new_a\", \"faces\": "
-        "24}], \"totalFaces\": 24, \"unmatched\": [{\"from\": \"wall_old_c\", \"to\": "
-        "\"wall_new_c\", \"faces\": 6}], \"noMatch\": [], \"skippedFaces\": 0}")
+        "Replaces materials on brush faces by name, keeping the alignment, like "
+        "the Replace Material dialog; one undo step. 'from' is a name or a "
+        "case-insensitive pattern ('*' any text, '?' one character); each wildcard "
+        "in 'to' is filled with the text matched by the wildcard at the same "
+        "position in 'from' (wall_old* -> wall_new* turns wall_old_2 into "
+        "wall_new_2). 'rules' [{from, to}] replaces several at once (the first "
+        "matching rule wins). Scope: 'layer' (id or name), 'ids' (faces, brushes, "
+        "groups, entities, layers) or 'scope' (\"selection\" or \"map\"); default: "
+        "the selection, or the whole map if nothing is selected. Hidden and locked "
+        "faces are skipped (skippedFaces). Targets that are not loaded are not "
+        "applied but listed in 'unmatched' unless allowMissingTargets (then "
+        "applied with an UNKNOWN_MATERIAL warning). Returns replaced [{from, to, "
+        "faces}], totalFaces, unmatched and noMatch (patterns that matched no "
+        "face); uv_check findings (UV_* codes) are added as warnings. Examples: "
+        "{\"from\": \"wall_old*\", \"to\": \"wall_new*\", \"layer\": \"Castle\"}; "
+        "{\"rules\": [{\"from\": \"floor1\", \"to\": \"floor2\"}], \"scope\": "
+        "\"map\"}")
       .input(object({
         field("from", string().nonEmpty())
           .describe("Material name or pattern with '*' and '?'"),
@@ -1166,17 +1171,25 @@ void registerMaterialTools(ToolRegistry& registry)
           .describe("Replacement name; its wildcards are filled from 'from'"),
         field(
           "rules",
-          array(object({
-                  field("from", string().nonEmpty()).required(),
-                  field("to", string().nonEmpty()).required(),
-                }))
+          array(object(
+                  {
+                    field("from", string().nonEmpty())
+                      .required()
+                      .describe("Material name or pattern with '*' and '?'"),
+                    field("to", string().nonEmpty())
+                      .required()
+                      .describe("Replacement name; its wildcards are filled from 'from'"),
+                  })
+                  .describe("One rule {from, to}"))
             .nonEmpty())
           .describe("Several {from, to} rules instead of 'from' and 'to'"),
         field("scope", enumOf({"selection", "map"}))
           .describe("Default: the selection, or the map if nothing is selected"),
         field("layer", string().nonEmpty()).describe("Only this layer (id or name)"),
         field("ids", array(objectId()).nonEmpty())
-          .describe("Only these faces, brushes, groups, entities or layers"),
+          .describe(
+            "Only these face ids ('brush:12/face:3') and brush, group, entity or layer "
+            "ids"),
         field("allowMissingTargets", boolean())
           .describe("Also apply target materials that are not loaded"),
       }))
@@ -1185,7 +1198,7 @@ void registerMaterialTools(ToolRegistry& registry)
           .required()
           .describe("{kind: selection|map|layer|ids, layer?: {id, name}, faces}"),
         field("replaced", array(any())).required().describe("[{from, to, faces}]"),
-        field("totalFaces", integer()).required(),
+        field("totalFaces", integer()).required().describe("Faces changed"),
         field("unmatched", array(any()))
           .required()
           .describe("[{from, to, faces}] not replaced: the target is not loaded"),
@@ -1204,14 +1217,12 @@ void registerMaterialTools(ToolRegistry& registry)
     ToolDef{"material_preview"}
       .title("Preview Material")
       .description(
-        "Returns a small PNG image of a material (as image content) and its name, "
-        "collection, size in pixels, preview size, average color and where the image "
-        "came from ('memory' or 'file'). The image is scaled down to at most maxSize "
-        "pixels (default 128, at most 512) along its longer side, keeping the aspect "
-        "ratio; smaller images keep their size. Example: {\"material\": \"wall_brick\", "
-        "\"maxSize\": 64} -> {\"name\": \"wall_brick\", \"collection\": \"base.wad\", "
-        "\"width\": 128, \"height\": 64, \"previewWidth\": 64, \"previewHeight\": 32, "
-        "\"averageColor\": \"#7a5c43\", \"source\": \"file\"}")
+        "Returns a small PNG image of a material (as image content) with its name, "
+        "collection, size in pixels, preview size, average color (\"#rrggbb\") and "
+        "where the image came from ('memory' or 'file'). Read-only. The image is "
+        "scaled down to at most maxSize pixels along its longer side, keeping the "
+        "aspect ratio; smaller images keep their size. Example: {\"material\": "
+        "\"wall_brick\", \"maxSize\": 64}")
       .input(object({
         field("material", string().nonEmpty()).required().describe("Material name"),
         field("maxSize", integer().min(1))
@@ -1219,13 +1230,15 @@ void registerMaterialTools(ToolRegistry& registry)
       }))
       .output(object({
         field("name", string()).required(),
-        field("collection", string()).required(),
-        field("width", integer()).required(),
-        field("height", integer()).required(),
-        field("previewWidth", integer()).required(),
-        field("previewHeight", integer()).required(),
+        field("collection", string()).required().describe("WAD file or folder"),
+        field("width", integer()).required().describe("Material width in pixels"),
+        field("height", integer()).required().describe("Material height in pixels"),
+        field("previewWidth", integer()).required().describe("Preview width in pixels"),
+        field("previewHeight", integer()).required().describe("Preview height in pixels"),
         field("averageColor", string()).required().describe("\"#rrggbb\""),
-        field("source", enumOf({"memory", "file"})).required(),
+        field("source", enumOf({"memory", "file"}))
+          .required()
+          .describe("memory: the editor's loaded image; file: read from the game files"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)

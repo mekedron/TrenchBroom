@@ -317,12 +317,13 @@ ToolResult consoleClear(CallContext& context, const Args&)
 Schema messageSchema()
 {
   return object({
-    field("seq", integer()).required(),
+    field("seq", integer()).required().describe("Sequence number, increasing"),
     field("level", enumOf({"debug", "info", "warning", "error"})).required(),
     field("time", string()).required(),
     field("text", string()).required(),
-    field("document", string()),
-    field("documentName", string()),
+    field("document", string()).describe("Handle of the message's open document"),
+    field("documentName", string())
+      .describe("File name of the message's document when it is no longer open"),
   });
 }
 
@@ -334,7 +335,8 @@ void registerConsoleTools(ToolRegistry& registry)
     ToolDef{"console_read"}
       .title("Read Console")
       .description(
-        "Returns the messages of the editor console, oldest first: everything the editor "
+        "Returns the messages of the editor console (read-only), oldest first: "
+        "everything the editor "
         "logs (material, model and entity definition loading problems, invalid map data, "
         "compile and save messages, the agent call log lines '[AI] ...'), not only "
         "messages caused by agent calls. Each message has seq, level (debug, info, "
@@ -345,7 +347,9 @@ void registerConsoleTools(ToolRegistry& registry)
         "previous result's lastSeq as 'after'; 'dropped' counts messages after it that "
         "are no longer buffered (buffer limit or console_clear). Pages continue with "
         "nextCursor; newest: true returns the newest 'limit' messages instead. "
-        "Example: {\"minLevel\": \"warning\", \"after\": 120}")
+        "Examples: {\"minLevel\": \"warning\", \"after\": 120}; {\"text\": "
+        "\"wad|texture\", \"regex\": true, \"document\": \"doc:1\", \"newest\": true, "
+        "\"limit\": 20}")
       .input(object({
         field(
           "minLevel", enumOf({"debug", "info", "warning", "error"}).defaultsTo("info"))
@@ -357,14 +361,13 @@ void registerConsoleTools(ToolRegistry& registry)
         field("document", string())
           .describe(
             "Only messages of this document: a handle such as 'doc:1', the file name of "
-            "a "
-            "closed document, or 'none' for messages without a document. Default: all "
-            "messages"),
+            "a closed document, or 'none' for messages without a document. Default: "
+            "all messages"),
         field("after", integer().min(0))
           .describe("Only messages with a greater seq, e.g. the lastSeq of the previous "
                     "read"),
         field("newest", boolean().defaultsTo(false))
-          .describe("Return the newest matching messages instead of the oldest"),
+          .describe("Return the newest 'limit' matching messages instead of the oldest"),
         field("cursor", string()).describe("Opaque cursor from a previous nextCursor"),
         field("limit", integer().min(1).max(1000).defaultsTo(100))
           .describe("Maximum number of messages to return"),
@@ -397,8 +400,10 @@ void registerConsoleTools(ToolRegistry& registry)
         field("cleared", integer())
           .required()
           .describe("The number of buffered messages removed (or that would be)"),
-        field("lastSeq", integer()).required(),
-        field("wouldDo", string()),
+        field("lastSeq", integer())
+          .required()
+          .describe("The last sequence number; console_read 'after' continues from it"),
+        field("wouldDo", string()).describe("Dry run only: what the call would do"),
       }))
       .mutation(Mutation::External)
       .destructive()

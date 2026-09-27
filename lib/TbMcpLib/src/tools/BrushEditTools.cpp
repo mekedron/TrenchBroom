@@ -1860,9 +1860,10 @@ std::vector<Field> handleFields()
       "Default: the selected brushes if they have every handle, else every visible, "
       "unlocked brush that has one of the handles"),
     field("vertices", array(vec3()).nonEmpty())
-      .describe("Vertex positions, e.g. [[0, 0, 64]]"),
+      .describe("Vertex positions in map units, e.g. [[0, 0, 64]]"),
     field("edges", array(array(vec3()).minSize(2).maxSize(2)).nonEmpty())
-      .describe("Edges, each given by its two end points"),
+      .describe(
+        "Edges, each given by its two end points, e.g. [[[0, 0, 64], [64, 0, 64]]]"),
     field("faces", array(array(vec3()).minSize(3)).nonEmpty())
       .describe("Faces, each given by all its vertex positions (any order)"),
   };
@@ -1876,8 +1877,9 @@ void registerBrushEditTools(ToolRegistry& registry)
     ToolDef{"brush_clip"}
       .title("Clip Brushes")
       .description(
-        "Cuts brushes with a plane, like the Clip tool. The plane is given by 'points' "
-        "or by an existing 'face'. With 3 points p0, p1, p2 the plane normal is "
+        "Cuts brushes with a plane, like the Clip tool, in one undo step. The plane is "
+        "given by 'points' (map units) or by an existing 'face'. With 3 points p0, p1, "
+        "p2 the plane normal is "
         "normalize(cross(p1 - p0, p2 - p0)); with 2 points a, b the plane contains the "
         "line a-b and is parallel to 'axis' (default z, like clipping in the top view), "
         "and the normal is cross(b - a, axis), i.e. for axis z the right-hand side when "
@@ -1896,7 +1898,7 @@ void registerBrushEditTools(ToolRegistry& registry)
           .describe("2 or 3 points on the clip plane (see the description for the "
                     "normal)"),
         field("axis", enumOf({"x", "y", "z"}))
-          .describe("With 2 points: the plane is parallel to this axis (default z)"),
+          .describe("With 2 points: the plane is parallel to this axis. Default: 'z'"),
         field("face", objectId({ObjectKind::Brush}))
           .describe("A face id such as 'brush:7/face:2' whose plane is used"),
         field("keep", enumOf({"front", "back", "both"}).defaultsTo("both"))
@@ -1923,8 +1925,9 @@ void registerBrushEditTools(ToolRegistry& registry)
       .description(
         "Moves faces along their normals by 'distance' (positive: outward, the brush "
         "grows; negative: inward, it shrinks), like dragging faces with the Extrude "
-        "tool. Faces with different normals each move along their own normal. Adjacent "
-        "faces stretch; the brush keeps its id. The selection is restored afterwards. "
+        "tool (one undo step). Faces with different normals each move along their own "
+        "normal. Adjacent faces stretch; the brush keeps its id. The selection is "
+        "restored afterwards. Use face_extrude_new to create new brushes instead. "
         "Example: {\"faces\": [\"brush:12/face:4\"], \"distance\": 32}")
       .input(object({
         facesField("Face ids such as 'brush:12/face:4'. Default: the selected faces"),
@@ -1932,7 +1935,8 @@ void registerBrushEditTools(ToolRegistry& registry)
           .required()
           .describe("Distance along each face normal in map units; not 0"),
         field("alignmentLock", boolean())
-          .describe("Keep textures aligned (default: the editor's alignment lock)"),
+          .describe("Keep textures aligned. Default: the editor's alignment lock "
+                    "(locks_get)"),
       }))
       .output(object({
         field("faces", array(any())).describe("The extruded faces (faceJson)"),
@@ -1945,7 +1949,8 @@ void registerBrushEditTools(ToolRegistry& registry)
     ToolDef{"face_extrude_new"}
       .title("Extrude Faces to New Brushes")
       .description(
-        "Creates new brushes from faces. mode 'split' works like ctrl-dragging a face "
+        "Creates new brushes from faces (one undo step). mode 'split' works like "
+        "ctrl-dragging a face "
         "with the Extrude tool: with a positive distance a new brush of that thickness "
         "is created in front of the face (the original is unchanged); with a negative "
         "distance the brush is split: the original keeps a slab of |distance| next to "
@@ -1957,14 +1962,16 @@ void registerBrushEditTools(ToolRegistry& registry)
         "Example: {\"faces\": [\"brush:12/face:4\"], \"distance\": 64, \"mode\": "
         "\"split\"}")
       .input(object({
-        facesField("Face ids. Default: the selected faces"),
+        facesField("Face ids such as 'brush:12/face:4'. Default: the selected faces"),
         field("distance", number())
           .required()
           .describe("Distance along each face normal in map units; not 0"),
         field("mode", enumOf({"split", "stamp"}).defaultsTo("split"))
-          .describe("'split' (extrude to a new brush / split inward) or 'stamp'"),
+          .describe("'split' (extrude to a new brush / split inward) or 'stamp' (hull "
+                    "of the face and its moved copy)"),
         field("alignmentLock", boolean())
-          .describe("Keep textures aligned (default: the editor's alignment lock)"),
+          .describe("Keep textures aligned. Default: the editor's alignment lock "
+                    "(locks_get)"),
       }))
       .output(object({
         field("brushes", brushListSchema("The new brushes (nodeSummary)")).required(),
@@ -1977,8 +1984,9 @@ void registerBrushEditTools(ToolRegistry& registry)
     ToolDef{"vertices_move"}
       .title("Move Vertices")
       .description(
-        "Moves vertices, edges or faces of brushes by 'vector', like the Vertex, Edge "
-        "and Face tools. Pass exactly one of 'vertices', 'edges' or 'faces', given by "
+        "Moves vertices, edges or faces of brushes by 'vector' (map units), like the "
+        "Vertex, Edge and Face tools, in one undo step. Pass exactly one of 'vertices', "
+        "'edges' or 'faces', given by "
         "positions (matched within 0.01 units; use object_get with detail 'full' to "
         "list them). Target brushes: 'ids' if given; else the selected brushes if they "
         "have every handle; else every visible, unlocked brush that has one of the "
@@ -1994,9 +2002,12 @@ void registerBrushEditTools(ToolRegistry& registry)
         "Example: {\"vertices\": [[64, 64, 64]], \"vector\": [0, 0, 32]}")
       .input(object([] {
         auto fields = handleFields();
-        fields.push_back(field("vector", vec3()).required().describe("Offset"));
-        fields.push_back(field("uvLock", boolean())
-                           .describe("Keep UVs locked (default: the editor's UV lock)"));
+        fields.push_back(field("vector", vec3())
+                           .required()
+                           .describe("Offset [x, y, z] in map units; not zero"));
+        fields.push_back(
+          field("uvLock", boolean())
+            .describe("Keep UVs locked. Default: the editor's UV lock (locks_get)"));
         return fields;
       }()))
       .output(object({
@@ -2013,15 +2024,18 @@ void registerBrushEditTools(ToolRegistry& registry)
       .description(
         "Adds a vertex to a brush, like double-clicking with the Vertex tool: the brush "
         "becomes the convex hull of its vertices and the new position, which must lie "
-        "outside the brush. The selection is restored afterwards. "
+        "outside the brush (one undo step). The selection is restored afterwards. Use "
+        "vertices_move to move an existing vertex. "
         "Example: {\"brush\": \"brush:12\", \"position\": [32, 32, 96]}")
       .input(object({
         field("brush", objectId({ObjectKind::Brush})).required().describe("Brush id"),
-        field("position", vec3()).required().describe("Position of the new vertex"),
+        field("position", vec3())
+          .required()
+          .describe("Position of the new vertex in map units; outside the brush"),
       }))
       .output(object({
         field("brush", any()).describe("The changed brush (nodeSummary)"),
-        field("vertexCount", integer()),
+        field("vertexCount", integer()).describe("Vertices of the brush afterwards"),
       }))
       .mutation(Mutation::Map)
       .handler(vertexAdd));
@@ -2031,7 +2045,8 @@ void registerBrushEditTools(ToolRegistry& registry)
       .title("Remove Vertices")
       .description(
         "Removes vertices, edges (both end points) or faces (all their vertices) from "
-        "brushes, like Delete in the Vertex, Edge and Face tools; each brush becomes the "
+        "brushes in one undo step, like Delete in the Vertex, Edge and Face tools; each "
+        "brush becomes the "
         "convex hull of its remaining vertices. Handles are given and target brushes "
         "chosen as in vertices_move. Fails with INVALID_GEOMETRY if a brush would "
         "become degenerate. The selection is restored afterwards. "
@@ -2048,7 +2063,8 @@ void registerBrushEditTools(ToolRegistry& registry)
       .title("Snap Vertices")
       .description(
         "Snaps all vertices of brushes to the grid ('grid', default), to integers "
-        "('integer') or to multiples of 'snapTo', like Edit > Snap Vertices. Brushes "
+        "('integer') or to multiples of 'snapTo' (map units), like Edit > Snap Vertices "
+        "(one undo step); pass 'mode' or 'snapTo', not both. Brushes "
         "that would become degenerate are left unchanged and reported in 'failed'. "
         "Groups and brush entities act on their brushes. The selection is restored "
         "afterwards. Example: {\"ids\": [\"brush:12\"], \"mode\": \"integer\"}")
@@ -2057,13 +2073,15 @@ void registerBrushEditTools(ToolRegistry& registry)
           {ObjectKind::Brush, ObjectKind::Entity, ObjectKind::Group},
           "Brushes, brush entities or groups. Default: the selection"),
         field("mode", enumOf({"grid", "integer"}))
-          .describe("Snap to the current grid size (default) or to integers"),
-        field("snapTo", number()).describe("Snap to multiples of this distance instead"),
+          .describe("Snap to the current grid size or to integers. Default: 'grid'"),
+        field("snapTo", number())
+          .describe("Snap to multiples of this distance in map units (> 0) instead of "
+                    "'mode'"),
         field("uvLock", boolean())
-          .describe("Keep UVs locked (default: the editor's UV lock)"),
+          .describe("Keep UVs locked. Default: the editor's UV lock (locks_get)"),
       }))
       .output(object({
-        field("snapTo", number()).describe("The snap distance used"),
+        field("snapTo", number()).describe("The snap distance used (map units)"),
         field("snapped", idListSchema("Brushes whose vertices were snapped")),
         field("failed", idListSchema("Brushes left unchanged")),
       }))
@@ -2075,7 +2093,8 @@ void registerBrushEditTools(ToolRegistry& registry)
       .title("CSG Convex Merge")
       .description(
         "Replaces brushes by one brush that is the convex hull of all their vertices "
-        "(the gap between disjoint brushes is filled), like CSG > Convex Merge. With "
+        "(the gap between disjoint brushes is filled), like CSG > Convex Merge, in one "
+        "undo step. With "
         "'faces', a new brush is built from the convex hull of the faces' vertices and "
         "the original brushes are kept. Default: the selected brushes or faces. As in "
         "the editor, the new brush is selected afterwards. "
@@ -2097,7 +2116,8 @@ void registerBrushEditTools(ToolRegistry& registry)
       .title("CSG Subtract")
       .description(
         "Subtracts the cutter brushes from all other visible, unlocked brushes they "
-        "touch, like CSG > Subtract: the touched brushes are replaced by fragments "
+        "touch, like CSG > Subtract, in one undo step: the touched brushes are replaced "
+        "by fragments "
         "(new ids) and the cutters are removed. If the cutters touch nothing, they are "
         "still removed (warning NOTHING_SUBTRACTED). As in the editor, the fragments "
         "are selected afterwards. "
@@ -2118,7 +2138,8 @@ void registerBrushEditTools(ToolRegistry& registry)
     ToolDef{"csg_intersect"}
       .title("CSG Intersect")
       .description(
-        "Replaces brushes by their common volume, like CSG > Intersect. If they do not "
+        "Replaces brushes by their common volume, like CSG > Intersect, in one undo "
+        "step. If they do not "
         "overlap, all of them are removed as in the editor (warning "
         "EMPTY_INTERSECTION, brush null); use dryRun to check first. The new brush is "
         "selected afterwards. Example: {\"ids\": [\"brush:12\", \"brush:13\"]}")
@@ -2137,7 +2158,8 @@ void registerBrushEditTools(ToolRegistry& registry)
       .title("CSG Hollow")
       .description(
         "Hollows brushes into walls of the given thickness (default: the grid size), "
-        "like CSG > Hollow: each brush is replaced by wall brushes around its former "
+        "like CSG > Hollow, in one undo step: each brush is replaced by wall brushes "
+        "around its former "
         "interior. Brushes too small for the thickness stay unchanged (warning "
         "NOT_HOLLOWED). As in the editor, the walls are selected afterwards. "
         "Example: {\"ids\": [\"brush:12\"], \"thickness\": 16}")
@@ -2147,7 +2169,7 @@ void registerBrushEditTools(ToolRegistry& registry)
           .describe("Wall thickness in map units (default: the grid size)"),
       }))
       .output(object({
-        field("thickness", number()),
+        field("thickness", number()).describe("The wall thickness used (map units)"),
         field("walls", brushListSchema("The new wall brushes (nodeSummary)")),
         field("notHollowed", idListSchema("Brushes that were too small")),
       }))

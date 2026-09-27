@@ -404,7 +404,9 @@ Schema actionItemSchema()
     field("shortcuts", array(string())).required(),
     field("enabled", boolean()).required(),
     field("checked", any()).required().describe("null if the action is not checkable"),
-    field("opensDialog", boolean()).required(),
+    field("opensDialog", boolean())
+      .required()
+      .describe("Whether it asks the user (dialog, file chooser, prompt, confirmation)"),
     field("invokable", boolean())
       .required()
       .describe("Whether action_invoke runs it inside the call"),
@@ -440,24 +442,26 @@ void registerActionTools(ToolRegistry& registry)
         "\"Edit/CSG\"), query (case-insensitive substring of label or path), handling "
         "(invoke, dialog, refuse) and enabledOnly. detail \"full\" adds context, "
         "checkable, handling, dialog and reason. kinds counts the matches by kind. "
-        "Example: {\"menu\":\"Edit/CSG\"} -> {\"items\":[{\"path\":"
-        "\"Menu/Edit/CSG/Convex Merge\",\"label\":\"Convex Merge\",\"kind\":\"menu\","
-        "\"menu\":[\"Edit\",\"CSG\"],\"shortcuts\":[\"Ctrl+J\"],\"enabled\":false,"
-        "\"checked\":null,\"opensDialog\":false,\"invokable\":true,\"tools\":"
-        "[\"csg_merge\"]}, ...],\"total\":4,\"nextCursor\":null,\"kinds\":{\"menu\":4}}")
+        "Read-only. Examples: {\"menu\": \"Edit/CSG\"}; {\"query\": \"grid\", "
+        "\"enabledOnly\": true, \"view\": \"xy\"}")
       .input(object({
         field("kind", enumOf({"menu", "view", "tag", "entity"}))
-          .describe("Only actions of this kind"),
+          .describe(
+            "Only actions of this kind: menu (main menu), view (map view shortcuts), "
+            "tag (smart tags), entity (create an entity of a class)"),
         field("menu", string().nonEmpty())
           .describe("Only menu actions under this menu path, e.g. \"View/Grid\""),
         field("query", string().nonEmpty())
           .describe("Case-insensitive substring of the label or the path"),
         field("handling", enumOf({"invoke", "dialog", "refuse"}))
-          .describe("Only actions that action_invoke treats this way"),
+          .describe(
+            "Only actions that action_invoke treats this way: invoke (runs in the call), "
+            "dialog (needs the user), refuse (never runs from a call)"),
         field("enabledOnly", boolean()).describe("Only actions that are enabled now"),
         field("view", viewSchema())
           .describe(
-            "The view to evaluate enabled/checked for; default: the current view"),
+            "The view to evaluate enabled/checked for: 3d or the 2D views xy, xz, yz; "
+            "default: the window's current view"),
       }))
       .output(object({
         field("items", array(actionItemSchema())).required(),
@@ -492,15 +496,17 @@ void registerActionTools(ToolRegistry& registry)
         "the call's transaction, reloading definitions, debug crashes) fail with "
         "ACTION_REFUSED and name the tool to use. dryRun checks the action without "
         "running it. Returns executed, mapChanged, the action's checked state "
-        "afterwards and the current tool. Example: {\"path\":\"Menu/Edit/Tools/Clip "
-        "Tool\"} -> {\"result\":{\"path\":\"Menu/Edit/Tools/Clip Tool\",\"executed\":"
-        "true,\"checked\":true,\"currentTool\":\"Clip Tool\",...}}")
+        "afterwards and the current tool. Examples: {\"path\": \"Menu/Edit/Tools/Clip "
+        "Tool\"}; {\"path\": \"Menu/View/Grid/Set Grid Size 16\", \"view\": \"xy\"}; "
+        "{\"path\": \"Menu/File/Export/Wavefront OBJ...\", \"openDialog\": true}")
       .input(object({
         field("path", string().nonEmpty())
           .required()
           .describe("The action's path, e.g. \"Menu/View/Grid/Set Grid Size 16\""),
         field("view", viewSchema())
-          .describe("The view to run the action in; default: the current view"),
+          .describe(
+            "The view to run the action in: 3d, xy, xz or yz; default: the window's "
+            "current view"),
         field("openDialog", boolean())
           .defaultsTo(false)
           .describe("For actions that open a dialog: open it for the user after the call "
@@ -523,7 +529,7 @@ void registerActionTools(ToolRegistry& registry)
           .describe("The checked state afterwards; null if not checkable"),
         field("currentTool", any()).required().describe("The active tool afterwards"),
         field("tools", array(string())).required(),
-        field("wouldDo", string()).describe("dry run: what the call would do"),
+        field("wouldDo", string()).describe("Dry run only: what the call would do"),
       }))
       .mutation(Mutation::Map)
       .keepsActiveTool()

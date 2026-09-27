@@ -118,13 +118,6 @@ bool isOneOf(const std::string_view str, std::initializer_list<std::string_view>
   return std::ranges::find(list, str) != list.end();
 }
 
-bool hasAnyPrefix(
-  const std::string_view str, std::initializer_list<std::string_view> prefixes)
-{
-  return std::ranges::any_of(
-    prefixes, [&](const auto prefix) { return startsWith(str, prefix); });
-}
-
 /** The Levenshtein distance of two strings. */
 size_t editDistance(const std::string_view a, const std::string_view b)
 {
@@ -337,75 +330,52 @@ void collectBrushes(mdl::Node& node, std::vector<mdl::BrushNode*>& result)
 
 // Classes
 
-/** Classes whose position does not matter (targets of spotlights, compiler settings). */
-bool positionIndependent(const std::string_view classname)
+/**
+ * Should the entity stand on a floor (PlacementRule::standing, shared with the model
+ * placement checks)?
+ */
+bool standingClass(const mdl::Map& map, const mdl::Entity& entity)
 {
-  return isOneOf(
-    classname,
-    {"info_null",
-     "info_notnull",
-     "info_target",
-     "info_landmark",
-     "info_compile_parameters",
-     "info_texlights",
-     "light_environment"});
-}
-
-/** Monsters that fly or swim. */
-bool mayFly(const std::string_view classname)
-{
-  return isOneOf(
-    classname,
-    {"monster_wizard",
-     "monster_fish",
-     "monster_flyer",
-     "monster_hover",
-     "monster_alien_controller",
-     "monster_nihilanth",
-     "monster_apache",
-     "monster_osprey",
-     "monster_ichthyosaur",
-     "monster_leech",
-     "monster_flyer_flock"});
-}
-
-/** Classes that are often placed on walls, ceilings or in the air. */
-bool mayHang(const std::string_view classname)
-{
-  return hasAnyPrefix(
-    classname,
-    {"light",
-     "env_",
-     "ambient_",
-     "path_",
-     "target_",
-     "trigger_",
-     "misc_",
-     "func_",
-     "info_",
-     "speaker",
-     "scripted_",
-     "aiscripted_"});
-}
-
-bool hasModel(const mdl::Entity& entity)
-{
-  const auto spec = entity.modelSpecification();
-  return spec.is_success() && !spec.value().path.empty();
+  return placementRule(map, entity).standing;
 }
 
 /**
- * Classes that should stand on a floor: player starts, monsters, items, weapons, ammo,
- * and other classes with a model that are not usually hung on walls or in the air.
+ * Point entities without a body or a position-dependent effect: relays, counters,
+ * managers, master switches, global state, messages and screen effects. The game never
+ * tests them against solid geometry and they work anywhere, also inside a wall (the
+ * Half-Life FGD gives them no model, sprite or size: multisource, multi_manager,
+ * trigger_relay, trigger_auto, scripted_sentence, env_global, game_*, ...; Quake 2 and
+ * Quake 3 relay, delay, message and score targets).
  */
-bool standingClass(const mdl::Entity& entity)
+bool logicClass(const std::string_view classname)
 {
-  const auto& classname = entity.classname();
-  if (hasAnyPrefix(classname, {"info_player_", "monster_", "item_", "weapon_", "ammo_"}))
-  {
-    return true;
-  }
-  return hasModel(entity) && !mayHang(classname);
+  return startsWith(classname, "game_")
+         || isOneOf(
+           classname,
+           {"multisource",
+            "multi_manager",
+            "trigger_relay",
+            "trigger_auto",
+            "trigger_changetarget",
+            "trigger_counter",
+            "scripted_sentence",
+            "env_global",
+            "env_render",
+            "env_fade",
+            "env_message",
+            "target_relay",
+            "target_delay",
+            "target_print",
+            "target_score",
+            "target_give",
+            "target_remove_powerups",
+            "target_kill",
+            "target_help",
+            "target_secret",
+            "target_goal",
+            "target_changelevel",
+            "target_crosslevel_trigger",
+            "target_crosslevel_target"});
 }
 
 /** Classes that do nothing unless another entity triggers them by name. */
@@ -431,6 +401,23 @@ bool waitsForTrigger(const std::string_view classname)
 }
 
 // Geometry
+
+/** The first material of the brushes' faces that is not a tool material. */
+std::optional<std::string> sealingMaterial(
+  const std::vector<const mdl::BrushNode*>& brushes)
+{
+  for (const auto* brushNode : brushes)
+  {
+    for (const auto& face : brushNode->brush().faces())
+    {
+      if (!isToolMaterial(face.materialName()))
+      {
+        return face.materialName();
+      }
+    }
+  }
+  return std::nullopt;
+}
 
 /** Whether the point lies at least `depth` inside all faces of the brush. */
 bool insideBrush(const mdl::Brush& brush, const vm::vec3d& point, const double depth)
@@ -462,6 +449,136 @@ std::vector<const mdl::BrushNode*> brushesContaining(
     }
   }
   return result;
+}
+
+/**
+ * The free cells of the grid slice perpendicular to `axis` that are connected to `start`
+ * within the slice, or nullopt if they reach the border of the grid (the region is not
+ * bounded within the grid) or `start` is solid.
+ */
+std::optional<std::vector<CellIndex>> sliceRegion(
+  const VoxelGrid& grid, const CellIndex& start, const size_t axis)
+{
+  if (grid.solid[grid.index(start)])
+  {
+    return std::nullopt;
+  }
+  const auto u = (axis + 1) % 3;
+  const auto v = (axis + 2) % 3;
+  auto result = std::vector<CellIndex>{start};
+  auto visited = std::unordered_set<size_t>{grid.index(start)};
+  for (size_t i = 0; i < result.size(); ++i)
+  {
+    const auto cell = result[i];
+    for (const auto d : {u, v})
+    {
+      if (cell[d] == 0 || cell[d] + 1 >= grid.dims[d])
+      {
+        return std::nullopt;
+      }
+      for (const auto next : {cell[d] - 1, cell[d] + 1})
+      {
+        auto neighbour = cell;
+        neighbour[d] = next;
+        const auto index = grid.index(neighbour);
+        if (!grid.solid[index] && visited.insert(index).second)
+        {
+          result.push_back(neighbour);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * A box brush that seals a leak gap (two cells of the leak prediction's grid along the
+ * path to the outside), or nullopt if the gap is no hole. The hole is the free region
+ * around the gap in the slice perpendicular to the path that widens (or opens) further
+ * inside, followed inwards over the wall's thickness; a missing wall has no such
+ * constriction. The box covers the hole's cells plus one cell into the rim (the cells
+ * are conservative, the real hole may be up to a cell larger) and is recessed by a unit
+ * into the wall on both sides, so that it does not z-fight with the wall faces.
+ */
+std::optional<vm::bbox3d> gapSealBox(
+  const mdl::Map& map, const vm::bbox3d& gap, const double cellSize)
+{
+  constexpr auto Radius = 16.0;
+  auto grid = makeGrid(gap.expand(Radius * cellSize), cellSize, 0, 1'000'000);
+  if (grid.is_error())
+  {
+    return std::nullopt;
+  }
+  auto voxels = std::move(grid).value();
+  rasterize(voxels, map, [](const auto&, const BrushRole& role) { return role.seals; });
+
+  const auto size = gap.size();
+  const auto axis = size.x() >= size.y() && size.x() >= size.z() ? size_t(0)
+                    : size.y() >= size.z()                       ? size_t(1)
+                                                                 : size_t(2);
+  const auto first = voxels.cellAt(gap.min + vm::vec3d{0.5, 0.5, 0.5} * cellSize);
+  if (!first || size[axis] < 1.5 * cellSize || first->at(axis) + 1 >= voxels.dims[axis])
+  {
+    return std::nullopt;
+  }
+  auto second = *first;
+  ++second[axis];
+
+  // either cell may be the inner one; walk inwards from it
+  for (const auto& [start, inwards] : {std::pair{*first, -1}, std::pair{second, 1}})
+  {
+    const auto base = sliceRegion(voxels, start, axis);
+    if (!base)
+    {
+      continue;
+    }
+    auto bounds = voxels.cellBounds(base->front());
+    for (const auto& cell : *base)
+    {
+      bounds = vm::merge(bounds, voxels.cellBounds(cell));
+    }
+    auto cell = start;
+    for (size_t step = 1; step <= size_t(Radius); ++step)
+    {
+      if (
+        (inwards < 0 && cell[axis] == 0)
+        || (inwards > 0 && cell[axis] + 1 >= voxels.dims[axis]))
+      {
+        break;
+      }
+      cell[axis] = size_t(int64_t(cell[axis]) + inwards);
+      if (voxels.solid[voxels.index(cell)])
+      {
+        break;
+      }
+      const auto region = sliceRegion(voxels, cell, axis);
+      if (!region || region->size() > base->size())
+      {
+        // the hole opens into the room: seal the hole's slices
+        auto box = bounds;
+        for (size_t i = 0; i < 3; ++i)
+        {
+          if (i != axis)
+          {
+            box.min[i] -= cellSize;
+            box.max[i] += cellSize;
+          }
+        }
+        box = vm::bbox3d{vm::floor(box.min), vm::ceil(box.max)};
+        if (box.max[axis] - box.min[axis] > 2.0)
+        {
+          box.min[axis] += 1.0;
+          box.max[axis] -= 1.0;
+        }
+        return box;
+      }
+      for (const auto& other : *region)
+      {
+        bounds = vm::merge(bounds, voxels.cellBounds(other));
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 double distanceToBox(const vm::vec3d& point, const vm::bbox3d& box)
@@ -654,18 +771,15 @@ void checkPlacement(CheckRun& run, const Scope& scope)
   {
     const auto& entity = entityNode->entity();
     const auto& classname = entity.classname();
-    if (positionIndependent(classname))
+    const auto rule = placementRule(map, entity);
+    if (rule.positionIndependent || logicClass(classname))
     {
       continue;
     }
     const auto id = ids.format(*entityNode);
     const auto origin = entity.origin();
-    const auto mayFloat =
-      mayFly(classname) || !brushesContaining(map, origin, [](const auto& role) {
-                              return role.liquid;
-                            }).empty();
 
-    if (!standingClass(entity))
+    if (!rule.standing)
     {
       // only the origin matters
       const auto solid =
@@ -689,18 +803,15 @@ void checkPlacement(CheckRun& run, const Scope& scope)
       continue;
     }
 
-    // entities with a loadable model: the model placement checks
+    // entities with a loadable model: the model placement checks (without the findings
+    // the rule exempts)
     if (const auto state = resolveEntityModel(entity, loader);
-        state.is_success() && state.value().worldBounds())
+        state.is_success() && state.value().worldBounds()
+        && checksModelPlacement(rule, state.value()))
     {
       const auto bounds = *state.value().worldBounds();
       for (auto& issue : modelPlacementIssues(map, ids, {entityNode}, loader))
       {
-        if (
-          mayFloat && (issue.code == "MODEL_FLOATING" || issue.code == "MODEL_NO_FLOOR"))
-        {
-          continue;
-        }
         auto finding = Finding{};
         finding.code = issue.code;
         finding.severity = "warning";
@@ -742,7 +853,12 @@ void checkPlacement(CheckRun& run, const Scope& scope)
     // other standing entities: the definition's bounding box
     const auto box = entityNode->logicalBounds();
     const auto check = checkModelPlacement(
-      box, map, ids, id, fmt::format("The bounding box of {} ({})", id, classname));
+      box,
+      map,
+      ids,
+      id,
+      fmt::format("The bounding box of {} ({})", id, classname),
+      PlacementTolerance);
     const auto findingOf = [&](const std::string_view code) -> const PlacementFinding* {
       const auto it = std::ranges::find_if(
         check.findings, [&](const auto& finding) { return finding.code == code; });
@@ -789,7 +905,7 @@ void checkPlacement(CheckRun& run, const Scope& scope)
       out.push_back(std::move(finding));
     }
     else if (
-      !mayFloat
+      !rule.mayFloat
       && ((floating && floating->distance.value_or(0.0) > FloatingThreshold) || noFloor))
     {
       auto finding = Finding{};
@@ -1119,14 +1235,14 @@ void checkLinks(CheckRun& run, const Scope& scope)
     finding.code = "LINK_TARGET_MISSING";
     finding.severity = "warning";
     finding.description = fmt::format(
-      "{} ({}) {} '{}' ({}), but no entity has that name{}.",
+      "{} ({}) {} '{}' ({}), but no entity has that name{}",
       id,
       entity.classname(),
       multiManagerKey ? "triggers" : "targets",
       name,
       multiManagerKey ? fmt::format("multi_manager key '{}'", key)
                       : fmt::format("key '{}'", key),
-      similar ? fmt::format("; did you mean '{}'?", *similar) : "");
+      similar ? fmt::format("; did you mean '{}'?", *similar) : std::string{"."});
     finding.objectId = id;
     finding.objectIds = {id};
     finding.position = entity.origin();
@@ -1450,22 +1566,50 @@ void checkRooms(CheckRun& run, const Scope& scope)
       {
         brushes.push_back(ids.format(*brushNode));
       }
-      finding.suggestedFix = fixJson(fmt::format(
-        "Seal the gap from {} to {} between the brushes {} (the compiler reports a "
-        "leak), or move the entity into a sealed room.",
-        formatPoint(leak.gap->min),
-        formatPoint(leak.gap->max),
-        fmt::join(brushes, ", ")));
+      if (const auto box = gapSealBox(map, *leak.gap, report.cellSize))
+      {
+        auto args = Json{{"min", vectorJson(box->min)}, {"max", vectorJson(box->max)}};
+        if (const auto material = sealingMaterial(leak.gapBrushes))
+        {
+          args["material"] = *material;
+        }
+        finding.suggestedFix = fixJson(
+          fmt::format(
+            "Seal the hole between the brushes {} with a box brush from {} to {} (the "
+            "compiler reports a leak); it overlaps the rim of the hole. Alternatively "
+            "move the entity into a sealed room.",
+            fmt::join(brushes, ", "),
+            formatPoint(box->min),
+            formatPoint(box->max)),
+          "brush_create_box",
+          std::move(args));
+      }
+      else
+      {
+        // no single call fixes it
+        finding.description += fmt::format(
+          " The gap from {} to {} is no small hole (e.g. a missing wall), so there is "
+          "no suggested fix: close the room with brushes (brush_create_box) or move "
+          "the entity into a sealed room.",
+          formatPoint(leak.gap->min),
+          formatPoint(leak.gap->max));
+      }
     }
-    else
-    {
+    else if (
       const auto move = freeSpotMove(
         run,
         leak.entity->logicalBounds(),
-        standingClass(leak.entity->entity()) ? Placement::Floor : Placement::Any);
+        standingClass(map, leak.entity->entity()) ? Placement::Floor : Placement::Any))
+    {
       finding.suggestedFix =
-        move ? moveFix("Move it into the nearest room.", issue.objectId, *move)
-             : fixJson("Move it into a sealed room (free_spots finds a free position).");
+        moveFix("Move it into the nearest room.", issue.objectId, *move);
+    }
+    else
+    {
+      // no single call fixes it
+      finding.description +=
+        " No free position inside a room was found for a suggested move; build a "
+        "sealed room around it or move it into one (free_spots finds a free position).";
     }
     out.push_back(std::move(finding));
   }
@@ -1480,7 +1624,7 @@ void checkRooms(CheckRun& run, const Scope& scope)
   for (auto* entityNode : pointEntitiesIn(map, scope))
   {
     const auto& entity = entityNode->entity();
-    if (outside.contains(entityNode) || positionIndependent(entity.classname()))
+    if (outside.contains(entityNode) || placementRule(map, entity).positionIndependent)
     {
       continue;
     }
@@ -1531,7 +1675,7 @@ void checkRooms(CheckRun& run, const Scope& scope)
     const auto move = freeSpotMove(
       run,
       entityNode->logicalBounds(),
-      standingClass(entity) ? Placement::Floor : Placement::Any);
+      standingClass(map, entity) ? Placement::Floor : Placement::Any);
     finding.suggestedFix =
       move ? moveFix("Move it into the nearest room.", id, *move)
            : fixJson("Move it into a room (spaces_list and free_spots find one).");
@@ -1734,46 +1878,49 @@ void registerMapCheckTools(ToolRegistry& registry)
       .title("Check Map")
       .description(
         "Runs agent-oriented checks beyond the editor's validators (issues_list) and "
-        "returns findings with a severity, a plain description and a suggested fix "
-        "(the MCP tool call that fixes it, when there is one). Checks: placement "
-        "(ENTITY_IN_SOLID: a point entity's box, or for classes that need not stand "
-        "its origin, inside solid brushes; ENTITY_FLOATING: a player start, monster or "
-        "item more than 16 units above the floor; MODEL_BELOW_FLOOR / MODEL_FLOATING "
-        "/ MODEL_PENETRATES_BRUSHES / MODEL_NO_FLOOR for entities whose model can be "
-        "loaded; lights, sounds, targets, path corners and flying or swimming monsters "
-        "may float), player_start (MISSING_PLAYER_START, and "
-        "MISSING_SINGLE_PLAYER_START (info) when only deathmatch or coop starts exist), "
-        "links (LINK_TARGET_MISSING: target, killtarget or a multi_manager key names "
-        "no entity; LINK_SOURCE_MISSING: a named door, relay, counter, train, path "
-        "corner or target_* that nothing triggers; NEEDS_TARGETNAME: a relay, counter, "
-        "multi_manager, path corner or target_* without a name), materials "
-        "(MISSING_MATERIAL: faces whose material is in no loaded collection, one "
-        "finding per material) and rooms (ENTITY_OUTSIDE_HULL: the void reaches the "
-        "entity, the map leaks; ENTITY_OUTSIDE_SPACES: a point entity in no room of "
-        "spaces_list, e.g. inside geometry or in a small pocket). Finding ids are "
-        "stable (check:<code>:<object>). Runs the space analysis when needed (about a "
-        "quarter of a second on 20 rooms), reports progress and can be cancelled "
-        "between checks. Example: {\"checks\": [\"links\", \"player_start\"]} -> "
-        "{\"items\": [{\"id\": \"check:MISSING_PLAYER_START:map\", \"check\": "
-        "\"player_start\", \"code\": \"MISSING_PLAYER_START\", \"severity\": \"error\", "
-        "\"description\": \"The map has no player start ...\", \"objectId\": "
-        "\"world\", \"suggestedFix\": {\"description\": \"...\", \"tool\": "
-        "\"entity_create_point\", \"args\": {\"classname\": \"info_player_start\", "
-        "\"position\": [256, 192, 24], \"dropToFloor\": true}}}], \"total\": 1, "
-        "\"counts\": {\"MISSING_PLAYER_START\": 1}, \"checksRun\": [\"player_start\", "
-        "\"links\"], \"skipped\": []}")
+        "returns findings, each with a severity, a plain description and a "
+        "suggestedFix (the MCP tool call with its args that fixes it, when there is "
+        "one). Read-only. Checks: placement (ENTITY_IN_SOLID: a point entity inside "
+        "solid brushes, hidden ones included; logic entities such as multi_manager, "
+        "multisource or trigger_relay work anywhere and are skipped; ENTITY_FLOATING: "
+        "a player start, monster or item more than 16 map units above the floor; "
+        "MODEL_BELOW_FLOOR / MODEL_FLOATING / MODEL_PENETRATES_BRUSHES / "
+        "MODEL_NO_FLOOR for standing entities whose model can be loaded, by the same "
+        "rule as issues_list; lights, sounds, targets and path corners get no model "
+        "checks, flying or swimming monsters may float), player_start "
+        "(MISSING_PLAYER_START; MISSING_SINGLE_PLAYER_START "
+        "(info) when only deathmatch or coop starts exist), links "
+        "(LINK_TARGET_MISSING: target, killtarget or a multi_manager key names no "
+        "entity; LINK_SOURCE_MISSING: a named door, relay, counter, train, path corner "
+        "or target_* that nothing triggers; NEEDS_TARGETNAME: such an entity without a "
+        "name), materials (MISSING_MATERIAL: one finding per material in no loaded "
+        "collection) and rooms (ENTITY_OUTSIDE_HULL: the void reaches the entity, the "
+        "map leaks; the fix is a brush_create_box over the gap or a move into a room; "
+        "ENTITY_OUTSIDE_SPACES: a point entity in no room of spaces_list). "
+        "Finding ids (check:<code>:<object>) are stable across calls. Also returns "
+        "counts per code, checksRun and skipped. Runs the space analysis when needed "
+        "(about a quarter of a second on 20 rooms), reports progress and can be "
+        "cancelled between checks. Examples: {\"checks\": [\"links\", "
+        "\"player_start\"]}; {\"ids\": [\"entity:7\", \"group:3\"], \"checks\": "
+        "[\"placement\"]}")
       .input(object({
         field("checks", array(enumOf(CheckNames)).nonEmpty())
-          .describe("The checks to run. Default: all"),
+          .describe(
+            "The checks to run: placement, player_start, links, materials, rooms. "
+            "Default: all"),
         field("ids", array(objectId()).nonEmpty())
           .describe(
             "Limit the object-based checks to these objects and their contents "
             "(entities, brushes, groups, layers). player_start is a map-level check "
             "and runs with ids only when listed in checks. Default: the whole map"),
         field("cellSize", number().min(2).max(1024))
-          .describe("Cell size of the space analysis (default: half the player width)"),
+          .describe(
+            "Cell size of the space analysis in map units (default: half the player "
+            "width); smaller is more precise and slower"),
         field("openingSize", number().min(8).defaultsTo(96))
-          .describe("Openings up to this size separate spaces (space analysis)"),
+          .describe(
+            "Openings up to this size in map units separate spaces (rooms check), as "
+            "in spaces_list"),
       }))
       .output(object({
         field("items", array(findingSchema())).required(),

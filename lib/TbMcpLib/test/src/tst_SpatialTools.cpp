@@ -445,6 +445,32 @@ TEST_CASE("SpatialTools")
       CHECK(containsId(plan["entities"], fixture.id(*ogre)));
     }
 
+    SECTION("image markers and entitiesTruncated")
+    {
+      const auto plan =
+        fixture.call("map_plan_view", {{"height", 64}, {"format", "image"}});
+      CHECK(plan["entitiesTruncated"] == false);
+      REQUIRE(!fixture.host().snapshot.requests.empty());
+      const auto& request = fixture.host().snapshot.last();
+      // every listed entity is marked, also those above the slice (the light at z 200)
+      REQUIRE(request.markers.size() == plan["entities"].size());
+      auto labels = std::string{};
+      for (const auto& marker : request.markers)
+      {
+        CHECK(marker.position.z() < request.camera.position.z());
+        CHECK(
+          marker.position.z() > request.camera.position.z() - request.camera.farPlane);
+        labels += marker.label;
+      }
+      CHECK(labels.find('L') != std::string::npos);
+      CHECK(labels.find('P') != std::string::npos);
+
+      const auto truncated =
+        fixture.call("map_plan_view", {{"height", 64}, {"maxEntities", 2}});
+      CHECK(truncated["entities"].size() == 2);
+      CHECK(truncated["entitiesTruncated"] == true);
+    }
+
     SECTION("defaults")
     {
       const auto plan = fixture.call("map_plan_view");

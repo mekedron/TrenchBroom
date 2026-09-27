@@ -26,7 +26,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E12 | Spatial understanding: picking, rooms, free spots, placement checks | §5, §15, §17 | v1 | Done |
 | E13 | Validation and engine launch | §15, §16 | MVP + v1 | Done |
 | E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Done |
-| E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Not started |
+| E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Done |
 | E16 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
 
 ---
@@ -417,14 +417,17 @@ Goal: the agent can see what it built, reach every remaining editor action, and 
 
 Goal: agents use the server well without extra hints.
 
-- [ ] E15.1 Agent guide resource: coordinate conventions, grid, typical dimensions per game (player size, door, step height, jump height), workflow tips, common pitfalls.
-- [ ] E15.2 Review every tool description and schema for clarity; add examples.
-- [ ] E15.3 Prompts: blockout a level, populate with enemies and items, lighting pass, texture pass, fix all issues, compile and debug, explain this map, explain an entity, convert / clean up a map.
-- [ ] E15.4 Run scenarios S1–S7 and S9 from 04 with a real agent; record results and fix gaps.
-- [ ] E15.5 User documentation: how to enable the server and connect Claude Code / Claude Desktop / IDEs; add a section to the TrenchBroom manual.
-- [ ] E15.6 Lazy bridge start: the stdio bridge answers `initialize`, `tools/list`, `resources/list` and `prompts/list` itself (from the TbMcpLib registries) and launches or connects to the editor only on the first call that needs it, so starting an MCP client never opens TrenchBroom by itself.
+- [x] E15.1 Agent guide resource: coordinate conventions, grid, typical dimensions per game (player size, door, step height, jump height), workflow tips, common pitfalls.
+- [x] E15.2 Review every tool description and schema for clarity; add examples.
+- [x] E15.3 Prompts: blockout a level, populate with enemies and items, lighting pass, texture pass, fix all issues, compile and debug, explain this map, explain an entity, convert / clean up a map.
+- [x] E15.4 Run scenarios S1–S7 and S9 from 04 with a real agent; record results and fix gaps.
+- [x] E15.5 User documentation in `docs/mcp/CONNECTING.md` and the TbMcpLib README: how to enable the server and connect Claude Code / Claude Desktop / IDEs, the mapping skills, and troubleshooting. The upstream user manual stays unchanged.
+- [x] E15.6 Lazy bridge start: the stdio bridge answers `initialize`, `tools/list`, `resources/list` and `prompts/list` itself (from the TbMcpLib registries) and launches or connects to the editor only on the first call that needs it, so starting an MCP client never opens TrenchBroom by itself.
 
 **Done when:** all MVP and v1 scenarios pass with a real agent.
+
+Result: S1–S7 pass with an agent on Half-Life (Quake has no game data on the test machine; the engine was not
+launched); S9 is covered by automated tests. See `06-scenario-results.md`, including the open minor gaps.
 
 ---
 

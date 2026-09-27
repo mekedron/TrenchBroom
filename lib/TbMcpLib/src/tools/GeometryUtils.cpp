@@ -36,6 +36,8 @@
 #include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Hit.h"
+#include "mdl/Layer.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/ModelUtils.h"
@@ -187,6 +189,19 @@ bool isPointEntity(const mdl::Node& node)
 {
   const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(&node);
   return entityNode && !entityNode->hasChildren();
+}
+
+bool inOmittedLayer(const mdl::Node& node)
+{
+  for (const auto* current = &node; current; current = current->parent())
+  {
+    if (const auto* layerNode = dynamic_cast<const mdl::LayerNode*>(current);
+        layerNode && layerNode->layer().omitFromExport())
+    {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::vector<RayHit> castRay(

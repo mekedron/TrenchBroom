@@ -34,6 +34,7 @@
 #include "mcp/tools/CompileLog.h"
 #include "mcp/tools/CompileUtils.h"
 #include "mcp/tools/GameTools.h"
+#include "mcp/tools/SpaceAnalysis.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CompilationConfig.h"
 #include "mdl/Entity.h"
@@ -878,14 +879,14 @@ Schema runStatusSchema(std::vector<Field> extraFields = {}, const bool required 
   auto fields = std::vector<Field>{
     field("run", string()).describe("Run handle, e.g. run:3"),
     field("document", string()).describe("Handle of the compiled document at start"),
-    field("documentOpen", boolean()),
+    field("documentOpen", boolean()).describe("Whether that document is still open"),
     field("game", string()),
     field("profile", string()).describe("Name of the compiled profile"),
     field("preset", any()).describe("Preset name, or null for a saved profile"),
-    field("test", boolean()),
+    field("test", boolean()).describe("Test mode: the tasks were only logged"),
     field("state", enumOf({"running", "succeeded", "failed", "cancelled"})),
-    field("startedAt", string()),
-    field("endedAt", any()),
+    field("startedAt", string()).describe("ISO 8601 time"),
+    field("endedAt", any()).describe("ISO 8601 time, or null while running"),
     field("elapsedMs", integer()),
     field(
       "progress",
@@ -893,7 +894,7 @@ Schema runStatusSchema(std::vector<Field> extraFields = {}, const bool required 
     field("currentTask", any()).describe("{index, type, description} or null"),
     field("tasks", array(any()))
       .describe("{index, type, state, description, exitCode?} per enabled task"),
-    field("exitCodes", array(integer())),
+    field("exitCodes", array(integer())).describe("Exit codes of the tools run so far"),
     field("errorCount", integer()),
     field("warningCount", integer()),
     field("errors", array(any())).describe("{message, line, task}, at most 50"),
@@ -906,7 +907,8 @@ Schema runStatusSchema(std::vector<Field> extraFields = {}, const bool required 
         "pointFileExists, hint}"),
     field("output", any())
       .describe("{compiledFile, compiledFileExists, copiedTo}: absolute paths"),
-    field("log", any()).describe("{uri, lineCount, text?, truncated}"),
+    field("log", any())
+      .describe("{uri, lineCount, text?, truncated}; text is the tail or full log"),
   };
   if (required)
   {
@@ -1125,6 +1127,25 @@ ToolResult compileRun(CallContext& context, const Args& args)
       {});
   }
 
+  if (const auto relativeWads = relativeWadPaths(map); !relativeWads.empty())
+  {
+    auto wads = std::vector<std::string>{};
+    for (const auto& wad : relativeWads)
+    {
+      wads.push_back(
+        wad.absolutePath ? fmt::format("{} (absolute: {})", wad.path, *wad.absolutePath)
+                         : fmt::format("{} (not found)", wad.path));
+    }
+    context.warn(
+      "RELATIVE_WAD_PATH",
+      fmt::format(
+        "The map's WAD list has relative paths: {}. Compile tools such as hlcsg open "
+        "them relative to their working directory and usually cannot find them; set "
+        "the WAD list again with materials_collections_set, which stores found WADs "
+        "with absolute paths.",
+        kdl::str_join(wads, ", ")));
+  }
+
   if (context.dryRun())
   {
     auto tasksJson = Json::array();
@@ -1332,6 +1353,50 @@ Json nearestEntitiesJson(
   return result;
 }
 
+/**
+ * Walks the path from its end inside a room to the first sampled point in the void that
+ * surrounds the rooms (space analysis); null if the path does not enter the void or
+ * starts in it at both ends.
+ */
+Json voidEntryPoint(const SpaceMap& spaces, const std::vector<vm::vec3f>& points)
+{
+  const auto isVoid = [&](const vm::vec3d& point) {
+    return spaces.labelAt(point) == SpaceMap::Void;
+  };
+
+  auto path = std::vector<vm::vec3d>{};
+  for (const auto& point : points)
+  {
+    path.emplace_back(point);
+  }
+  if (isVoid(path.front()))
+  {
+    if (isVoid(path.back()))
+    {
+      return nullptr;
+    }
+    std::ranges::reverse(path);
+  }
+
+  const auto step = spaces.grid.cellSize / 4.0;
+  for (size_t i = 1; i < path.size(); ++i)
+  {
+    const auto& from = path[i - 1];
+    const auto& to = path[i];
+    const auto length = vm::distance(from, to);
+    const auto samples = std::max(size_t(1), size_t(std::ceil(length / step)));
+    for (size_t j = 1; j <= samples; ++j)
+    {
+      const auto point = from + (to - from) * (double(j) / double(samples));
+      if (isVoid(point))
+      {
+        return toJson(point);
+      }
+    }
+  }
+  return nullptr;
+}
+
 ToolResult pointFileLoad(CallContext& context, const Args& args)
 {
   auto& runs = *context.server().compileRuns;
@@ -1436,6 +1501,14 @@ ToolResult pointFileLoad(CallContext& context, const Args& args)
       walk(points.rbegin(), points.rend());
     }
   }
+  if (leavesMapAt.is_null() && hasBrushes && points.size() > 1)
+  {
+    // the path ends in the void between the rooms, inside the brush bounds
+    if (const auto spaces = analyzeSpaces(context.map()); spaces.is_success())
+    {
+      leavesMapAt = voidEntryPoint(spaces.value(), points);
+    }
+  }
 
   return Json{
     {"path", path.value().string()},
@@ -1448,8 +1521,8 @@ ToolResult pointFileLoad(CallContext& context, const Args& args)
     {"leavesMapAt", leavesMapAt},
     {"hint",
      "The path runs from an entity inside the map to the void. The gap in the map's "
-     "hull is usually near leavesMapAt (or near 'end'); close it with a brush, then "
-     "compile again and unload the point file with pointfile_unload."},
+     "hull is usually near leavesMapAt (or near 'end' if it is null); close it with a "
+     "brush, then compile again and unload the point file with pointfile_unload."},
   };
 }
 
@@ -1549,7 +1622,9 @@ ToolResult portalFileUnload(CallContext& context, const Args&)
 Field gameField()
 {
   return field("game", string())
-    .describe("Game name (game_list); default: the target document's game");
+    .describe(
+      "Game name as game_list lists it, e.g. 'Quake'; default: the target "
+      "document's game");
 }
 
 const auto Workflow = std::string{
@@ -1570,16 +1645,18 @@ void registerCompileTools(ToolRegistry& registry)
         "'notSet', 'notFound', 'notAFile' or 'notExecutable'. Half-Life uses csg, bsp, "
         "vis and rad (VHLT or ZHLT: hlcsg, hlbsp, hlvis, hlrad); Quake uses qbsp, vis "
         "and light, Quake 2 bsp, vis and light (ericw-tools); Quake 3 uses q3map2. "
-        "Profiles refer to them as ${name}, e.g. ${qbsp}. "
-        + Workflow + " Example: {\"game\": \"Half-Life\"}")
+        "Profiles refer to them as ${name}, e.g. ${qbsp}. Read-only; set missing "
+        "paths with compile_tools_set, then compile with compile_run. Examples: {}; "
+        "{\"game\": \"Half-Life\"}")
       .input(object({gameField()}))
       .output(object({
         field("game", string()).required(),
-        field("family", any()).describe("halflife, quake, quake2, quake3 or null"),
-        field("gamePath", string()),
+        field("family", any())
+          .describe("Tool chain of the presets: halflife, quake, quake2, quake3 or null"),
+        field("gamePath", string()).describe("The game folder (preferences)"),
         field("tools", array(any()))
           .describe("{name, description, variable, path, status} per tool"),
-        field("allConfigured", boolean()),
+        field("allConfigured", boolean()).describe("Whether every tool's status is 'ok'"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Optional)
@@ -1592,7 +1669,9 @@ void registerCompileTools(ToolRegistry& registry)
       .description(
         "Sets the paths of a game's compile tools (preferences, not undoable). Paths "
         "must be absolute; '' clears a path. A path that does not exist or is not "
-        "executable is set anyway and reported as a warning. Example: {\"game\": "
+        "executable is set anyway and reported as a warning. Returns the tools with "
+        "their status as compile_tools_get does, plus the changed ones. Example: "
+        "{\"game\": "
         "\"Half-Life\", \"tools\": {\"csg\": \"/opt/vhlt/hlcsg\", \"bsp\": "
         "\"/opt/vhlt/hlbsp\", \"vis\": \"/opt/vhlt/hlvis\", \"rad\": "
         "\"/opt/vhlt/hlrad\"}}")
@@ -1600,7 +1679,9 @@ void registerCompileTools(ToolRegistry& registry)
         gameField(),
         field("tools", object({}).allowAdditionalProperties())
           .required()
-          .describe("Tool name -> absolute path of the executable, or '' to clear"),
+          .describe(
+            "Tool name (as compile_tools_get lists it, e.g. 'qbsp') -> absolute path of "
+            "the executable, or '' to clear"),
       }))
       .output(object({
         field("game", string()).required(),
@@ -1626,14 +1707,15 @@ void registerCompileTools(ToolRegistry& registry)
         "(or last mod's) maps folder. Run one with compile_run {\"preset\": "
         "\"normal\"} or save it as an editable profile with compile_profile_save. "
         "missingTools lists tools whose path is not set up (compile_tools_set). "
-        + compilePresetsSummary() + " Example: {}")
+        "Read-only. "
+        + compilePresetsSummary() + " Examples: {}; {\"game\": \"Quake\"}")
       .input(object({gameField()}))
       .output(object({
         field("game", string()).required(),
         field("family", any()),
         field("presets", array(any()))
           .describe("{name, description, profile, tools, missingTools}"),
-        field("summary", string()),
+        field("summary", string()).describe("What the presets of each tool chain do"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Optional)
@@ -1648,7 +1730,8 @@ void registerCompileTools(ToolRegistry& registry)
         "their work directory and tasks: exportMap, runTool, copyFiles, renameFile, "
         "deleteFiles, launchEngine. Specs use variables such as ${MAP_DIR_PATH}, "
         "${WORK_DIR_PATH}, ${MAP_BASE_NAME}, ${GAME_DIR_PATH}, ${MODS[-1]} and the "
-        "compile tools, e.g. ${qbsp}. Example: {}")
+        "compile tools, e.g. ${qbsp}. Read-only; run a profile with compile_run "
+        "{\"profile\": \"<name>\"}. Examples: {}; {\"game\": \"Half-Life\"}")
       .input(object({gameField()}))
       .output(object({
         field("game", string()).required(),
@@ -1675,15 +1758,17 @@ void registerCompileTools(ToolRegistry& registry)
         gameField(),
         field("profile", compilationProfileSchema())
           .describe("The profile; exclusive with 'preset'"),
-        field("preset", string()).describe("Name of a preset (compile_presets_list)"),
+        field("preset", string())
+          .describe("Name of a preset (compile_presets_list); exclusive with 'profile'"),
         field("name", string())
           .describe("Name of the saved profile; default: the profile's or preset's name"),
         field("overwrite", boolean().defaultsTo(false))
-          .describe("Replace a profile with the same name"),
+          .describe("Replace a profile with the same name; otherwise such a name fails "
+                    "with FILE_EXISTS"),
       }))
       .output(object({
         field("game", string()).required(),
-        field("profile", any()).required(),
+        field("profile", any()).required().describe("The saved profile"),
         field("created", boolean()).describe("false if an existing profile was replaced"),
         field("wouldDo", wouldDoField()),
       }))
@@ -1695,16 +1780,20 @@ void registerCompileTools(ToolRegistry& registry)
     ToolDef{"compile_profile_delete"}
       .title("Delete Compile Profile")
       .description(
-        "Deletes a saved compile profile of a game (not undoable). Example: {\"name\": "
-        "\"Release\"}")
+        "Deletes a saved compile profile of a game (written to the game's compilation "
+        "config, not undoable); compile_profiles_list lists the names. Returns the "
+        "deleted name and the remaining profiles. Examples: {\"name\": \"Release\"}; "
+        "{\"game\": \"Quake\", \"name\": \"BSP only\"}")
       .input(object({
         gameField(),
-        field("name", string()).required().describe("Profile name"),
+        field("name", string())
+          .required()
+          .describe("Name of the saved profile (compile_profiles_list)"),
       }))
       .output(object({
         field("game", string()).required(),
-        field("deleted", string()),
-        field("remaining", array(string())),
+        field("deleted", string()).describe("Name of the deleted profile"),
+        field("remaining", array(string())).describe("Names of the remaining profiles"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -1721,13 +1810,20 @@ void registerCompileTools(ToolRegistry& registry)
         "compile_status. Unsaved changes are compiled too (the export task writes the "
         "current state), but the map must have been saved once. One compile at a time "
         "per document. test: true only logs the commands that would run. Fails if a "
-        "tool the profile uses is not set up. "
-        + Workflow + " " + compilePresetsSummary() + " Example: {\"preset\": \"normal\"}")
+        "tool the profile uses is not set up; warns RELATIVE_WAD_PATH if the map's WAD "
+        "list has relative paths, which compile tools usually cannot open. Pass exactly "
+        "one of preset and profile; "
+        "compile_presets_list describes what each preset runs per game. "
+        + Workflow
+        + " Examples: {\"preset\": \"normal\"}; {\"profile\": \"Release\", \"test\": "
+          "true}")
       .input(object({
-        field("profile", string()).describe("Name of a saved profile"),
-        field("preset", string()).describe("Name of a preset: fast, normal or full"),
+        field("profile", string())
+          .describe("Name of a saved profile (compile_profiles_list)"),
+        field("preset", string())
+          .describe("Name of a preset: fast (no vis), normal or full quality"),
         field("test", boolean().defaultsTo(false))
-          .describe("Only log what the tasks would do"),
+          .describe("Only log the commands the tasks would run, without running them"),
       }))
       .output(runStatusSchema(
         {
@@ -1748,14 +1844,18 @@ void registerCompileTools(ToolRegistry& registry)
         "progress, current task, exit codes, parsed errors and warnings, leak (with "
         "the point file to load), the compiled file and where it was copied, and the "
         "log tail or full log. Defaults to the latest run of the target document. The "
-        "full log is also the resource trenchbroom://compile/{run}/log. Example: "
-        "{\"run\": \"run:1\", \"log\": \"tail\", \"tailLines\": 20}")
+        "full log is also the resource trenchbroom://compile/<run>/log. Read-only; "
+        "poll it every few seconds while state is 'running'. Examples: {}; {\"run\": "
+        "\"run:1\", \"log\": \"tail\", \"tailLines\": 20}")
       .input(object({
-        field("run", string()).describe("Run handle, e.g. run:1; default: latest run"),
+        field("run", string())
+          .describe(
+            "Run handle from compile_run, e.g. run:1; default: the latest run of the "
+            "target document, else the latest run"),
         field("log", enumOf({"tail", "full", "none"}).defaultsTo("tail"))
-          .describe("How much of the log to return"),
+          .describe("How much of the log to return: the last tailLines lines, all, none"),
         field("tailLines", integer().min(1).max(5000).defaultsTo(50))
-          .describe("Lines of the tail"),
+          .describe("Number of log lines returned with log: 'tail'"),
       }))
       .output(runStatusSchema())
       .mutation(Mutation::None)
@@ -1767,10 +1867,12 @@ void registerCompileTools(ToolRegistry& registry)
       .title("Cancel Compile")
       .description(
         "Stops a running compile run; the remaining tasks are skipped. Defaults to the "
-        "running run of the target document. Returns the run's status. Example: "
+        "running run of the target document. Not undoable; files the finished tasks "
+        "wrote stay. Returns the run's status as compile_status does. Examples: {}; "
         "{\"run\": \"run:2\"}")
       .input(object({
-        field("run", string()).describe("Run handle; default: the document's run"),
+        field("run", string())
+          .describe("Run handle, e.g. run:2; default: the target document's running run"),
       }))
       .output(runStatusSchema({field("wouldDo", wouldDoField())}))
       .mutation(Mutation::External)
@@ -1785,40 +1887,48 @@ void registerCompileTools(ToolRegistry& registry)
         "path in the editor. Default: the point file of the latest run's leak, else "
         "<map folder>/compile/<map>.pts, <map folder>/<map>.pts and the .lin variants. "
         "Returns the path's points, its length, the point entities nearest to both "
-        "ends (the leak starts at an entity), and leavesMapAt: where the path leaves "
-        "the bounds of the map's brushes, usually near the gap. Example: {} or "
-        "{\"path\": \"/maps/compile/start.pts\"}")
+        "ends (the leak starts at an entity), and leavesMapAt, usually near the gap: "
+        "where the path leaves the bounds of the map's brushes or, if it ends inside "
+        "them (e.g. in the void between rooms), where it first enters the void around "
+        "the rooms (spaces_list's analysis); null if neither is found. Not undoable; "
+        "hide it "
+        "with pointfile_unload. Examples: {}; {\"path\": "
+        "\"/maps/compile/start.pts\"}")
       .input(object({
-        field("path", string()).describe("Absolute path of the point file"),
+        field("path", string())
+          .describe("Absolute path of the point file; default: see the description"),
       }))
       .output(object({
         field("path", string()).required(),
-        field("pointCount", integer()),
+        field("pointCount", integer()).describe("Number of points in the file"),
         field("points", array(vec3())).describe("At most 1000"),
-        field("truncated", boolean()),
+        field("truncated", boolean()).describe("Whether points was cut at 1000"),
         field("length", number()).describe("Length of the path in map units"),
         field("start", any()).describe("{point, nearestEntities}"),
         field("end", any()).describe("{point, nearestEntities}"),
-        field("leavesMapAt", any()).describe("Point or null"),
-        field("hint", string()),
+        field("leavesMapAt", any())
+          .describe("Point near the gap where the path leaves the map, or null"),
+        field("hint", string()).describe("How to find and close the gap"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)
       .handler(pointFileLoad));
 
-  registry.add(ToolDef{"pointfile_unload"}
-                 .title("Unload Point File")
-                 .description("Hides the loaded leak path of the document. Example: {}")
-                 .input(object({}))
-                 .output(object({
-                   field("unloaded", boolean()).required(),
-                   field("wouldDo", wouldDoField()),
-                 }))
-                 .mutation(Mutation::External)
-                 .documentUse(DocumentUse::Required)
-                 .idempotent()
-                 .handler(pointFileUnload));
+  registry.add(
+    ToolDef{"pointfile_unload"}
+      .title("Unload Point File")
+      .description("Hides the leak path that pointfile_load loaded into the document "
+                   "(not undoable). Warns NOT_LOADED when none is loaded. Example: {}")
+      .input(object({}))
+      .output(object({
+        field("unloaded", boolean()).required(),
+        field("wouldDo", wouldDoField()),
+      }))
+      .mutation(Mutation::External)
+      .documentUse(DocumentUse::Required)
+      .idempotent()
+      .handler(pointFileUnload));
 
   registry.add(
     ToolDef{"portalfile_load"}
@@ -1826,9 +1936,12 @@ void registerCompileTools(ToolRegistry& registry)
       .description(
         "Loads a portal file (.prt, written by bsp/vis) into the document and shows "
         "the portals between leaves in the editor. Default: <map "
-        "folder>/compile/<map>.prt, then <map folder>/<map>.prt. Example: {}")
+        "folder>/compile/<map>.prt, then <map folder>/<map>.prt. Not undoable; hide "
+        "them with portalfile_unload. Returns the path and portalCount. Examples: {}; "
+        "{\"path\": \"/maps/compile/start.prt\"}")
       .input(object({
-        field("path", string()).describe("Absolute path of the portal file"),
+        field("path", string())
+          .describe("Absolute path of the portal file; default: see the description"),
       }))
       .output(object({
         field("path", string()).required(),
@@ -1839,18 +1952,20 @@ void registerCompileTools(ToolRegistry& registry)
       .documentUse(DocumentUse::Required)
       .handler(portalFileLoad));
 
-  registry.add(ToolDef{"portalfile_unload"}
-                 .title("Unload Portal File")
-                 .description("Hides the loaded portals of the document. Example: {}")
-                 .input(object({}))
-                 .output(object({
-                   field("unloaded", boolean()).required(),
-                   field("wouldDo", wouldDoField()),
-                 }))
-                 .mutation(Mutation::External)
-                 .documentUse(DocumentUse::Required)
-                 .idempotent()
-                 .handler(portalFileUnload));
+  registry.add(
+    ToolDef{"portalfile_unload"}
+      .title("Unload Portal File")
+      .description("Hides the portals that portalfile_load loaded into the document "
+                   "(not undoable). Warns NOT_LOADED when none are loaded. Example: {}")
+      .input(object({}))
+      .output(object({
+        field("unloaded", boolean()).required(),
+        field("wouldDo", wouldDoField()),
+      }))
+      .mutation(Mutation::External)
+      .documentUse(DocumentUse::Required)
+      .idempotent()
+      .handler(portalFileUnload));
 }
 
 void registerCompileResources(ResourceRegistry& registry)

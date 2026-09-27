@@ -73,6 +73,138 @@ std::string protocolVersionOf(ServerState& server, const std::string& sessionId)
   return session ? session->protocolVersion : std::string{ProtocolVersion::Latest};
 }
 
+/**
+ * The net changes of the calls in an open agent transaction (transaction_begin), which
+ * transaction_commit reports: the commit itself changes no objects.
+ */
+struct TransactionChanges
+{
+  std::string sessionId;
+  std::string name;
+  size_t depth = 0;
+  ChangeReport report;
+};
+
+/**
+ * The accumulated changes per document state. An entry whose document has no agent
+ * transaction any more (rolled back when a session closed) or another one is replaced on
+ * the next call; the state of a closed document leaves a small stale entry.
+ */
+std::unordered_map<const DocumentState*, TransactionChanges>& transactionChanges()
+{
+  static auto changes = std::unordered_map<const DocumentState*, TransactionChanges>{};
+  return changes;
+}
+
+bool sameTransaction(
+  const TransactionChanges& changes, const AgentTransaction& transaction)
+{
+  return changes.sessionId == transaction.sessionId && changes.name == transaction.name
+         && changes.depth == transaction.depth;
+}
+
+void eraseId(std::vector<std::string>& ids, const std::string& id)
+{
+  std::erase(ids, id);
+}
+
+void addId(std::vector<std::string>& ids, const std::string& id)
+{
+  if (std::ranges::find(ids, id) == ids.end())
+  {
+    ids.push_back(id);
+  }
+}
+
+/** Adds the changes of a later call to the net changes of the earlier calls. */
+void mergeChanges(ChangeReport& total, const ChangeReport& call)
+{
+  const auto contains = [](const auto& ids, const auto& id) {
+    return std::ranges::find(ids, id) != ids.end();
+  };
+  for (const auto& id : call.created)
+  {
+    if (contains(total.removed, id))
+    {
+      // removed earlier and restored under the same id
+      eraseId(total.removed, id);
+      addId(total.modified, id);
+    }
+    else
+    {
+      addId(total.created, id);
+    }
+  }
+  for (const auto& id : call.modified)
+  {
+    if (!contains(total.created, id))
+    {
+      addId(total.modified, id);
+    }
+  }
+  for (const auto& id : call.removed)
+  {
+    if (contains(total.created, id))
+    {
+      eraseId(total.created, id);
+    }
+    else
+    {
+      eraseId(total.modified, id);
+      addId(total.removed, id);
+    }
+  }
+  total.selectionChanged = total.selectionChanged || call.selectionChanged;
+  total.contextChanged = total.contextChanged || call.contextChanged;
+}
+
+/**
+ * Records the changes of a call in the open agent transaction of its document. When the
+ * call committed the transaction (transaction_commit), the report becomes the net changes
+ * of the whole transaction.
+ */
+void accumulateTransactionChanges(
+  const ToolDef& tool, const DocumentState& state, ChangeReport& report)
+{
+  auto& allChanges = transactionChanges();
+  auto it = allChanges.find(&state);
+  if (state.transaction)
+  {
+    if (
+      it == allChanges.end() || tool.name() == "transaction_begin"
+      || !sameTransaction(it->second, *state.transaction))
+    {
+      it = allChanges
+             .insert_or_assign(
+               &state,
+               TransactionChanges{
+                 state.transaction->sessionId,
+                 state.transaction->name,
+                 state.transaction->depth,
+                 {}})
+             .first;
+    }
+    mergeChanges(it->second.report, report);
+    return;
+  }
+
+  if (it == allChanges.end())
+  {
+    return;
+  }
+  if (tool.name() == "transaction_commit")
+  {
+    auto total = std::move(it->second.report);
+    mergeChanges(total, report);
+    report.created = std::move(total.created);
+    report.modified = std::move(total.modified);
+    report.removed = std::move(total.removed);
+    report.selectionChanged = total.selectionChanged;
+    report.contextChanged = total.contextChanged;
+  }
+  allChanges.erase(it);
+}
+
 Result<std::optional<DocumentInfo>, ToolError> resolveDocument(
   ServerState& server, const ToolDef& tool, const Json& arguments, const Session& session)
 {
@@ -615,8 +747,10 @@ Json CallRunner::execute(const CallRequest& request)
           "Check for conflicts between linked groups, e.g. objects that would move "
           "outside the world bounds in a linked copy.");
       }
-      else if (stored)
+      else if (stored && depthBefore == 0)
       {
+        // Inside an agent transaction (or another enclosing transaction) the call's
+        // changes become part of that transaction's undo step, not a step of their own.
         undoStep = undoStepName;
       }
     }
@@ -631,6 +765,10 @@ Json CallRunner::execute(const CallRequest& request)
   if (collector && !report)
   {
     report = collector->finish();
+  }
+  if (report && !dryRun)
+  {
+    accumulateTransactionChanges(*tool, *documentState, *report);
   }
   if (report)
   {

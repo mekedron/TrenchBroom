@@ -1359,18 +1359,22 @@ void registerEntityPropertyTools(ToolRegistry& registry)
     ToolDef{"entity_properties_set"}
       .title("Set Entity Properties")
       .description(
-        "Sets properties on entities (worldspawn included: 'world'). Values may be "
+        "Sets properties on entities (worldspawn included: 'world') in one undo step. "
+        "Values may be "
         "strings, numbers, booleans (1/0), arrays of numbers (joined with spaces, e.g. "
         "colors and angles) or null (removes the key). Values are checked against the "
         "entity definitions and problems are warnings (UNKNOWN_PROPERTY, "
         "INVALID_PROPERTY_VALUE, INVALID_CHOICE, UNKNOWN_FLAGS, UNKNOWN_CLASSNAME); "
-        "setting classname changes the class. Example: {\"ids\": [\"entity:40\"], "
+        "setting classname changes the class. Use entity_spawnflags_set for flags by "
+        "name, entity_color_set for colors and entity_link for target links. Example: "
+        "{\"ids\": [\"entity:40\"], "
         "\"properties\": {\"targetname\": \"door1\", \"speed\": 200, \"wait\": null}}")
       .input(object({
         entityIdsField(),
         field("properties", object({}).allowAdditionalProperties())
           .required()
-          .describe("Key -> value (string, number, boolean, array of numbers, or null)"),
+          .describe("Key -> value (string, number, boolean, array of numbers, or null "
+                    "to remove the key)"),
       }))
       .output(object({
         field("entities", array(string())).required().describe("The changed entities"),
@@ -1387,7 +1391,8 @@ void registerEntityPropertyTools(ToolRegistry& registry)
     ToolDef{"entity_property_remove"}
       .title("Remove Entity Properties")
       .description(
-        "Removes properties from entities. Keys that none of the entities has are "
+        "Removes properties from entities in one undo step. Keys that none of the "
+        "entities has are "
         "reported as PROPERTY_NOT_PRESENT warnings; classname cannot be removed. "
         "Example: {\"ids\": [\"entity:40\"], \"keys\": [\"wait\", \"lip\"]}")
       .input(object({
@@ -1395,7 +1400,7 @@ void registerEntityPropertyTools(ToolRegistry& registry)
         field("keys", array(string()).nonEmpty()).required().describe("Keys to remove"),
       }))
       .output(object({
-        field("entities", array(string())).required(),
+        field("entities", array(string())).required().describe("The target entities"),
         field("removed", array(string()))
           .required()
           .describe("The keys that were removed from at least one entity"),
@@ -1409,7 +1414,8 @@ void registerEntityPropertyTools(ToolRegistry& registry)
     ToolDef{"entity_property_rename"}
       .title("Rename Entity Property")
       .description(
-        "Renames a property key on entities, keeping its value. Entities without the "
+        "Renames a property key on entities, keeping its value (one undo step). "
+        "Entities without the "
         "key are left unchanged (PROPERTY_NOT_PRESENT); an existing property with the "
         "new key is replaced (PROPERTY_OVERWRITTEN). The new key is checked against the "
         "entity definitions. Example: {\"ids\": [\"entity:40\"], \"from\": "
@@ -1420,7 +1426,7 @@ void registerEntityPropertyTools(ToolRegistry& registry)
         field("to", string().nonEmpty()).required().describe("The new key"),
       }))
       .output(object({
-        field("entities", array(string())).required(),
+        field("entities", array(string())).required().describe("The target entities"),
         field("from", string()).required(),
         field("to", string()).required(),
         field("renamed", array(string()))
@@ -1438,15 +1444,18 @@ void registerEntityPropertyTools(ToolRegistry& registry)
         "(case-insensitive, spaces and underscores interchangeable), or by bit "
         "('bit8') or value ('256'). Names are resolved for each entity's class; an "
         "unknown name fails the whole call and lists the class's flags. Entities "
-        "without a flag definition accept only bits and values. Example: {\"ids\": "
+        "without a flag definition accept only bits and values. One undo step; "
+        "entity_class_describe lists the flags of a class. Example: {\"ids\": "
         "[\"entity:40\"], \"set\": [\"Not on Easy\", \"Not on Normal\"], \"clear\": "
         "[\"Ambush\"]}")
       .input(object({
         entityIdsField(),
-        field("set", array(string())).describe("Flags to set"),
-        field("clear", array(string())).describe("Flags to clear"),
+        field("set", array(string()))
+          .describe("Flags to set: names, 'bitN' (0-based) or values such as '256'"),
+        field("clear", array(string()))
+          .describe("Flags to clear: names, 'bitN' (0-based) or values such as '256'"),
         field("key", string().nonEmpty().defaultsTo("spawnflags"))
-          .describe("The flags property"),
+          .describe("The flags property to change"),
       }))
       .output(object({
         field(
@@ -1471,13 +1480,15 @@ void registerEntityPropertyTools(ToolRegistry& registry)
       .description(
         "Applies the default values of the entity definitions: 'missing' adds "
         "properties that are not set, 'existing' resets properties that are set, 'all' "
-        "does both. Entities without a definition are skipped (NO_DEFINITION). Returns "
+        "does both (one undo step). Entities without a definition are skipped "
+        "(NO_DEFINITION). Returns "
         "what changed per entity. Example: {\"ids\": [\"entity:40\"], \"mode\": "
         "\"missing\"}")
       .input(object({
         entityIdsField(),
         field("mode", enumOf({"missing", "existing", "all"}).defaultsTo("missing"))
-          .describe("Which properties to set to their defaults"),
+          .describe("'missing': add unset properties, 'existing': reset set ones, "
+                    "'all': both"),
       }))
       .output(object({
         field(
@@ -1500,13 +1511,14 @@ void registerEntityPropertyTools(ToolRegistry& registry)
       .title("Get Entity Links")
       .description(
         "Lists the link relations between entities (e.g. target -> targetname, as "
-        "defined by the entity definitions). Without ids, the whole map is listed (not "
+        "defined by the entity definitions); read-only. Without ids, the whole map is "
+        "listed (not "
         "the selection); with ids, links from or to those entities. Items are links "
         "{source, sourceKey, target, targetKey, name}, broken links {source, sourceKey, "
         "name, target: null, broken: \"missing_target\"} and, with includeUnreferenced, "
         "names nobody refers to {target, targetKey, name, broken: \"missing_source\"}. "
-        "counts cover the whole scope regardless of the filters. Example: "
-        "{\"brokenOnly\": true}")
+        "counts cover the whole scope regardless of the filters. Create links with "
+        "entity_link. Examples: {\"brokenOnly\": true}; {\"ids\": [\"entity:40\"]}")
       .input(object({
         field("ids", array(objectId(EntityTargetKinds)).nonEmpty())
           .describe(
@@ -1518,15 +1530,23 @@ void registerEntityPropertyTools(ToolRegistry& registry)
           .describe("Also list target names that no entity refers to"),
       }))
       .output(object({
-        field("items", array(any())).required(),
+        field("items", array(any()))
+          .required()
+          .describe("Links, broken links and unreferenced names (see the description)"),
         field("total", integer()).required(),
-        field("nextCursor", any()).required(),
+        field("nextCursor", any())
+          .required()
+          .describe("Cursor of the next page, or null"),
         field(
           "counts",
           object({
-            field("links", integer()).required(),
-            field("missingTarget", integer()).required(),
-            field("missingSource", integer()).required(),
+            field("links", integer()).required().describe("Working links"),
+            field("missingTarget", integer())
+              .required()
+              .describe("Links whose name no entity carries"),
+            field("missingSource", integer())
+              .required()
+              .describe("Names no entity refers to"),
           }))
           .required(),
       }))
@@ -1544,7 +1564,8 @@ void registerEntityPropertyTools(ToolRegistry& registry)
         "target's name property (targetKey, default: its class's first link target "
         "property, else 'targetname') and the source's link property (sourceKey, "
         "default: its class's first link source property, else 'target') to the same "
-        "name. An existing target name is reused; otherwise name is used or a unique "
+        "name, in one undo step. An existing target name is reused; otherwise name is "
+        "used or a unique "
         "one is generated ('<classname>_<n>'). Replacing a different source value "
         "warns LINK_REPLACED. Example: {\"source\": \"entity:41\", \"target\": "
         "\"entity:40\"}")
@@ -1555,17 +1576,22 @@ void registerEntityPropertyTools(ToolRegistry& registry)
         field("target", objectId({ObjectKind::Entity}))
           .required()
           .describe("The entity that is triggered (e.g. func_door)"),
-        field("sourceKey", string().nonEmpty()).describe("Default: e.g. 'target'"),
-        field("targetKey", string().nonEmpty()).describe("Default: e.g. 'targetname'"),
+        field("sourceKey", string().nonEmpty())
+          .describe("Link property of the source. Default: the class's first link "
+                    "source property, else 'target'"),
+        field("targetKey", string().nonEmpty())
+          .describe("Name property of the target. Default: the class's first link "
+                    "target property, else 'targetname'"),
         field("name", string().nonEmpty())
-          .describe("Name to use if the target has none. Default: generated"),
+          .describe("Name to use if the target has none, without whitespace or quotes. "
+                    "Default: '<classname>_<n>'"),
       }))
       .output(object({
         field("source", string()).required(),
         field("target", string()).required(),
         field("sourceKey", string()).required(),
         field("targetKey", string()).required(),
-        field("name", string()).required(),
+        field("name", string()).required().describe("The shared link name"),
         field("generated", boolean()).required().describe("Whether the name is new"),
       }))
       .mutation(Mutation::Map)
@@ -1576,7 +1602,8 @@ void registerEntityPropertyTools(ToolRegistry& registry)
     ToolDef{"entity_color_set"}
       .title("Set Entity Color")
       .description(
-        "Sets a color property. The color is given as 3 numbers in float (0..1) or "
+        "Sets a color property of entities (one undo step). The color is given as 3 "
+        "numbers in float (0..1) or "
         "byte (0..255) range ('auto': float if all components are at most 1) and "
         "stored in the range the entity definition declares for the property; extra "
         "components such as a brightness are kept. key defaults to the class's first "
@@ -1589,9 +1616,10 @@ void registerEntityPropertyTools(ToolRegistry& registry)
           .describe("Default: the class's first color property, else '_color'"),
         field("color", array(number()).minSize(3).maxSize(3))
           .required()
-          .describe("[r, g, b]"),
+          .describe("[r, g, b] in float (0..1) or byte (0..255) range"),
         field("range", enumOf({"auto", "float", "byte"}).defaultsTo("auto"))
-          .describe("The range of the given components"),
+          .describe("The range of the given components; 'auto': float if all are at "
+                    "most 1"),
       }))
       .output(object({
         field(

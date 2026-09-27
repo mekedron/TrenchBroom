@@ -21,6 +21,7 @@
 
 #include "mcp/Args.h"
 
+#include <algorithm>
 #include <array>
 
 namespace tb::mcp
@@ -59,6 +60,20 @@ Json selectPath(const Json& value, const std::string_view path)
   }
   auto nested = selectPath(*member, tail);
   return Json{{std::string{head}, std::move(nested)}};
+}
+
+bool hasPath(const Json& value, const std::string_view path)
+{
+  if (value.is_array())
+  {
+    return std::ranges::any_of(
+      value, [&](const auto& element) { return hasPath(element, path); });
+  }
+
+  const auto dot = path.find('.');
+  const auto* member = findMember(value, path.substr(0, dot));
+  return member
+         && (dot == std::string_view::npos || hasPath(*member, path.substr(dot + 1)));
 }
 
 void merge(Json& target, const Json& source)
@@ -206,6 +221,21 @@ Json selectFields(const Json& item, const std::vector<std::string>& fields)
   for (const auto& path : fields)
   {
     merge(result, selectPath(item, path));
+  }
+  return result;
+}
+
+std::vector<std::string> unknownFields(
+  const std::vector<Json>& items, const std::vector<std::string>& fields)
+{
+  auto result = std::vector<std::string>{};
+  for (const auto& path : fields)
+  {
+    if (std::ranges::none_of(
+          items, [&](const auto& item) { return hasPath(item, path); }))
+    {
+      result.push_back(path);
+    }
   }
   return result;
 }

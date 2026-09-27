@@ -173,6 +173,34 @@ TEST_CASE("EntityCreateTools")
       CHECK(result["overlaps"].empty());
     }
 
+    SECTION("dropped origins have integral heights")
+    {
+      // platforms with fractional tops: nearly integral heights are rounded, others
+      // are rounded up so that the bounds do not sink into the platform
+      createBox(fixture, {64, 64, 0}, {192, 192, 32.004});
+      createBox(fixture, {320, 320, 0}, {448, 448, 32.25});
+
+      const auto nearlyIntegral = fixture.call(
+        "entity_create_point",
+        Json{
+          {"classname", "monster_ogre"},
+          {"position", {128, 128, 128}},
+          {"dropToFloor", true}});
+      CHECK(resultOf(nearlyIntegral)["origin"] == Json{128, 128, 56});
+      CHECK(resultOf(nearlyIntegral)["onFloor"] == true);
+
+      const auto fractional = fixture.call(
+        "entity_create_point",
+        Json{
+          {"classname", "monster_ogre"},
+          {"position", {384, 384, 128}},
+          {"dropToFloor", true}});
+      CHECK(resultOf(fractional)["origin"] == Json{384, 384, 57});
+      CHECK(resultOf(fractional)["bounds"]["min"] == Json{352, 352, 33});
+      CHECK(resultOf(fractional)["onFloor"] == true);
+      CHECK(resultOf(fractional)["overlaps"].empty());
+    }
+
     SECTION("snapping")
     {
       const auto snapped = fixture.call(

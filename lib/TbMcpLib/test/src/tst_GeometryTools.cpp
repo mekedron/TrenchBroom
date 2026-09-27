@@ -598,6 +598,23 @@ TEST_CASE("GeometryTools")
       REQUIRE(group);
       CHECK(group->name() == "Room");
       CHECK(group->children().size() == 6);
+
+      // the brushes are created inside the group, not created and then regrouped
+      const auto& roles = resultOf(created)["brushes"];
+      CHECK(created["changes"]["created"].size() == 7);
+      for (const auto& [role, id] : roles.items())
+      {
+        CHECK(
+          std::ranges::find(created["changes"]["created"], id)
+          != created["changes"]["created"].end());
+        CHECK(
+          std::ranges::find(created["changes"]["modified"], id)
+          == created["changes"]["modified"].end());
+      }
+      CHECK(selectedIds(fixture, map) == std::vector{fixture.id(*group)});
+
+      fixture.call("undo");
+      CHECK(allBrushes(map).empty());
     }
 
     const auto degenerate = fixture.callExpectingError(
@@ -723,6 +740,36 @@ TEST_CASE("GeometryTools")
       CHECK(degenerate.code == ErrorCode::InvalidGeometry);
 
       CHECK(allBrushes(map).size() == 6);
+    }
+
+    SECTION("walls inside a closed group name the group to open")
+    {
+      const auto grouped = fixture.call(
+        "room_create",
+        Json{
+          {"min", {512, 0, 0}},
+          {"max", {768, 256, 128}},
+          {"thickness", 16},
+          {"group", "Room"}});
+      const auto groupId = resultOf(grouped)["group"].get<std::string>();
+      const auto wallId = resultOf(grouped)["brushes"]["wallSouth"].get<std::string>();
+      auto arguments = boxJson({608, -16, 0}, {672, 0, 96});
+
+      const auto implicit = fixture.callExpectingError("opening_cut", arguments);
+      CHECK(implicit.code == ErrorCode::InvalidArgument);
+      CHECK(implicit.hint.find(groupId) != std::string::npos);
+      CHECK(implicit.hint.find("group_open") != std::string::npos);
+
+      arguments["ids"] = {wallId};
+      const auto explicitIds = fixture.callExpectingError("opening_cut", arguments);
+      CHECK(explicitIds.code == ErrorCode::ObjectNotEditable);
+      CHECK(explicitIds.hint.find(groupId) != std::string::npos);
+      CHECK(fixture.node(wallId) != nullptr);
+
+      fixture.call("group_open", Json{{"group", groupId}});
+      const auto cut = fixture.call("opening_cut", arguments);
+      CHECK(resultOf(cut)["cuts"].size() == 1);
+      CHECK(fixture.node(wallId) == nullptr);
     }
 
     SECTION("dry run")

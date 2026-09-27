@@ -19,16 +19,16 @@
 
 #pragma once
 
-#include <string_view>
-
 namespace tb::mcp
 {
-class McpServer;
+class PromptRegistry;
 
-/** The text of the agent guide resource trenchbroom://guide (Markdown). */
-std::string_view agentGuide();
-
-/** Registers the resources (editor status, agent guide, ...). */
-void registerResources(McpServer& server);
+/**
+ * Registers the task prompts (blockout_level, populate_level, lighting_pass,
+ * texture_pass, fix_issues, compile_and_debug, explain_map, explain_entity, cleanup_map).
+ * Each returns one user message that names the tools to call in order; tool names are in
+ * backticks.
+ */
+void registerPrompts(PromptRegistry& prompts);
 
 } // namespace tb::mcp

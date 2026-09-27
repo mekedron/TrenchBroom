@@ -36,9 +36,9 @@
 #include "mdl/CircleShape.h"
 #include "mdl/EditorContext.h"
 #include "mdl/Grid.h"
+#include "mdl/Group.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
-#include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
@@ -82,7 +82,8 @@ ToolError invalidArgument(std::string message, std::string hint)
 /**
  * Adds new brushes like the editor's brush tools do: deselects everything, adds the
  * brushes to the open group or the current layer and selects them. With a group name,
- * the new brushes are grouped (the group is selected then). Returns the added brushes.
+ * the new brushes are added inside a new group there (the group is selected then).
+ * Returns the added brushes.
  */
 Result<std::vector<mdl::Node*>, ToolError> addAndSelectBrushes(
   CallContext& context,
@@ -93,25 +94,38 @@ Result<std::vector<mdl::Node*>, ToolError> addAndSelectBrushes(
   auto& map = context.map();
   mdl::deselectAll(map);
 
-  const auto count = brushes.size();
-  auto added = addBrushes(map, std::move(brushes));
-  if (added.size() != count)
+  if (!groupName)
+  {
+    const auto count = brushes.size();
+    auto added = addBrushes(map, std::move(brushes));
+    if (added.size() != count)
+    {
+      return context.operationFailed("The new brushes could not be added to the map.");
+    }
+    mdl::selectNodes(map, added);
+    return added;
+  }
+
+  // The group is added with the brushes as its children, like pasted groups. Grouping
+  // added brushes afterwards (mdl::groupSelectedNodes) would reparent them, and the
+  // change report would list them as modified instead of created.
+  auto added = std::vector<mdl::Node*>{};
+  added.reserve(brushes.size());
+  for (auto& brush : brushes)
+  {
+    added.push_back(new mdl::BrushNode{std::move(brush)});
+  }
+  auto* groupNode = new mdl::GroupNode{mdl::Group{*groupName}};
+  groupNode->addChildren(added);
+  if (mdl::addNodes(map, {{&mdl::parentForNodes(map), {groupNode}}}).empty())
   {
     return context.operationFailed("The new brushes could not be added to the map.");
   }
 
-  mdl::selectNodes(map, added);
-  if (groupName)
+  mdl::selectNodes(map, {groupNode});
+  if (group)
   {
-    auto* groupNode = mdl::groupSelectedNodes(map, *groupName);
-    if (!groupNode)
-    {
-      return context.operationFailed("The new brushes could not be grouped.");
-    }
-    if (group)
-    {
-      *group = groupNode;
-    }
+    *group = groupNode;
   }
   return added;
 }
@@ -829,6 +843,42 @@ void collectIntersectingBrushes(
   }
 }
 
+/**
+ * The hint for brushes that cannot be cut because they are inside closed groups: like the
+ * editor, tools edit the members of a group only while it is open, so it names the groups
+ * to open. Empty if none of the brushes is inside a closed group.
+ */
+std::string closedGroupHint(const IdRegistry& ids, const std::vector<mdl::Node*>& nodes)
+{
+  auto groups = std::vector<std::string>{};
+  for (const auto* node : nodes)
+  {
+    const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(node);
+    if (brushNode && !brushNode->containingGroupOpened())
+    {
+      const auto groupId = ids.format(*brushNode->containingGroup());
+      if (std::ranges::find(groups, groupId) == groups.end())
+      {
+        groups.push_back(groupId);
+      }
+    }
+  }
+  if (groups.empty())
+  {
+    return {};
+  }
+  auto names = std::string{};
+  for (const auto& groupId : groups)
+  {
+    names += (names.empty() ? "" : ", ") + groupId;
+  }
+  return "The walls are inside the closed group" + std::string{groups.size() > 1 ? "s " : " "}
+         + names + (groups.size() > 1 ? ": open one at a time" : ": open it")
+         + " with group_open {\"group\": \"" + groups.front()
+         + "\"}, cut the opening, then group_close. Openings through walls of two groups "
+           "need one cut per group.";
+}
+
 ToolResult openingCut(CallContext& context, const Args& args)
 {
   auto& map = context.map();
@@ -847,7 +897,23 @@ ToolResult openingCut(CallContext& context, const Args& args)
     auto resolved = resolveTargets(context, args, "ids", {ObjectKind::Brush});
     if (resolved.is_error())
     {
-      return errorOf(resolved);
+      auto error = errorOf(resolved);
+      if (error.code == ErrorCode::ObjectNotEditable)
+      {
+        auto nodes = std::vector<mdl::Node*>{};
+        for (const auto& id : error.objectIds)
+        {
+          if (auto node = ids.resolve(id); node.is_success())
+          {
+            nodes.push_back(node.value());
+          }
+        }
+        if (auto hint = closedGroupHint(ids, nodes); !hint.empty())
+        {
+          error.hint = std::move(hint);
+        }
+      }
+      return error;
     }
     for (auto* node : resolved.value())
     {
@@ -881,15 +947,24 @@ ToolResult openingCut(CallContext& context, const Args& args)
     collectIntersectingBrushes(map, map.worldNode(), opening, targets, notEditable);
     if (targets.empty())
     {
+      auto hint = closedGroupHint(ids, notEditable);
+      if (notEditable.empty())
+      {
+        hint =
+          "Move the opening so that it overlaps a wall; space_check with the same box "
+          "lists what it overlaps.";
+      }
+      else if (hint.empty())
+      {
+        hint =
+          "The intersecting brushes are hidden or locked: show or unlock their layer "
+          "(layer_set_state).";
+      }
       return makeError(
         ErrorCode::InvalidArgument,
         "The opening " + toJson(opening).dump()
           + " does not intersect any editable brush.",
-        notEditable.empty()
-          ? "Move the opening so that it overlaps a wall; space_check with the same box "
-            "lists what it overlaps."
-          : "The intersecting brushes are hidden, locked or in a closed group: show or "
-            "unlock their layer (layer_set_state) or open the group (group_open).",
+        std::move(hint),
         formatIds(notEditable, ids));
     }
   }
@@ -1013,16 +1088,19 @@ void registerGeometryTools(ToolRegistry& registry)
     ToolDef{"brush_create_box"}
       .title("Create Box Brush")
       .description(
-        "Creates a cuboid brush from its min and max corners in the open group or the "
-        "current layer, and selects it like the editor does. Without material, the "
+        "Creates a cuboid brush from its min and max corners (map units, Z up) in the "
+        "open group or the current layer, and selects it like the editor does (one undo "
+        "step). Without material, the "
         "current material is used; an unknown material is used anyway and warned about "
         "(UNKNOWN_MATERIAL). A degenerate box fails with INVALID_GEOMETRY, a box outside "
         "the world bounds with OUT_OF_WORLD_BOUNDS. "
         "Example: {\"min\": [0, 0, 0], \"max\": [128, 128, 16], \"material\": "
         "\"floor_stone\"}")
       .input(object({
-        field("min", vec3()).required().describe("Minimum corner [x, y, z]"),
-        field("max", vec3()).required().describe("Maximum corner [x, y, z]"),
+        field("min", vec3()).required().describe("Minimum corner [x, y, z] in map units"),
+        field("max", vec3())
+          .required()
+          .describe("Maximum corner [x, y, z] in map units; each component > min"),
         field("material", string().nonEmpty())
           .describe("Material of all faces. Default: the current material"),
       }))
@@ -1038,8 +1116,10 @@ void registerGeometryTools(ToolRegistry& registry)
     ToolDef{"brush_create_shape"}
       .title("Create Shape")
       .description(
-        "Creates a shape inside the bounds [min, max] with the editor's shape tool and "
-        "selects the new brushes. Shapes and their parameters: 'cuboid'; 'stairs' "
+        "Creates a shape inside the bounds [min, max] (map units) with the editor's "
+        "shape "
+        "tool and selects the new brushes (one undo step). Shapes and their parameters: "
+        "'cuboid'; 'stairs' "
         "(stepHeight, stairDirection: the direction in which the stairs ascend; steps = "
         "ceil(height / stepHeight)); 'arch' (axis = tunnel direction, default 'x'; "
         "thickness; spandrel fills the corners above the arch; circle parameters); "
@@ -1059,8 +1139,12 @@ void registerGeometryTools(ToolRegistry& registry)
             {"cuboid", "stairs", "arch", "cylinder", "cone", "uvSphere", "icoSphere"}))
           .required()
           .describe("The shape to create"),
-        field("min", vec3()).required().describe("Minimum corner of the bounds"),
-        field("max", vec3()).required().describe("Maximum corner of the bounds"),
+        field("min", vec3())
+          .required()
+          .describe("Minimum corner of the bounds (map units)"),
+        field("max", vec3())
+          .required()
+          .describe("Maximum corner of the bounds (map units)"),
         field("material", string().nonEmpty())
           .describe("Material of all faces. Default: the current material"),
         field("axis", enumOf({"x", "y", "z"}))
@@ -1076,7 +1160,8 @@ void registerGeometryTools(ToolRegistry& registry)
         field("hollow", boolean())
           .describe("cylinder: make a hollow ring. Default: false"),
         field("thickness", number())
-          .describe("Wall thickness of hollow cylinders and arches. Default: 16"),
+          .describe(
+            "Wall thickness of hollow cylinders and arches in map units. Default: 16"),
         field("spandrel", boolean())
           .describe("arch: also fill the space above the arch. Default: false"),
         field("rings", integer().min(1).max(256))
@@ -1084,7 +1169,7 @@ void registerGeometryTools(ToolRegistry& registry)
         field("subdivision", integer().min(1).max(4))
           .describe("icoSphere: number of subdivisions. Default: 1"),
         field("stepHeight", number())
-          .describe("stairs: rise of one step (> 0). Default: 16"),
+          .describe("stairs: rise of one step in map units (> 0). Default: 16"),
         field("stairDirection", enumOf({"+x", "-x", "+y", "-y"}))
           .describe("stairs: direction in which the stairs ascend. Default: '+x'"),
         field("group", string().nonEmpty())
@@ -1092,7 +1177,7 @@ void registerGeometryTools(ToolRegistry& registry)
       }))
       .output(createdOutput({
         field("brushes", array(objectId())).required().describe("Ids of the new brushes"),
-        field("count", integer()).required(),
+        field("count", integer()).required().describe("Number of new brushes"),
         groupField(),
         objectsField(),
       }))
@@ -1103,8 +1188,9 @@ void registerGeometryTools(ToolRegistry& registry)
     ToolDef{"brush_create_hull"}
       .title("Create Hull Brush")
       .description(
-        "Creates a brush as the convex hull of the given points (at least 4, spanning a "
-        "volume) and selects it. Points inside the hull are dropped (POINTS_INSIDE_HULL "
+        "Creates a brush as the convex hull of the given points (map units; at least 4, "
+        "spanning a volume) and selects it (one undo step). Points inside the hull are "
+        "dropped (POINTS_INSIDE_HULL "
         "warning); non-integer vertices are reported (NON_INTEGER_VERTICES). Points that "
         "coincide or lie on one line or plane fail with INVALID_GEOMETRY, points "
         "outside the world bounds with OUT_OF_WORLD_BOUNDS. "
@@ -1112,14 +1198,16 @@ void registerGeometryTools(ToolRegistry& registry)
       .input(object({
         field("points", array(vec3()).nonEmpty())
           .required()
-          .describe("Points [x, y, z] whose convex hull becomes the brush"),
+          .describe("Points [x, y, z] in map units whose convex hull becomes the brush"),
         field("material", string().nonEmpty())
           .describe("Material of all faces. Default: the current material"),
       }))
       .output(createdOutput({
         field("brush", objectId()).required().describe("Id of the new brush"),
         field("bounds", box()).required(),
-        field("vertexCount", integer()).required(),
+        field("vertexCount", integer())
+          .required()
+          .describe("Number of vertices of the hull (points inside it are dropped)"),
         field("object", any()).required().describe("Summary of the new brush"),
       }))
       .mutation(Mutation::Map)
@@ -1129,7 +1217,8 @@ void registerGeometryTools(ToolRegistry& registry)
     ToolDef{"room_create"}
       .title("Create Room")
       .description(
-        "Creates a sealed hollow room around the inner box [min, max]: a floor, a "
+        "Creates a sealed hollow room around the inner box [min, max] (map units) in one "
+        "undo step: a floor, a "
         "ceiling and four walls of the given thickness that enclose the inner space "
         "without gaps or overlaps (floor and ceiling cover the whole outer footprint, "
         "the west/east walls the full outer depth). Materials: 'material' for all "
@@ -1139,16 +1228,23 @@ void registerGeometryTools(ToolRegistry& registry)
         "Example: {\"min\": [0, 0, 0], \"max\": [512, 384, 192], \"thickness\": 16, "
         "\"floor\": \"floor_stone\", \"walls\": \"wall_brick\"}")
       .input(object({
-        field("min", vec3()).required().describe("Minimum corner of the inner space"),
-        field("max", vec3()).required().describe("Maximum corner of the inner space"),
+        field("min", vec3())
+          .required()
+          .describe("Minimum corner of the inner space (map units)"),
+        field("max", vec3())
+          .required()
+          .describe("Maximum corner of the inner space (map units)"),
         field("thickness", number())
-          .describe(
-            "Thickness of floor, ceiling and walls (> 0). Default: the grid size"),
+          .describe("Thickness of floor, ceiling and walls in map units (> 0). Default: "
+                    "the grid size"),
         field("material", string().nonEmpty())
           .describe("Material of all surfaces. Default: the current material"),
-        field("floor", string().nonEmpty()).describe("Material of the floor"),
-        field("ceiling", string().nonEmpty()).describe("Material of the ceiling"),
-        field("walls", string().nonEmpty()).describe("Material of the walls"),
+        field("floor", string().nonEmpty())
+          .describe("Material of the floor. Default: 'material'"),
+        field("ceiling", string().nonEmpty())
+          .describe("Material of the ceiling. Default: 'material'"),
+        field("walls", string().nonEmpty())
+          .describe("Material of the four walls. Default: 'material'"),
         field("group", string().nonEmpty())
           .describe("Put the room's brushes into a new group with this name"),
       }))
@@ -1157,8 +1253,8 @@ void registerGeometryTools(ToolRegistry& registry)
           .required()
           .describe("Brush id per role: floor, ceiling, wallWest, wallEast, wallSouth, "
                     "wallNorth"),
-        field("inner", box()).required(),
-        field("outer", box()).required(),
+        field("inner", box()).required().describe("The enclosed inner space"),
+        field("outer", box()).required().describe("Bounds of all room brushes"),
         field("thickness", number()).required(),
         groupField(),
         objectsField(),
@@ -1170,19 +1266,28 @@ void registerGeometryTools(ToolRegistry& registry)
     ToolDef{"opening_cut"}
       .title("Cut Opening")
       .description(
-        "Cuts a doorway or window [min, max] through wall brushes (CSG subtraction): "
+        "Cuts a doorway or window box [min, max] (map units) through wall brushes (CSG "
+        "subtraction, one undo step): "
         "each wall is replaced by fragments that keep its materials and parent; the "
         "reveal faces get 'material' or else the wall's dominant material. Without ids, "
         "every editable brush that the opening intersects is cut. The fragments are "
         "selected. An opening that intersects none of the targets fails with "
-        "INVALID_ARGUMENT. Example: {\"ids\": [\"brush:12\"], \"min\": [240, -16, 0], "
+        "INVALID_ARGUMENT. Like the editor, walls inside a closed group (e.g. a "
+        "room_create group) are cut only while the group is open; the error's hint "
+        "names the group to open with group_open (group_close afterwards). Example: "
+        "{\"ids\": [\"brush:12\"], \"min\": [240, -16, 0], "
         "\"max\": [304, 0, 112]}")
       .input(object({
         idsField(
           {ObjectKind::Brush},
           "Wall brushes to cut. Default: all editable brushes intersecting the opening"),
-        field("min", vec3()).required().describe("Minimum corner of the opening"),
-        field("max", vec3()).required().describe("Maximum corner of the opening"),
+        field("min", vec3())
+          .required()
+          .describe("Minimum corner of the opening (map units)"),
+        field("max", vec3())
+          .required()
+          .describe("Maximum corner of the opening (map units). Let the opening span "
+                    "the wall's thickness to cut all the way through"),
         field("material", string().nonEmpty())
           .describe(
             "Material of the reveal faces. Default: the wall's dominant material"),

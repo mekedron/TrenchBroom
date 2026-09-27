@@ -32,6 +32,7 @@
 #include "mdl/Layer.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/ModelUtils.h"
 #include "mdl/NodeTree.h"
 #include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
@@ -103,18 +104,6 @@ void visitNodes(const mdl::Node& node, const F& f)
     f(*child);
     visitNodes(*child, f);
   }
-}
-
-bool inOmittedLayer(const mdl::Node& node)
-{
-  for (const auto* current = &node; current; current = current->parent())
-  {
-    if (omittedLayer(*current))
-    {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Caches brush roles for the duration of one analysis. */
@@ -1292,9 +1281,11 @@ Result<SpaceMap, ToolError> analyzeSpaces(
   }
 
   auto spaces = std::vector<SpaceGeometry>{};
-  for (const auto& accumulator : accumulators)
+  for (size_t label = 0; label < accumulators.size(); ++label)
   {
+    const auto& accumulator = accumulators[label];
     auto space = SpaceGeometry{};
+    space.hasCore = label < innerBounds.size() && innerBounds[label].cells > 0;
     if (accumulator.cells > 0)
     {
       space.bounds =
@@ -1698,16 +1689,21 @@ OpeningDetails describeOpening(
   }
   details.center = details.bounds.center();
 
-  // doors in the opening
+  // doors in the opening: door brushes that touch the opening's box, which is widened by
+  // one cell along the axis to reach doors inside the wall; the octree returns every
+  // node in the cells it visits, so the bounds are checked
+  auto search = details.bounds.expand(1.0);
+  search.min[opening.axis] -= grid.cellSize;
+  search.max[opening.axis] += grid.cellSize;
   auto doors = std::vector<const mdl::EntityNode*>{};
-  for (const auto* node :
-       map.worldNode().nodeTree().find_intersectors(details.bounds.expand(grid.cellSize)))
+  for (const auto* node : map.worldNode().nodeTree().find_intersectors(search))
   {
     if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(node))
     {
       const auto* entityNode = owningBrushEntity(*brushNode);
       if (
         entityNode && entityNode->entity().classname().starts_with("func_door")
+        && brushNode->logicalBounds().intersects(search)
         && std::ranges::find(doors, entityNode) == doors.end())
       {
         doors.push_back(entityNode);
@@ -1752,10 +1748,24 @@ private:
   const FreeSpotOptions& m_options;
   RoleCache m_roles;
 
-  bool isWall(const mdl::BrushNode& brushNode)
+  /**
+   * Walls are space-solid world and func_group brushes. A brush in a group is a wall if
+   * its innermost group encloses the box's center (e.g. a room built as a group); a
+   * group that does not enclose it is an object (e.g. furniture).
+   */
+  bool isWall(const mdl::BrushNode& brushNode, const vm::bbox3d& box)
   {
-    return m_roles(brushNode).spaceSolid && !owningBrushEntity(brushNode)
-           && !inGroup(brushNode);
+    if (!m_roles(brushNode).spaceSolid)
+    {
+      return false;
+    }
+    if (const auto* entityNode = owningBrushEntity(brushNode);
+        entityNode && entityNode->entity().classname() != "func_group")
+    {
+      return false;
+    }
+    const auto* group = mdl::findContainingGroup(&brushNode);
+    return !group || group->logicalBounds().contains(box.center());
   }
 
   std::optional<vm::bbox3d> entityBounds(const mdl::EntityNode& entityNode) const
@@ -1808,7 +1818,7 @@ public:
         {
           return false;
         }
-        const auto& margin = isWall(*brushNode) ? wallMargin : objectMargin;
+        const auto& margin = isWall(*brushNode, box) ? wallMargin : objectMargin;
         if (margin != box && intersectsInterior(brush, shrink(margin, 0.01)))
         {
           return false;

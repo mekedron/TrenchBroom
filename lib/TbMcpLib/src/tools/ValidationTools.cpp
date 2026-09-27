@@ -836,7 +836,10 @@ ToolResult runNestedTool(CallContext& context, const std::string& name, const Js
       fmt::format(
         "The suggested {} call is invalid: {}",
         name,
-        errors.empty() ? std::string{} : errors.front().message));
+        errors.empty() ? std::string{} : errors.front().message),
+      fmt::format(
+        "Make the change by hand with {} or turn the check off with validators_set.",
+        name));
   }
   return tool->handler()(context, Args{std::move(*validated)});
 }
@@ -1394,33 +1397,27 @@ void registerValidationTools(ToolRegistry& registry)
     ToolDef{"issues_list"}
       .title("List Issues")
       .description(
-        "Lists the problems of the map: the issues of the editor's validators (source "
-        "\"editor\", as the Issues view shows them: missing classnames, empty brush "
-        "entities, invalid properties, ...) with the object, the line number in the "
-        "map file, whether the issue is hidden and the names of the quick fixes, and "
-        "the MCP placement checks on the whole map (source \"mcp\"): "
-        "Z_FIGHTING (coplanar overlapping faces of different brushes facing the same "
-        "way; details: both face ids, area, center, plane), ENTITY_OUTSIDE_HULL (point "
-        "entities the void reaches, found by a flood fill: the map leaks; details: "
-        "position, nearest gap and its brushes), MODEL_BELOW_FLOOR / MODEL_FLOATING / "
-        "MODEL_PENETRATES_BRUSHES / MODEL_NO_FLOOR (models against brushes; details: "
-        "model bounds, suggested move) and UV_ASPECT_DISTORTION (stretched textures; "
-        "details: measures and a fix). Each item has an id for issue_fix, issue_hide "
-        "and issue_show. Every modifying call already reports the problems it "
-        "introduced in issuesIntroduced; use this tool for the whole map. Validators "
-        "turned off with validators_set are skipped (listed in disabledValidators). "
-        "Filters: sources, codes (codes or editor type names, case-insensitive), ids "
-        "(objects and their contents; face issues match their brush), includeHidden. "
-        "Editor codes are the validator names in UPPER_SNAKE case, e.g. "
-        "EMPTY_BRUSH_ENTITY. Example: {\"codes\": [\"Z_FIGHTING\"]} -> {\"items\": "
-        "[{\"id\": \"mcp:Z_FIGHTING|brush:12|...\", \"source\": \"mcp\", \"code\": "
-        "\"Z_FIGHTING\", \"type\": \"Z-fighting\", \"objectId\": \"brush:12/face:3\", "
-        "\"description\": \"...\", \"fixes\": [], \"details\": {\"faces\": "
-        "[\"brush:12/face:3\", \"brush:14/face:1\"], \"area\": 1024, ...}}], "
-        "\"total\": 1, \"nextCursor\": null, \"counts\": {\"Z_FIGHTING\": 1}}")
+        "Lists the problems of the whole map (read-only): the issues of the editor's "
+        "validators (source \"editor\", as the Issues view shows them; codes are the "
+        "validator names in UPPER_SNAKE case, e.g. EMPTY_BRUSH_ENTITY) and the MCP "
+        "placement checks (source \"mcp\"): Z_FIGHTING (coplanar overlapping faces of "
+        "different brushes), ENTITY_OUTSIDE_HULL (point entities the void reaches: the "
+        "map leaks), MODEL_BELOW_FLOOR / MODEL_FLOATING / MODEL_PENETRATES_BRUSHES / "
+        "MODEL_NO_FLOOR (entity models against brushes) and UV_ASPECT_DISTORTION "
+        "(stretched textures). Each item has an id for issue_fix / issue_hide / "
+        "issue_show, the object id, the map file line, whether it is hidden, the names "
+        "of its fixes and, for MCP issues, details (face ids, the nearest gap, a "
+        "suggested move or fix); the result also has counts per code and leakCheck. "
+        "Modifying calls already report the problems they introduce in "
+        "issuesIntroduced; use this tool for the whole map and map_check for gameplay "
+        "problems. Validators turned off with validators_set are skipped. Examples: "
+        "{\"codes\": [\"Z_FIGHTING\"]}; {\"sources\": [\"editor\"], \"ids\": "
+        "[\"entity:7\"], \"includeHidden\": true}")
       .input(object({
         field("sources", array(enumOf({"editor", "mcp"})).nonEmpty())
-          .describe("Default: both"),
+          .describe(
+            "Only issues of these sources: 'editor' (the editor's validators), 'mcp' "
+            "(the MCP placement checks). Default: both"),
         field("codes", array(string()).nonEmpty())
           .describe(
             "Only these codes or editor type names, e.g. [\"Z_FIGHTING\", "
@@ -1441,7 +1438,8 @@ void registerValidationTools(ToolRegistry& registry)
         field("nextCursor", any()).required(),
         field("counts", any()).required().describe("Issues per code (all pages)"),
         field("leakCheck", any())
-          .describe("{analyzed, skippedReason} of the leak prediction, if it ran"),
+          .describe("{analyzed, skippedReason} of the leak prediction behind "
+                    "ENTITY_OUTSIDE_HULL, if it ran"),
         field("disabledValidators", array(string()))
           .describe("Validators turned off with validators_set, if any"),
       }))
@@ -1463,24 +1461,23 @@ void registerValidationTools(ToolRegistry& registry)
     ToolDef{"issue_fix"}
       .title("Fix Issues")
       .description(
-        "Applies quick fixes to one or many issues in one undo step: the editor's quick "
-        "fixes, as the Issues view applies them (Delete Objects, Delete Property, Snap "
-        "Vertices, Move Brushes to World, Remove Mod, Reset UV Scale, Replace quotation "
-        "marks, Truncate Value, ...), and the fixes of the MCP checks: '"
+        "Applies quick fixes to issues in one undo step: the editor's quick fixes, as "
+        "the Issues view applies them (Delete Objects, Delete Property, Snap Vertices, "
+        "Move Brushes to World, Remove Mod, Reset UV Scale, Replace quotation marks, "
+        "Truncate Value, ...), and the fixes of the MCP checks: '"
         + std::string{MoveFixName}
-        + "' (MODEL_BELOW_FLOOR / MODEL_FLOATING / ... with a suggested move: "
-          "objects_move by details.suggestedMove) and '"
+        + "' (MODEL_* issues with a suggested move: objects_move by "
+          "details.suggestedMove) and '"
         + std::string{UvFixName}
         + "' (UV_ASPECT_DISTORTION: runs details.fix). Z_FIGHTING and "
-          "ENTITY_OUTSIDE_HULL have no automatic fix. Name the issues by their ids "
-          "from issues_list, or all issues of some codes and/or objects. Issues with "
-          "several fixes need 'fix'. The change report lists every object that was "
-          "deleted or changed; 'notFixed' gives the reason for each issue that was not "
-          "fixed. Example: {\"codes\": [\"EMPTY_BRUSH_ENTITY\"]} -> {\"result\": "
-          "{\"fixedCount\": 2, \"fixed\": [\"issue:41:16:0\", ...], \"applied\": "
-          "[{\"fix\": \"Delete Objects\", \"code\": \"EMPTY_BRUSH_ENTITY\", \"count\": "
-          "2}], \"notFixedCount\": 0, \"notFixed\": []}, \"changes\": {\"removed\": "
-          "[\"entity:41\", ...]}, ...}")
+          "ENTITY_OUTSIDE_HULL have no automatic fix. Name the issues by their ids from "
+          "issues_list (issues), by codes and/or by object ids; an issue with several "
+          "fixes is skipped unless 'fix' names one. Returns fixedCount, fixed, applied "
+          "(count per fix and code) and notFixed with the reason for each issue that was "
+          "not fixed; the change report lists every deleted or changed object. "
+          "Examples: {\"codes\": [\"EMPTY_BRUSH_ENTITY\"]}; {\"issues\": "
+          "[\"issue:41:16:0\"], \"fix\": \"Delete Property\"}; {\"ids\": [\"entity:7\"], "
+          "\"fix\": \"Apply Suggested Move\"}")
       .input(object(std::move(fixFields)))
       .output(object({
         field("fixedCount", integer()).required(),
@@ -1516,17 +1513,21 @@ void registerValidationTools(ToolRegistry& registry)
       ToolDef{hide ? "issue_hide" : "issue_show"}
         .title(hide ? "Hide Issues" : "Show Issues")
         .description(
-          hide ? "Hides editor issues, as 'Hide' in the Issues view does: hidden issues "
-                 "are no longer listed by issues_list (unless includeHidden) and the "
-                 "Issues view shows them only with 'Show hidden issues'. The editor "
-                 "hides an issue type per object, so all issues of that type on the "
-                 "object are hidden. Not undoable and not saved in the map, as in the "
-                 "editor; MCP issues cannot be hidden (turn their check off with "
-                 "validators_set). Example: {\"issues\": [\"issue:41:16:0\"]} -> "
-                 "{\"hidden\": [\"issue:41:16:0\"], \"unchanged\": [], \"skipped\": []}"
-               : "Shows hidden editor issues again, as 'Show' in the Issues view does. "
-                 "Example: {\"codes\": [\"EMPTY_PROPERTY_VALUE\"]} -> {\"shown\": "
-                 "[\"issue:41:512:0\"], \"unchanged\": [], \"skipped\": []}")
+          hide
+            ? "Hides editor issues, as 'Hide' in the Issues view does: hidden issues "
+              "are no longer listed by issues_list (unless includeHidden) and the "
+              "Issues view shows them only with 'Show hidden issues'. The editor "
+              "hides an issue type per object, so all issues of that type on the "
+              "object are hidden. Not undoable and not saved in the map, as in the "
+              "editor; MCP issues cannot be hidden (turn their check off with "
+              "validators_set). Returns the hidden, unchanged and skipped issues. "
+              "Examples: {\"issues\": [\"issue:41:16:0\"]}; {\"codes\": "
+              "[\"EMPTY_PROPERTY_VALUE\"], \"ids\": [\"entity:7\"]}"
+            : "Shows hidden editor issues again, as 'Show' in the Issues view does, so "
+              "that issues_list lists them without includeHidden. Not undoable. "
+              "Returns the shown, unchanged and skipped issues. Examples: "
+              "{\"codes\": [\"EMPTY_PROPERTY_VALUE\"]}; {\"issues\": "
+              "[\"issue:41:512:0\"]}")
         .input(object(std::move(fields)))
         .output(object({
           field(hide ? "hidden" : "shown", array(string())).required(),
@@ -1563,10 +1564,9 @@ void registerValidationTools(ToolRegistry& registry)
         "Lists the validators of the document: the editor's validators (one per issue "
         "type) and the MCP checks (Z_FIGHTING, ENTITY_OUTSIDE_HULL, MODEL_PLACEMENT for "
         "the four MODEL_* codes, UV_ASPECT_DISTORTION), with the codes they report, "
-        "whether they are on and their fixes. Example: {} -> {\"validators\": "
-        "[{\"name\": \"EMPTY_BRUSH_ENTITY\", \"source\": \"editor\", \"title\": \"Empty "
-        "brush entity\", \"codes\": [\"EMPTY_BRUSH_ENTITY\"], \"enabled\": true, "
-        "\"fixes\": [\"Delete Objects\"]}, ...], \"disabled\": []}")
+        "whether they are on and their fixes, plus the names of the turned-off ones "
+        "(disabled). Read-only; turn validators on or off with validators_set. "
+        "Example: {}")
       .input(object({}))
       .output(object({
         field("validators", array(validatorSchema)).required(),
@@ -1587,14 +1587,16 @@ void registerValidationTools(ToolRegistry& registry)
         "issuesIntroduced, and turned-off MCP checks do not run after each call (e.g. "
         "turn off ENTITY_OUTSIDE_HULL while blocking out an unsealed map). The setting "
         "lasts while the document is open and does not change the editor's Issues "
-        "view. Example: {\"disable\": [\"Z_FIGHTING\", \"EMPTY_PROPERTY_VALUE\"]} -> "
-        "{\"validators\": [...], \"disabled\": [\"EMPTY_PROPERTY_VALUE\", "
-        "\"Z_FIGHTING\"], \"changed\": [\"EMPTY_PROPERTY_VALUE\", \"Z_FIGHTING\"]}")
+        "view (not undoable). Returns all validators, the turned-off ones (disabled) "
+        "and the ones this call changed. Examples: {\"disable\": [\"Z_FIGHTING\", "
+        "\"EMPTY_PROPERTY_VALUE\"]}; {\"enableAll\": true}")
       .input(object({
-        field("enable", array(string()).nonEmpty()).describe("Validators to turn on"),
-        field("disable", array(string()).nonEmpty()).describe("Validators to turn off"),
+        field("enable", array(string()).nonEmpty())
+          .describe("Validators to turn on (names or titles from validators_list)"),
+        field("disable", array(string()).nonEmpty())
+          .describe("Validators to turn off (names or titles from validators_list)"),
         field("enableAll", boolean().defaultsTo(false))
-          .describe("Turn all validators on first"),
+          .describe("Turn all validators on before applying enable and disable"),
       }))
       .output(object({
         field("validators", array(validatorSchema)).required(),

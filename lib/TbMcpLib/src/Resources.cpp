@@ -44,296 +44,186 @@ namespace
 
 constexpr auto AgentGuide = R"(# TrenchBroom MCP server — agent guide
 
-Conventions
-- All coordinates and lengths are in map units; Z is up. Angles are in degrees.
-- Object ids look like 'brush:1042', 'entity:7', 'group:3', 'layer:5', 'layer:default',
-  'world'. Faces are 'brush:1042/face:3'. Ids stay valid while the object exists,
-  including across undo and redo. They do not survive reloading a document.
+Tool names are in backticks; each tool's description has its arguments and an example.
+The prompts (prompts/list) walk through whole tasks: blockout, population, lighting,
+texturing, fixing, compiling, explaining and cleaning up a map.
+
+## Conventions
+- Map units; Z is up. Angles are in degrees. Yaw 0 looks along +X (east), 90 along +Y
+  (north), counterclockwise seen from above; pitch > 0 looks up. North is +Y everywhere
+  (compass annotations, `surroundings`, `map_plan_view`, the walls of `room_create`).
+- An entity's 'angle' is its yaw (`entity_create_point` "angle"). Classes that read
+  'angles' ("pitch yaw roll") need it set with `entity_properties_set`.
+- Ids: 'brush:1042', 'entity:7', 'group:3', 'layer:5', 'layer:default', 'world'; faces
+  'brush:1042/face:3'; spaces 'space:…'; snapshots 'snap:3'; compile runs 'run:1'. Ids
+  survive undo and redo. A face index is valid until its brush's geometry changes: read
+  the faces again after editing a brush.
 - Tools that act on objects take 'ids'; without ids they act on the current selection.
+- Grid: `grid_get` / `grid_set` (powers of two). Every modifying call reports the grid in
+  effect. Brush coordinates are used exactly as given: keep them on the grid (multiples of
+  8 or 16) so that vertices stay integers; `entity_create_point` snaps positions itself.
+- Material names ignore case. Unknown materials, classes, properties and values are
+  warnings, never errors.
 
-Changing the map
-- Every modifying call is one undo step named 'AI: <tool title>' and is atomic: if it
-  fails, the map is unchanged.
-- Every modifying call accepts 'dryRun': it reports the changes and introduced issues
-  without changing anything.
-- Group several calls into one undo step with transaction_begin / transaction_commit,
-  or discard them with transaction_rollback.
-- If the user is dragging or has a dialog open, modifying calls wait until they finish.
+## Player dimensions
+Used by the eyeHeight camera helper, the "player" annotation, `spaces_list` cells (half
+the player width) and `walkable_plan`. Units; "~" marks approximate engine values.
 
-Understanding the map
-- Start with map_summary, then narrow down with objects_find (filters such as
-  classname, material, layer, region) and object_get for details. map_tree shows the
-  hierarchy, map_plan_view a top-down text plan of a region.
-- Spatial questions: ray_pick ({"from": "entity:12"} finds what is below an entity),
-  objects_at_point, and space_check before placing entities or rooms.
-- Selection tools (selection_set, select_by, ...) change the editor's selection; each
-  call is an undo step, like selecting in the editor.
-- Subscribe to trenchbroom://documents/{doc}/summary and .../selection to learn about
-  changes the user makes; updates are coalesced.
+| Game family  | Player box W×H | Eye | Step | Jump      | Doorway (typical) |
+|--------------|----------------|-----|------|-----------|-------------------|
+| Quake        | 32×56          | 46  | 18   | ~45       | ~64×96            |
+| Quake 2      | 32×56          | 46  | 18   | ~45       | ~64×96            |
+| Half-Life    | 32×72          | 64  | 18   | ~45 (~63 crouch jump) | 64×96 or wider |
+| Quake 3      | 30×56          | 50  | 18   | ~45       | ~96×128           |
+| other games  | 32×56          | 48  | 18   | ~45       | ~64×96            |
 
-Entities
-- Find a class with entity_classes_list (prefix such as "monster_", group, search),
-  then read entity_class_describe for its size, model, properties, choices and
-  spawnflags before placing it.
-- Place point entities with entity_create_point; dropToFloor puts them on the floor
-  below. Set spawnflags by name with entity_spawnflags_set, and connect entities
-  (target / targetname) with entity_link.
-- Unknown classes, unknown property keys and invalid values are reported as warnings;
-  they never block a call.
-- trenchbroom://documents/{doc}/entity-definitions lists all classes of a document.
+- The family comes from the game name or its compile tools: Half-Life tools (csg, bsp,
+  vis, rad), Quake tools (qbsp, vis, light), Quake 2 tools with a Quake 2 format (e.g.
+  Heretic 2, SoF), q3map2 with baseq3. All other games use the last row.
+- `walkable_plan` assumes step 18 and jump 45 (pass jumpHeight 63 for Half-Life crouch
+  jumps) and walks on faces with normal z ≥ 0.7 (slopes up to ~45°, as the engines do).
+- Derive the rest from the player: corridors at least 3 player widths wide, rooms 2–3
+  player heights tall, walls 8–16 thick.
 
-Placing models
-- entity_model_info lists a model's animations (frames, or a studio model's sequences
-  such as "sitting2") with their real bounds ('bounds' in model space, 'worldBounds'
-  where the entity stands) and names the property that selects the animation
-  ('frameProperty', e.g. "sequence"). The class's size box is often not the model.
-- Set the pose with entity_animation_set {"animation": "sitting2"} (a name or an index)
-  before placing precisely; the result has the new model bounds.
-- entity_create_point with dropToFloor rests the bottom of the current animation's model
-  on the floor (dropUsing "auto"), so a seated pose may stand higher than the class box.
-- Creating and moving entities warns MODEL_BELOW_FLOOR, MODEL_FLOATING, MODEL_NO_FLOOR or
-  MODEL_PENETRATES_BRUSHES; apply 'suggestedMove' with objects_move, drop to the floor or
-  choose another animation. A seated model always touches its chair: check it with a
-  snapshot. Run entity_placement_check {"scope": "map", "onlyProblems": true} before
-  compiling.
+## Workflow
+1. Orient: `editor_status`, `game_info`, `compile_tools_get`. On an existing map:
+   `map_summary`, `map_manifest_get` {"restoreCameras": true}, `spaces_list`.
+2. New map: `document_new` (a Valve 220 format where the game has one), delete its
+   'initialObjects' (the template brush) with `objects_delete`, then `document_save_as` at
+   once: compiling needs a saved file, and unsaved work is lost if the editor restarts.
+3. Materials: `materials_collections_get` / `materials_collections_set` (WADs or folders).
+4. Blockout: `room_create` per room, `opening_cut` for doorways and windows,
+   `brush_create_shape` (stairs, arches, cylinders), `brush_create_box`,
+   `brush_create_hull`. Put rooms into layers (`layer_create`) and multi-brush objects into
+   named groups (`group_create`). Repeats (column rings, spiral stairs, rows):
+   `objects_array` (its count includes the original). Use "dryRun": true when unsure.
+   Save after each step.
+5. Placement: `spaces_list`, `surroundings`, `free_spots` (floor, wall, ceiling spots with
+   an 'origin' for point entities), `space_check` for a box, `ray_pick`.
+6. Entities: `entity_classes_list`, `entity_class_describe` (size, model, properties,
+   spawnflags), then `entity_create_point` with "dropToFloor": true, or
+   `entity_create_brush` from brushes. `entity_spawnflags_set` sets flags by name,
+   `entity_link` connects target and targetname.
+7. Look: `view_snapshot` with agent cameras (`agent_camera_set`), `view_snapshots_around`,
+   `view_pick` (what a pixel shows), `view_snapshot_compare` (what a change did).
+8. Texture: `material_usage`, `material_apply`, `uv_align` {"operation": "typical"}, then
+   `uv_check` {"scope": "map"}.
+9. Check: `map_check`, `issues_list`, `issue_fix`.
+10. Compile and test: `compile_run`, poll `compile_status`, `pointfile_load` on a leak,
+    `engine_launch`.
+11. Record: `map_manifest_set` (spaces with purpose, key points, notes, cameras); it is
+    written next to the map on save.
 
-Materials and faces
-- Material names are case-insensitive. Find materials with materials_list (search
-  "wall_*", usedOnly, includeMissing for materials the map uses but that are not
-  loaded) and look at one with material_preview, which returns a small image.
-- material_apply puts a material on faces ('brush:12/face:3') or on all faces of
-  brushes, groups and entities; material_set_current sets the material of new
-  brushes. Unknown materials are applied anyway with an UNKNOWN_MATERIAL warning.
-- material_replace swaps materials by name or pattern in the selection, the map, a
-  layer ({"layer": "Castle"}) or given ids: {"from": "wall_old*", "to": "wall_new*"}
-  fills each wildcard of 'to' with the text matched in 'from'. It keeps the
-  alignment, skips hidden and locked faces, and reports targets that are not loaded
-  in 'unmatched' instead of guessing. Check the result with dryRun first.
-- trenchbroom://documents/{doc}/materials lists all loaded materials with their sizes.
-- face_attributes_get reads offset, scale, rotation, flags, value and color; its
-  'format' block says whether the map format saves flags and colors and lists the
-  game's flag names. face_attributes_set takes flag names or raw bits ({"add":
-  ["slick"]}), relative offsetBy / scaleBy / rotateBy, and 'unset' to return to the
-  material's defaults.
-- face_attributes_copy works like the editor's alt-click: "project", "rotate" (wraps
-  around corners, Valve 220 only) or "material" only.
-- uv_align: justify, align, fit (repeatU / repeatV for an exact tiling, needs a loaded
-  material), autoFit, reset, resetToWorld, flip, rotate90. uv_nudge moves or rotates
-  in each face's texture axes, not relative to a camera.
-- Smart tags: tags_list shows the game's object tags (trigger, detail) and face tags
-  (clip, skip, hint) with what they match. tag_apply is "Turn into <tag>", tag_remove
-  "Make non-<tag>"; 'option' picks one choice when a tag offers several.
+## Changing the map
+- Every modifying call is one undo step 'AI: <tool title>' and atomic: on failure the map
+  is unchanged. "dryRun": true reports the changes and issues without changing anything.
+- `transaction_begin` / `transaction_commit` make several calls one undo step;
+  `transaction_rollback` discards them. Keep transactions short (see pitfalls).
+- Results list 'changes' (created / modified / removed ids), 'selection',
+  'issuesIntroduced' (editor validators and the MCP checks: Z_FIGHTING,
+  ENTITY_OUTSIDE_HULL, MODEL_*, UV_ASPECT_DISTORTION), 'warnings', 'grid' and 'console'
+  (warnings and errors the editor logged meanwhile). Fix introduced issues right away.
+- Errors carry a code, a message, the object ids and a hint. Lists are paginated: pass
+  'nextCursor' as 'cursor'.
+- While the user drags or has a dialog open, modifying calls wait.
+- `undo`, `redo`, `history_get`; `command_repeat` repeats the recorded transforms on the
+  current selection.
 
-Texturing like a designer of the game
-- Before texturing, read the material's profile with material_usage: its kind (panel,
-  tile, trim, decal, sky, liquid, tool), typical scale, typical face size and repeats,
-  each with its source (notes, config, corpus, map, name, image) and sample count.
-  Trust notes and corpus values over the image analysis.
-- Scan the original game's map sources once with material_corpus_scan {"folder": ...}
-  (load the game's WADs or materials first, so that sizes and repeats are recorded); the
-  statistics are kept per game and mod for all later calls. Record facts you or the user
-  know with material_notes_set ({"notes": [{"material": "lab1_gad2", "kind": "panel",
-  "scale": 0.5}]}); notes override statistics.
-- Prefer the typical scale: uv_align {"operation": "typical"} applies it and aligns the
-  texture to the face edge.
-- Panels (screens, doors, signs) fit whole: adjust the geometry to the texture instead of
-  stretching it. material_fit_geometry tells the face size at which the panel fits at its
-  typical scale and the face_extrude call that gets there; then uv_align typical. When
-  the size is fixed, use uv_align fit {"repeatU": 1, "keepAspect": true, "round": true}
-  instead of fitting both axes to arbitrary sizes.
-- Tiles may repeat fractionally; keep one scale across neighbouring faces. Trims fit
-  whole across the strip and repeat along it (fit repeatV with keepAspect).
-- Material and UV tools warn UV_ASPECT_DISTORTION, UV_FRACTIONAL_REPEAT,
-  UV_PANEL_NOT_ALIGNED, UV_UNUSUAL_SCALE, UV_TEXEL_DENSITY_MISMATCH and UV_SEAM with a
-  suggested fix. Run uv_check {"scope": "map"} before finishing, apply the 'fix' calls,
-  and look at the result with view_snapshot.
+## Seeing your work
+- Judge rooms, props and textures from images, not coordinates. `view_snapshot` renders
+  offscreen from your own camera and never touches the user's views, selection or
+  filters. Without a camera it frames the whole map from above.
+- `agent_camera_set` {"name": ..., "camera": {...}} names cameras: perspective
+  (position + lookAt / yaw / pitch), orthographic (top, front, side), or the helpers
+  frame, orbit and eyeHeight (stand on the floor below a point at the game's eye height).
+  Reuse one camera per room.
+- "options" hide helpers: {"hideTags": ["trigger", "clip"], "hideClassnames": [...]};
+  wireframe shows rooms from outside. "isolate" and "highlight" (top-level arguments)
+  show only or mark given ids. "annotations" add labels, a coordinate grid, a compass and
+  a player box for scale.
+- `view_snapshot` {"keepAs": "before"} … edit … `view_snapshot_compare` {"before":
+  "before"}, or {"undoSteps": 1}: both images and a mask of the changed pixels.
+- `view_pick` turns snapshot pixels into object, face, point and normal.
+- `map_plan_view` draws a top-down plan (text or image); `walkable_plan` shows where the
+  player can walk from the start.
+- `view_snapshot_user` shows what the user sees. `camera_focus`, `camera_set` and
+  `camera_step_pointfile` move the user's views: only to show the user something.
 
-Layers, groups and visibility
-- layers_list shows the layers with their state; layer_set_state sets current, hidden,
-  locked, omitFromExport or isolate. New objects go into the current layer; move
-  existing ones with objects_move_to_layer.
-- group_create / group_ungroup / groups_merge / group_add_objects /
-  group_remove_objects manage groups; group_open enters a group for editing like a
-  double-click, group_close leaves it.
-- linked_group_duplicate makes linked copies (count, offset); editing one copy updates
-  the others when the call commits, and ids in the other copies stay valid.
-  linked_group_select, linked_group_separate and linked_group_extract manage link sets.
-- visibility_set hides, shows or isolates objects; "show_all" shows every object.
+## Entities and models
+- `entity_model_info` lists a model's animations with their real bounds and the property
+  that selects them; `entity_animation_set` switches pose. The class box is often not the
+  model: "dropUsing": "model" rests the model on the floor.
+- `entity_placement_check` {"scope": "map", "onlyProblems": true} finds models in brushes
+  or floating; apply 'suggestedMove' with `objects_move`.
+- A null property value removes the key, including defaults the game adds on creation.
+- `entity_links_get` {"brokenOnly": true} finds broken target links.
 
-Clipboard and import
-- clipboard_copy / clipboard_cut return map text and keep it in the server's own
-  clipboard (not the system clipboard); clipboard_paste pastes it (or given text) at
-  the original position, at a 'position' with an 'anchor', or by an 'offset'. Face
-  text applies its attributes to the target faces.
-- To bring content from another map, call map_file_inspect on the file to see its
-  layers, groups and classnames, then map_import with a filter (layer, group,
-  classname, region), a position and a targetLayer. The format is converted, missing
-  materials are reported and the imported objects are selected. Check the space first
-  with space_check.
+## Materials
+- Find with `materials_list`, look with `material_preview`. `material_usage` tells a
+  material's kind (panel, tile, trim, …) and typical scale from notes, the scanned
+  original maps (`material_corpus_scan`) and the image; record facts with
+  `material_notes_set`.
+- Apply with `material_apply` (faces or whole objects), swap in bulk with
+  `material_replace`, set the material of new brushes with `material_set_current`.
+- Align with `uv_align` (typical, fit, justify, resetToWorld, …), `uv_nudge`,
+  `face_attributes_set` and `face_attributes_copy`. Panels fit whole:
+  `material_fit_geometry` gives the face size. Never distort the aspect.
+- Smart tags: `tags_list`, `tag_apply` (e.g. turn a brush into a trigger), `tag_remove`.
 
-Compiling
-- compile_tools_get shows the game's compile tool paths and whether each is an
-  executable file; set them with compile_tools_set (Half-Life: csg/bsp/vis/rad from
-  VHLT or ZHLT; Quake: qbsp/vis/light from ericw-tools; Quake 3: q3map2).
-- compile_presets_list shows the fast / normal / full tool chains for the game; each
-  exports the map (including unsaved changes) to <map folder>/compile/, runs the tools
-  and copies the .bsp into <game>/<mod>/maps. compile_profiles_list and
-  compile_profile_save manage the editor's own compile profiles.
-- compile_run {"preset": "normal"} starts in the background and returns a run handle
-  such as 'run:1' at once; poll compile_status (state, current task, errors, warnings,
-  leak, compiled file) or subscribe to trenchbroom://compile/{run}/log. "test": true
-  only prints the commands. One compile runs per document at a time; compile_cancel
-  stops it.
-- On a leak, compile_status names the point file: pointfile_load returns the leak path,
-  the entities near its ends and where it leaves the map; close the gap there and
-  compile again. portalfile_load shows the portals written by vis.
-- engine_profiles_list shows the game's engine profiles (path, parameters, whether the
-  engine is executable). engine_profile_save adds one, e.g. {"name": "Quakespasm",
-  "path": "/opt/quakespasm/quakespasm", "parameters": "+map ${MAP_BASE_NAME}"}.
-- After a successful compile_run, engine_launch {"profile": "Quakespasm"} starts the
-  game with the map and returns at once with the process id. "parameters" overrides
-  the profile's for one launch. The engine loads the last compiled .bsp, so compile
-  again after changes.
+## Checking, compiling, testing
+- `map_check`: entities in walls or floating, a missing player start, broken links,
+  missing materials, entities outside rooms, each with a ready 'suggestedFix' call.
+- `issues_list` adds the editor validators; `issue_fix` applies their quick fixes (fixing
+  by code may delete objects: check with dryRun). Z_FIGHTING and ENTITY_OUTSIDE_HULL need
+  your own edits. `issue_hide` accepts an issue; `validators_set` turns checks off.
+- `compile_presets_list` (fast / normal / full per tool chain), `compile_run` returns a
+  run handle at once; poll `compile_status`. On a leak, `pointfile_load` returns the path
+  and where it leaves the map; close the gap, compile again, `pointfile_unload`.
+- `engine_profiles_list`, `engine_profile_save`, `engine_launch` start the game with the
+  last compiled map. `console_read` shows the editor's log.
 
-Looking at your work
-- Check what you built with images. view_snapshot renders the map offscreen from your
-  own camera and returns a PNG; it never moves the user's camera or changes their view
-  filters, hidden objects or selection, and it does not wait for the user.
-- Without a camera, view_snapshot frames the whole map from above at an angle. Name
-  cameras with agent_camera_set: a perspective camera from 'position' plus 'lookAt',
-  'direction' or 'yaw' / 'pitch'; an orthographic 'view' (top, front, side) with
-  'center' and 'zoom'; or a helper: 'frame' (ids or a box), 'orbit' (target, yaw,
-  pitch, distance) or 'eyeHeight' (a point inside a room: the camera stands on the
-  floor below at the player's eye height). Eye heights above the floor: Quake and
-  Quake 2 46 (player 56 tall, 32 wide), Half-Life 64 (player 72 x 32), Quake 3 50
-  (player 56 x 30), other games 48.
-- Options per snapshot: faceMode (textured, flat, wireframe), shading, fog, edges,
-  hideTags (e.g. ["trigger", "clip"]), hideClassnames, pointEntities, brushEntities,
-  patches, entityModels, includeHidden, isolate (only these ids), highlight (ids in a
-  color), bounds, classnames, entityLinks, leakPath, grid, axes. Wireframe with
-  hideTags shows inside rooms from outside.
-- view_snapshots_around renders several labelled views around objects or a box (e.g.
-  north, east, south, west, above). map_plan_view {"format": "image"} draws a top-down
-  plan of a height slice with entities marked.
-- To see what a change did, keep a snapshot ({"keepAs": "before"}), change the map, then
-  call view_snapshot_compare {"before": "before"}; or compare with the state before the
-  last undo steps: {"undoSteps": 1}. It returns both images side by side and a mask of
-  the changed pixels.
-- view_snapshot_user captures what the user currently sees in one of their views and
-  returns that view's camera.
-- Every snapshot returns a 'snapshotId'. view_pick {"snapshot": id, "pixel": {x, y}}
-  tells what a pixel shows: object id, face id ('brush:12/face:3'), group, layer,
-  point, normal and distance; pass up to 256 'pixels' at once. keepAs names work as
-  ids; only the last 32 snapshots can be picked, and picks use the current map, so take
-  a new snapshot after edits.
-- annotations on view_snapshot: {"labels": true} writes id, classname or group name
-  and size next to objects; {"grid": {"step": 64}} draws coordinates on floor and
-  walls; {"compass": true} shows north (+Y); {"player": {"point": [x, y, z]}} stands
-  the game's player box there for scale.
+## Pitfalls
+- Reloading a document (`document_revert`) invalidates brush, entity and face ids (layer
+  and group ids stay); after an editor restart look every id up again (`objects_find`).
+- Adjacent rooms: outer faces may touch but walls must not overlap, or the faces
+  z-fight (Z_FIGHTING). A floor under a doorway belongs to one room only. End supports
+  2 units below the surface they carry.
+- `opening_cut` without ids cuts every editable brush in the box; list the wall brushes
+  of both rooms to protect other objects.
+- A point entity outside the sealed hull makes the map leak (ENTITY_OUTSIDE_HULL); while
+  the blockout is still open, `validators_set` can turn that check off.
+- A transaction belongs to the session that opened it: closing the session rolls it back,
+  and after a reconnect the new session gets TRANSACTION_ACTIVE until the old one closes.
+- A never-saved map cannot compile; unsaved changes of a saved map are compiled. The
+  engine plays the last compiled .bsp: compile again after edits.
+- Snapshot ids and `view_pick` use the current map: take a new snapshot after edits.
+- Agent cameras and kept snapshots belong to the MCP session and are gone after a
+  reconnect; keep cameras in the manifest (`map_manifest_set` {"saveCameras": "all"}) and
+  restore them with `map_manifest_get` {"restoreCameras": true}.
+- The editor preview is not the game: models show their default pose, render modes
+  (transparency, invisible triggers) and light are not shown. Judge them in the game.
+- Hidden objects and tags (`visibility_set`, `view_options_set`, hidden layers) are still
+  compiled; only layers with omitFromExport are left out.
+- `brush_create_box` faces are 0 -x, 1 -y, 2 -z, 3 +z, 4 +y, 5 +x (faces are sorted by
+  normal). Read other brushes' faces with `object_get` {"fields": ["faces.id",
+  "faces.normal"]}.
+- Round shapes and rotations can give non-integer vertices (NON_INTEGER_VERTICES):
+  `vertices_snap` {"mode": "integer"}.
+- `preferences_set`, `grid_set`, `view_options_set` and `view_layout_set` are not undoable
+  and change the user's editor: tell the user.
 
-Spaces and placement
-- Think in rooms, not brushes: spaces_list returns the enclosed spaces ('space:' ids,
-  inner bounds, floor and ceiling heights, area, layers and groups inside), their
-  openings (doorways, windows with size and position, doors in them) and neighbours.
-  Space ids stay the same until the walls around a space change; list again after
-  geometry edits. 'sealed: false' and 'outsideOpenings' show a leak before compiling.
-- surroundings {"point": [x, y, z]} describes a point in one call: its space, the
-  distance and face of the wall in each direction, floor, ceiling and nearby objects
-  with direction and distance.
-- free_spots finds where a box fits: placement "floor", "wall" (with heightAboveFloor;
-  returns the wall normal and the wall face id to texture or align with), "ceiling" or
-  "any", in a space or region, with distances from walls and objects. Use a spot's
-  'origin' for point entities.
-- walkable_plan shows where the player can walk from the player start (text and
-  image): ',' is walkable but unreachable, 'v' reachable without a way back.
-- After every modifying call, 'issuesIntroduced' also lists placement problems the
-  call caused (source "mcp", with 'code' and 'details'): Z_FIGHTING (move or resize one
-  of details.faces), ENTITY_OUTSIDE_HULL (close the gap at details.gap or move the
-  entity inside), MODEL_BELOW_FLOOR / MODEL_FLOATING / MODEL_PENETRATES_BRUSHES (with
-  the model bounds) and UV_ASPECT_DISTORTION. issues_list checks the whole map (editor
-  validators with their quick fixes, and these checks) before compiling.
-- Keep a map manifest: map_manifest_set records spaces with their purpose, key points,
-  notes and your cameras ("saveCameras": "all") in <map>.mcp.json next to the map (for a
-  new map it is written on the first save). Start work on a map with
-  map_manifest_get {"restoreCameras": true}.
-
-Checking and fixing the map
-- issues_list lists every problem with an id, code, object, explanation and the names of
-  its fixes; subscribe to trenchbroom://documents/{doc}/issues to follow them.
-- issue_fix applies fixes in one undo step: {"codes": ["EMPTY_BRUSH_ENTITY"]}, {"issues":
-  [ids]} or {"ids": [objects]}; 'fix' chooses when an issue has several (e.g. Delete
-  Property or Replace " with '). The change report lists what was deleted or
-  changed; 'notFixed' explains every issue left. Fixes such as Delete Objects remove
-  objects: fix by code only when that is what you want, and never delete entities just
-  because the definition file lacks their class. MCP fixes: "Apply Suggested Move"
-  (MODEL_* issues with a suggested move) and "Apply Suggested UV Fix". Z_FIGHTING and
-  ENTITY_OUTSIDE_HULL need your own edits.
-- Before compiling or handing a map over, run map_check: entities in walls or floating,
-  a missing player start, broken or missing links, missing materials and entities
-  outside rooms. Fix errors first (ENTITY_IN_SOLID, MISSING_PLAYER_START,
-  ENTITY_OUTSIDE_HULL), then warnings. Each finding's suggestedFix is a ready call (tool
-  and args): check that it makes sense, call it, then run map_check again with the same
-  'checks'. {"checks": ["links", "materials"]} skips the slower space analysis; 'ids'
-  checks only what you just built.
-- issue_hide / issue_show hide editor issues as the Issues view does. validators_list /
-  validators_set turn validators and the MCP checks off for the document, e.g.
-  ENTITY_OUTSIDE_HULL while the map is not sealed yet; turned-off checks are not
-  reported after each call either.
-
-Editor console
-- console_read returns the messages the editor logs (material, model and definition
-  load errors, compile and export messages, ...), with level, time and document. Pass
-  the returned 'lastSeq' as 'after' to fetch only newer messages; filter with minLevel,
-  text (or a regex) and document. Subscribe to trenchbroom://console to be notified of
-  new messages. console_clear clears the buffer and the editor's console views.
-- Every call result lists under 'console' the warnings and errors logged while it ran.
-
-Showing things to the user
-- Use view_snapshot and agent cameras to look at your work yourself. The camera_* tools
-  move the user's own views; use them only to show the user something: camera_focus
-  {"ids": [...]} frames objects without changing the selection, camera_set puts the 3D
-  view at a spot ({"position": [...], "lookAt": [...]}), and camera_step_pointfile walks
-  the user along a leak after pointfile_load. camera_get tells what the user is looking
-  at, useful when the user says "here" or "this room".
-- view_options_set changes the global view preferences (faceMode, fog, edges, entity
-  display, entityLinkMode) and the document's tag and class visibility, e.g.
-  {"hideTags": ["trigger", "clip"]}. Hidden objects are still in the map and compiled.
-  Undo such changes when done (showTags, {"showClassnames": ["*"]}, restoreDefaults).
-- view_layout_set changes the pane count of every window and resets the view cameras;
-  use it only when the user asks.
-
-Editor actions
-- Every menu item and shortcut is reachable. actions_list (filter by menu, query, kind,
-  enabledOnly) shows each action's path, shortcut, whether it is enabled or checked now,
-  and the semantic tools that do the same. Prefer those tools: they take explicit ids and
-  arguments.
-- action_invoke {"path": ...} runs the rest (tool toggles, view filters, inspector pages,
-  Perform Clip while the clip tool is active) exactly as the user would, in the current
-  selection and tool; map edits are one undo step. Actions that ask the user (dialogs,
-  file choosers, prompts) fail with DIALOG_REQUIRED naming the tool to use; pass
-  "openDialog": true only to open the dialog for the user. Undo, Redo and a few others
-  fail with ACTION_REFUSED; use the named tool.
-
-Preferences and the manual
-- manual_search finds how an editor feature works; read it with manual_section or
-  trenchbroom://manual/<id> (trenchbroom://manual is the table of contents). Shortcuts in
-  the text are the user's current ones.
-- preferences_get (category or query) finds any setting: view options, colors, camera,
-  keyboard shortcuts (same paths as actions_list), game and compile tool paths.
-  preferences_set changes several at once, all or nothing; it is saved immediately and
-  not undoable, so tell the user what you change, and check 'note' (restart needed) and
-  'conflicts' in the result. The MCP connection settings cannot be changed by agents.
-
-Results
-- Modifying calls return 'changes' (created / modified / removed ids), 'selection',
-  'issuesIntroduced' (editor validator issues and placement problems the call caused),
-  'warnings' and the grid size in effect.
-- Errors carry a code, a message, the involved object ids and a hint for the next step.
-- List results are paginated: pass 'cursor' from 'nextCursor' to get the next page.
-
-Resumability
-- Server-sent event streams cannot be resumed with Last-Event-ID. After reconnecting,
-  read the resources again.
+## More
+- Editor menus and shortcuts: `actions_list`, `action_invoke`. Preferences:
+  `preferences_get`, `preferences_set`. How TrenchBroom works: `manual_search`,
+  `manual_section`, trenchbroom://manual.
+- Import from other maps: `map_file_inspect`, `map_import`; clipboard: `clipboard_copy`,
+  `clipboard_paste`. Layers and groups: `layers_list`, `layer_set_state`,
+  `objects_move_to_layer`, `linked_group_duplicate`.
+- Resources: trenchbroom://editor/status, trenchbroom://documents/{doc}/summary,
+  selection, issues, entity-definitions, materials, info; trenchbroom://console;
+  trenchbroom://compile/{run}/log. Subscribe to follow the user's changes; updates are
+  coalesced. Event streams cannot be resumed with Last-Event-ID: read the resources again
+  after reconnecting.
 )";
 
 /** Lists one entry per open document for a document resource template. */
@@ -377,6 +267,11 @@ ResourceReader documentReader(
 }
 
 } // namespace
+
+std::string_view agentGuide()
+{
+  return AgentGuide;
+}
 
 void registerResources(McpServer& server)
 {
@@ -548,7 +443,12 @@ void registerResources(McpServer& server)
     "trenchbroom://guide",
     "agent-guide",
     "Agent Guide",
-    "How to use this server well: conventions, ids, transactions, dry runs.",
+    "How to use this server well: units, axes, yaw and ids, the player dimensions of "
+    "each "
+    "game family (box, eye height, step, jump, doorway), the recommended workflow from "
+    "setup to compiling, dry runs and transactions, how to check your work with "
+    "snapshots "
+    "and checks, and common pitfalls.",
     "text/markdown",
     [](ServerState&, Session&, const std::string& uri, const auto&)
       -> Result<Json, ToolError> {

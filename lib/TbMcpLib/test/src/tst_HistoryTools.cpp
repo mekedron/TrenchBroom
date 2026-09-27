@@ -195,6 +195,46 @@ TEST_CASE("HistoryTools")
       CHECK(fixture.server().activity().openTransactions.empty());
     }
 
+    SECTION("calls report no undo step and the commit reports their net changes")
+    {
+      auto* existing = addBrush(map);
+      const auto existingId = fixture.id(*existing);
+
+      const auto kept =
+        fixture.call("brush_create_box", Json{{"min", {0, 0, 0}}, {"max", {16, 16, 16}}});
+      CHECK(kept["undoStep"].is_null());
+      CHECK(kept["changes"]["created"].size() == 1);
+      const auto keptId = kept["result"]["brush"].get<std::string>();
+
+      const auto discarded = fixture.call(
+        "brush_create_box", Json{{"min", {32, 0, 0}}, {"max", {48, 16, 16}}});
+      const auto discardedId = discarded["result"]["brush"].get<std::string>();
+
+      const auto moved = fixture.call(
+        "objects_move", Json{{"ids", {keptId, existingId}}, {"vector", {0, 0, 16}}});
+      CHECK(moved["undoStep"].is_null());
+      fixture.call("objects_delete", Json{{"ids", {discardedId}}});
+
+      // a dry run inside the transaction is not part of it
+      fixture.call("objects_delete", Json{{"ids", {existingId}}, {"dryRun", true}});
+
+      const auto result = fixture.call("transaction_commit");
+      CHECK(result["undoStep"] == "AI: Build");
+      CHECK(result["changes"]["created"] == Json::array({keptId}));
+      // the layer is modified because objects were added to it
+      CHECK(result["changes"]["modified"] == Json::array({"layer:default", existingId}));
+      CHECK(result["changes"]["removed"].empty());
+      CHECK(
+        map.commandProcessor().undoCommandNames()
+        == std::vector<std::string>{"AI: Build"});
+
+      // the next transaction starts with no changes
+      fixture.call("transaction_begin", Json{{"name", "Next"}});
+      const auto next = fixture.call("transaction_commit");
+      CHECK(next["changes"]["created"].empty());
+      CHECK(next["changes"]["modified"].empty());
+    }
+
     SECTION("dry run")
     {
       CHECK(

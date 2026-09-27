@@ -85,6 +85,15 @@ Json makePage(
  */
 Json selectFields(const Json& item, const std::vector<std::string>& fields);
 
+/**
+ * The given fields (keys or dotted paths, as for selectFields) that select nothing from
+ * any of the items, e.g. misspelled keys. A path that exists in some items only (e.g.
+ * "classname" in a list of entities and brushes) is not unknown. Arrays along a path are
+ * searched element-wise.
+ */
+std::vector<std::string> unknownFields(
+  const std::vector<Json>& items, const std::vector<std::string>& fields);
+
 std::string base64Encode(std::string_view data);
 std::optional<std::string> base64Decode(std::string_view data);
 

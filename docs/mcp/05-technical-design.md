@@ -37,7 +37,7 @@ app/TrenchBroom ──► TbMcpUiLib ──► TbMcpLib ──► TbAppLib ─�
        │               │  │              └──────► nlohmann_json (PUBLIC)
        │               │  └──► Qt6::Network, Qt6::Widgets
        └──► TbUiLib ◄──┘
-app/TrenchBroomMcp ──► TbMcpLib (Qt-free HttpParser/SseParser/JsonRpc parts) + Qt6::Core + Qt6::Network
+app/TrenchBroomMcp ──► TbMcpLib (BridgeSession, SseParser, JsonRpc) + TbVersionLib + Qt6::Core + Qt6::Network
 ```
 
 `TbMcpLib` links no `Qt6::` target, like `TbAppLib`. It depends on `TbAppLib` because tools operate on
@@ -77,6 +77,7 @@ lib/TbMcpLib/
     HttpResponse.h          response and SSE frame serialization
     StreamableHttp.h        Streamable HTTP state machine over an abstract HttpConnection
     SseParser.h             incremental SSE parser (stdio bridge, tests)
+    BridgeSession.h         the stdio bridge's offline answers, message routing and editor handshake (§3.5)
     Host.h                  McpHost, DocumentHost (§4.3)
     Scheduler.h             abstract Scheduler (post, postDelayed, now)
     Schema.h                schema builder DSL + validator/decoder (§7.2)
@@ -94,7 +95,8 @@ lib/TbMcpLib/
     Errors.h                ToolError, ErrorCode, Warning, makeError
     Pagination.h            cursor/limit/fields/detail helpers, selectFields, base64
     CallLog.h               in-memory ring buffer, sinks, JsonlFileSink
-    Resources.h             registerResources (§8)
+    Resources.h             registerResources, agentGuide (§8)
+    Prompts.h               registerPrompts (§8)
     RegisterAll.h           registerAll(McpServer&): every register<Domain>Tools + registerResources
     tools/<Domain>Tools.h   `void register<Domain>Tools(ToolRegistry&)` plus helpers shared with resources
                             (ConsoleTools.h also declares registerConsoleResources)
@@ -158,7 +160,9 @@ regardless of the preference. The stdio bridge passes it when it launches the ed
 ### 1.4 `app/TrenchBroomMcp`
 
 Like `app/CmdTool`: `add_executable(TrenchBroomMcp)`, `EMBED_UTF8_MANIFEST`, links `CompilerConfig Qt6::Core
-Qt6::Network TbMcpLib`. Its CMake file makes `TrenchBroom` depend on it and installs it on Windows and Linux;
+Qt6::Network TbMcpLib TbVersionLib`. It contains an offline `McpServer` with every tool, resource and prompt
+(`BridgeSession`), so it links the tool code of `TbMcpLib`, but no Qt Widgets and no `TbUiLib`; its server
+version is `VERSION_STR` from `TbVersionLib`, the same string as the editor's `getBuildVersion()`. Its CMake file makes `TrenchBroom` depend on it and installs it on Windows and Linux;
 `app/TrenchBroom/CMakeLists.txt` copies it next to the editor after building (into
 `TrenchBroom.app/Contents/MacOS/` on macOS) and passes it to `macdeployqt`. Behavior: §3.5.
 
@@ -265,19 +269,42 @@ production, a temporary directory in tests). A killed editor leaves a stale file
 - Reads newline-delimited JSON-RPC from stdin on a `std::thread` (`QSocketNotifier` cannot read stdin on
   Windows) and hands each line to the main thread with `QMetaObject::invokeMethod`. Lines that are not
   valid JSON are answered with `-32700` by the bridge itself.
-- Forwards each message as an HTTP POST (`QNetworkAccessManager`), remembers `Mcp-Session-Id` and sends
-  `MCP-Protocol-Version`. JSON responses go to stdout as one line; SSE responses are parsed with
-  `mcp::SseParser` and each `data:` event becomes one line.
-- After `notifications/initialized` it opens the GET stream and forwards its events, reconnecting after
-  1 s, 2 s, 5 s.
+- **Lazy start** (`mcp::BridgeSession`, Qt-free and unit-tested in `tst_BridgeSession.cpp`): starting a
+  client does not start or contact the editor. The bridge answers `initialize`, `ping`, `tools/list`,
+  `resources/list`, `resources/templates/list`, `prompts/list`, `prompts/get` and `logging/setLevel` itself
+  with an offline `McpServer`: `registerAll` over a private host without editor, documents or games, a
+  scheduler that runs nothing, and a `PreferenceManager` with default values
+  (`BridgeSession::createNullPreferenceManager`). Its answers are the editor's for the same version
+  (negotiation, capabilities, `serverInfo` with the version, `instructions`, lists); `resources/list` has only
+  the static resources. `notifications/initialized` is consumed; other notifications and client responses are
+  dropped while no editor session exists and nothing waits for one.
+- **Editor session:** the first message that needs the editor (`tools/call`, `resources/read`,
+  `resources/subscribe` / `unsubscribe`, `completion/complete`, unknown methods, a batch with any of them)
+  is queued, and the bridge sends the handshake of `BridgeSession::handshake` one message at a time: the
+  client's `initialize` parameters (request id `trenchbroom-bridge:initialize`, the response is swallowed;
+  its `Mcp-Session-Id` and protocol version are kept), `notifications/initialized`, the client's log level,
+  its resource subscriptions, then `tools/list` and `resources/list`. If the editor's lists differ from what
+  the client knows (the bridge's own lists before the first connection), the bridge sends
+  `notifications/tools/list_changed` / `notifications/resources/list_changed`. Then it opens the GET stream
+  and forwards the queued messages in order. While the session is open, every message except `initialize`
+  is forwarded as an HTTP POST (`QNetworkAccessManager`) with `Mcp-Session-Id` and `MCP-Protocol-Version`.
+  JSON responses go to stdout as one line; SSE responses are parsed with `mcp::SseParser` and each `data:`
+  event becomes one line. A new `initialize` from the client closes the editor session (DELETE).
+- The GET stream reconnects after 1 s, 2 s, 5 s. When the editor refuses the stream's connection (it has
+  quit) or answers `404`, the session is lost: the bridge sends `resources/list_changed` (and
+  `tools/list_changed` if the editor's tools differed), answers the list requests itself again, and the next
+  message that needs the editor opens a new session. A POST that gets `404` for its session (the editor was
+  restarted) or a refused connection is queued again once and sent in the new session.
 - It finds the editor through the discovery file in the directory of `SystemPaths::userDataDirectory()`
   (`~/.TrenchBroom` on Linux, the application data location elsewhere; portable mode is not handled).
-- **Editor not running** (no discovery file, or connection refused): it launches the sibling `TrenchBroom`
-  executable with `--mcp-server` (`QProcess::startDetached`) and polls every 250 ms for up to 30 s for a new
-  or changed discovery file (so a stale file is ignored). Then pending requests get `-32000 "TrenchBroom did
-  not start"`.
+- **Editor not running** (no discovery file, or connection refused) when a message needs it: it launches the
+  sibling `TrenchBroom` executable with `--mcp-server` (`QProcess::startDetached`, stdin and stdout on the
+  null device so that the editor never writes into the protocol stream) and polls every 250 ms for up to 30 s
+  for a new or changed discovery file (so a stale file is ignored). Then the waiting requests get
+  `-32000 "TrenchBroom did not start"`. With `--no-launch` they get `-32000` telling the user to start
+  TrenchBroom with the MCP server enabled; the next message that needs the editor tries again.
 - CLI: `TrenchBroomMcp [--port N] [--no-launch] [--editor PATH]`. Logs go to stderr only.
-- The bridge does not interpret MCP beyond the session headers, so tools need no bridge changes.
+- Tools, resources and prompts need no bridge changes: the bridge has the same registries as the editor.
 
 ### 3.6 Multiple clients
 
@@ -584,6 +611,12 @@ call rolls back only itself. `transaction_commit` → `commitTransaction()`, `tr
   `TRANSACTION_ACTIVE`, naming the owning client.
 - `undo`/`redo` while one is open → `TRANSACTION_ACTIVE` (`CommandProcessor::undo()` requires an empty
   transaction stack).
+- Calls inside the transaction report `undoStep: null` (the call runner reports a step only when it opened
+  its transaction at depth 0), since their changes become part of the transaction's step.
+- The call runner merges the change report of every successful, non-dry-run call made while the transaction
+  is open (net: created then removed drops out, created then modified stays created), keyed by the
+  document state and the transaction; `transaction_commit` reports these net `changes` and names the step
+  in `undoStep`. Issues introduced are reported by each call, not again on commit.
 - Session DELETE, disconnect, **Stop agent**, or closing the document → rollback.
 - The status bar shows "AI transaction open: <name>". Human edits made meanwhile become part of the agent
   transaction; the manual section (E15.5) documents this.
@@ -634,7 +667,9 @@ placement checks (`PlacementChecks.h`) and carry `details`:
 | `UV_ASPECT_DISTORTION` | a face | `face`, `brush`, `material`, `measured`, `fix` |
 
 **Placement tracking.** A `PlacementTracker` inside the `ChangeCollector` snapshots the MCP findings of nodes in
-`nodesWillChange` / `nodesWillBeRemoved` and diffs them by signature against the findings after the call:
+`nodesWillChange` / `nodesWillBeRemoved` and diffs them against the findings after the call (`sameIssue`: by
+signature, but face issues match despite a slightly moved or split face — Snap Vertices — when code, brushes (and
+material) agree, the normals differ by at most 10° and z-fighting planes by at most 1 unit):
 z-fighting for pairs involving created or modified brushes (signature: both brush ids and the plane); model
 placement for created or modified point entities and entities next to changed brushes (for entities without a
 snapshot only findings that name a changed brush count); UV aspect distortion for the faces of created or modified
@@ -733,8 +768,8 @@ the editor's `csgHollow` with the thickness as a parameter; thickness ≤ 0 fail
 - Common argument names: `ids`, `faces`, `document`, `dryRun`, `cursor`, `limit`, `fields`, `detail`.
   Coordinates are `position`/`min`/`max`/`center`/`vector`; angles `angle`/`angles` in degrees; lengths in
   map units. All paths are absolute.
-- Prompt names (E15): `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
-  `compile_and_debug`, `explain_map`, `explain_entity`, `cleanup_map`.
+- Prompt names: `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_issues`,
+  `compile_and_debug`, `explain_map`, `explain_entity`, `cleanup_map` (§8).
 
 ### 7.2 `ToolDef` and the schema builder (`ToolRegistry.h`, `Schema.h`)
 
@@ -818,7 +853,9 @@ Mapping to MCP:
   `modificationCount` changed since the cursor was issued, the page is still served with `"stale": true`.
 - A list response is `{"items":[...], "total":N, "nextCursor":"..."|null}`.
 - `fields` selects top-level keys and dotted paths (`"faces.material"`). `detail:"summary"` returns each
-  tool's compact shape.
+  tool's compact shape. `object_get` warns `UNKNOWN_FIELD` for paths that none of the returned objects has
+  (`unknownFields`); a path that some objects have (e.g. `origin` for a point entity and a brush) is not
+  unknown.
 - `tools/list` pages at 1,000 (in practice one page); `resources/list` and `prompts/list` page at 100.
 
 ---
@@ -837,7 +874,7 @@ Mapping to MCP:
 | `trenchbroom://compile/{run}/log` | the full log of a compile run as `text/plain` (`{run}` is e.g. `run:3`); listed once per known run | output appended, run ended |
 | `trenchbroom://documents/{doc}/issues` | `issuesResource()` (`ValidationTools.h`): the issues `issues_list` returns without filters (hidden issues and turned-off validators excluded), `total`, `counts`, `truncated`, at most 200 items, `leakCheck`, `disabledValidators` | whenever the summary is updated (objects added, removed or changed, entity definitions, reload), issues hidden or shown, validators turned on or off |
 | `trenchbroom://console` | the newest console messages (§9.1) | new messages (250 ms coalescing), clear |
-| `trenchbroom://guide` | agent guide (`AgentGuide` raw string in `Resources.cpp`) | static |
+| `trenchbroom://guide` | agent guide as `text/markdown` (`AgentGuide` raw string in `Resources.cpp`, `agentGuide()`): conventions (units, axes, yaw, ids, grid), the player dimensions per game family (the `playerSize()` table of `AgentCamera` and the `walkable_plan` defaults), the workflow, checks and pitfalls. Tool names are in backticks | static |
 | `trenchbroom://manual` | table of contents of the user manual: `{title, sectionCount, sections[{id, title, level, parent, uri}]}` (§10.16) | static |
 | `trenchbroom://manual/{section}` | one manual section as `text/markdown` (`{section}` is a section id), with links to its subsections; not listed per section | static |
 
@@ -853,6 +890,28 @@ subscriptions (the hooks run on every map change, e.g. during drags).
 `clearedNotifier` and sends one `resources/updated` per burst, 250 ms after the first message; nothing is
 scheduled without subscribers. Lines that start with `[AI] ` (the call log sink, §9) do not notify, so a
 client that answers notifications with calls cannot loop.
+
+### Prompts (`Prompts.cpp`)
+
+`registerPrompts` adds the task templates of spec §22 to the `PromptRegistry`. Each returns one user
+message that walks the agent through the tools in order, with their key arguments, the checks to run and
+what to report; it tells the agent to read the guide first and to learn the game's classes and flags
+instead of assuming Quake. Argument values are inserted into the text; missing or blank optional
+arguments get defaults. Tool names are written in backticks and nothing else is; `tst_Prompts` checks that
+every backticked name (in the prompts and in the guide) is a registered tool and that no other word names
+one.
+
+| Prompt | Arguments (required in bold) | Guides the agent to |
+|---|---|---|
+| `blockout_level` | **description**, game, style | set up the document (`document_new`, `document_save_as`, materials), build rooms with `room_create` and `opening_cut` at the game's player scale, place the player start, check with `spaces_list`, `walkable_plan`, snapshots, `map_check`, a fast compile, record the manifest |
+| `populate_level` | difficulty (easy, normal, hard, all), theme, spaces | read the game's monster and item classes and difficulty spawnflags, place them with `free_spots` and `entity_create_point` (dropToFloor), set flags, check placement |
+| `lighting_pass` | mood, spaces | learn the game's light keys, place lights per room in a Lights layer, check, compile to judge |
+| `texture_pass` | theme, materials | choose one material per surface type (`material_preview`, `material_usage`), apply and align (`uv_align` typical), `uv_check` |
+| `fix_issues` | scope (safe, all) | collect `issues_list`, `map_check`, broken links, explain them, `issue_fix` with dry runs (safe: no deletions except empty objects), fix Z_FIGHTING and leaks by hand, report what remains |
+| `compile_and_debug` | preset (fast, normal, full), profile | save, check the tools, `compile_run`, poll `compile_status`, find leaks with `pointfile_load`, offer `engine_launch` |
+| `explain_map` | focus | summarize layout, entities, gameplay flow and problems without changing the map |
+| `explain_entity` | **classname** | describe a class from `entity_class_describe` and its use in the map |
+| `cleanup_map` | format (map, obj or a map format), exportPath | remove empty objects, fix properties, links, vertices and materials, export (`document_export_map`, `document_export_obj`, or `document_new` + `map_import` for another format) |
 
 ---
 
@@ -944,7 +1003,7 @@ call log lines, and so on.
 | `PreferenceTools.cpp` | `preferences_get`, `preferences_set` | E14 |
 | `KnowledgeTools.cpp` | `manual_search`, `manual_section`; the manual resources | E14 |
 
-Planned: `Prompts.cpp` in E15.
+The prompts are in `src/Prompts.cpp` (§8).
 
 `CompileTools.h` also declares `registerCompileResources`. Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
 shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
@@ -1004,7 +1063,9 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   `document_close`, `document_revert`, and on `document_new` / `document_open` when they replace a document
   (single-window mode). `"save"` fails for a never-saved document. The server does not create folders.
 - `document_new` / `document_open` make the result the session's active document. `document_new` reports the
-  game's `initialMap` template for the format (or null).
+  game's `initialMap` template for the format (or null) and the ids of the objects the new map starts with
+  (`initialObjects`, e.g. the single default brush), with an `INITIAL_OBJECTS` warning, so that agents delete
+  them before building at the origin.
 - `document_open` reads game and format from the header comments; explicit `game` / `format` override them;
   a missing format is detected by the loader (`formatSource: "detected"`). An already open file is returned
   with `alreadyOpen: true`. `loadMessages` lists warnings and errors logged while loading.
@@ -1021,7 +1082,10 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   `LOAD_ERROR` warnings. Unknown values are warnings: `UNKNOWN_MOD`, `DEFAULT_MOD`, `FILE_NOT_FOUND`,
   `UNKNOWN_COLLECTION`, `BOUNDS_OUTSIDE_WORLD`.
 - `materials_collections_set` takes `wads` (ordered WAD list; WAD games only, else `UNSUPPORTED`) and/or
-  `enabled` (enabled collection paths). `entity_definitions_set` takes `type: "builtin" | "external"` and
+  `enabled` (enabled collection paths). Relative WAD paths that are found (next to the map, in the game or
+  application folder) are stored as absolute paths, as the editor's path dialog does by default, because
+  compile tools such as hlcsg cannot open game-relative paths; `keepRelative: true` stores them as passed
+  with a `RELATIVE_WAD_PATH` warning naming the absolute path. `entity_definitions_set` takes `type: "builtin" | "external"` and
   `path`. `soft_bounds_*` use `mode: "game" | "unlimited" | "custom"` with `bounds`.
 
 ### 10.4 Scene, spatial and selection
@@ -1075,7 +1139,9 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
 - `opening_cut` subtracts the opening from each target with `Brush::subtract`, re-applies the wall's own face
   attributes (subtract copies the cutter's attributes to coplanar faces), and uses `material` or the wall's
   most used material inside the opening. Any invalid fragment fails the call. Without ids it cuts every
-  selectable brush the opening overlaps.
+  selectable brush the opening overlaps. Like the transform and face tools (`resolveTargets`), it does not
+  cut brushes inside closed groups: that would edit a group's members outside the editor's open-group model
+  (and bypass linked group propagation on close), so the error's hint names the closed groups to open.
 - `brush_clip`: plane normal `cross(p1-p0, p2-p0)`; with 2 points `cross(b-a, axis)`; with `face` the face
   normal. "Front" is where the normal points.
 - `face_extrude` groups faces by normal and extrudes each group. `face_extrude_new` reimplements the Extrude
@@ -1131,8 +1197,10 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   and `null` removes such a key in the same call.
 - `entity_create_point` snaps to the grid. `dropToFloor` casts five vertical rays (bounds center and inset
   corners, from the height of the bounds center) against visible solid and brush-entity brushes and patches
-  (not triggers) and places the bounds on the highest hit; it warns `ENTITY_OVERLAPS_BRUSHES` if the bounds
-  intersect brushes (`intersectsInterior`).
+  (not triggers) and places the bounds on the highest hit. The dropped origin z is kept integral (model bounds
+  are often fractional): within 0.01 of an integer it is rounded, otherwise rounded up so the bounds float less
+  than 1 unit above the floor instead of sinking into it; x and y are unchanged. It warns
+  `ENTITY_OVERLAPS_BRUSHES` if the bounds intersect brushes (`intersectsInterior`).
 - **Model-aware placement (E11).** `EntityModelUtils` loads entity models synchronously with
   `mdl::loadEntityModelSync` from `createGameFileSystem` when the editor has not loaded them yet (the editor
   loads models asynchronously and processes them per frame, so right after `entity_create_point` a model is
@@ -1151,10 +1219,15 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   `modelBounds` also for models it loaded itself. `entity_animation_set` sets the frame property by animation
   name (case-insensitive) or index in one undo step and returns the resulting model bounds.
 - **Placement checks.** For a point entity with a loadable model, five vertical rays go down from the top of the
-  current animation's world model box (center and inset corners) against visible solid and brush-entity
-  brushes and patches (not triggers, as in `dropToFloor`). A hit within 1 unit of the model bottom supports it
-  (e.g. the floor under a chair seat); otherwise the highest first hit is the surface: `MODEL_BELOW_FLOOR`
-  (depth and `suggestedMove`), `MODEL_FLOATING` (gap), `MODEL_NO_FLOOR`. Other brushes that intersect the
+  current animation's world model box (center and inset corners) against solid and brush-entity brushes and
+  patches, hidden ones included because the compiler builds them (not triggers and not layers omitted from
+  export). A hit from 1 unit above to 2 units below the model bottom supports it (e.g. the floor under a chair
+  seat); otherwise the highest first hit is the surface: `MODEL_BELOW_FLOOR` (more than 2 units deep:
+  animation bounds enclose every vertex, feet routinely dip a unit or two, and the games drop monsters by
+  their hull; depth and `suggestedMove`), `MODEL_FLOATING` (more than 1 unit gap), `MODEL_NO_FLOOR`.
+  `placementRule` decides which entities get these checks, for `issues_list`, `issuesIntroduced`, the tool
+  warnings and `map_check` alike: only standing classes (below) and no sprite models; entities that may float
+  (flying or swimming monsters, origin in a liquid) get no `MODEL_FLOATING` / `MODEL_NO_FLOOR`. Other brushes that intersect the
   model box shrunk by 1 unit (`intersectsInterior`) give `MODEL_PENETRATES_BRUSHES`. `entity_create_point`
   and `objects_move` add them as warnings (at most 20, then `MORE_PLACEMENT_FINDINGS`);
   `entity_placement_check` lists them for ids, the selection or the whole map (`scope: "map"`,
@@ -1355,8 +1428,9 @@ have.
   saved once (`UNSAVED_CHANGES`, hint `document_save_as`); unsaved changes are compiled because the export
   task writes the current state. Unless `test`, every game tool variable (`${qbsp}`) used by an enabled run
   tool task must point to an executable file (`OPERATION_FAILED` with `details.tools`, hint
-  `compile_tools_set`); an invalid game path is a `GAME_PATH_NOT_SET` warning. It returns the
-  `compile_status` payload of the new run.
+  `compile_tools_set`); an invalid game path is a `GAME_PATH_NOT_SET` warning, and relative entries in the
+  map's WAD list are a `RELATIVE_WAD_PATH` warning (compile tools open them relative to their working
+  directory). It returns the `compile_status` payload of the new run.
 - **Presets** (`CompileUtils`): the family is derived from the game's compilation tool names — csg/bsp/vis/rad
   (Half-Life, VHLT/ZHLT), qbsp/vis/light (Quake, ericw-tools), bsp/vis/light with a Quake 2 map format (Quake
   2, ericw-tools 2 with `-q2bsp`), q3map2 with the search path `baseq3` (Quake 3). Every preset uses
@@ -1385,7 +1459,8 @@ have.
   k-th task): state per task, exit codes, the current task, `completedTasks`, and the executed commands,
   exported maps and copied files. Tool messages in the formats of VHLT/ZHLT, ericw-tools/tyrutils, q3map2 and
   Quake 2 tools become errors and warnings (runner failure lines count as errors). Leaks are recognized from
-  `=== LEAK in hull 0 ===` / `Entity <class> E (x, y, z)`, `Reached occupant ... at (x y z)`, `Leak file
+  `=== LEAK in hull 0 ===` / `Entity <class> @ (x, y, z)` or `Entity <class> at (x y z)`, `Reached occupant
+  ... at (x y z)` / `reached occupant at: (x, y, z)`, `Leak file
   written to ...` and the `leaked` banners. The run state is `cancelled` (cancel requested, document closed,
   or `#### Terminated`), `failed` (a task failed or not all tasks completed) or `succeeded`. The compiled file
   is the first copied `.bsp` source (else the exported map's `.bsp` if it exists); `copiedTo` lists the
@@ -1393,7 +1468,9 @@ have.
 - **Point and portal files**: `pointfile_load` defaults to the latest run's leak file, then
   `compile/<base>.pts`, `<base>.pts` and the `.lin` variants; it returns the path (at most 1000 points), its
   length, the three point entities nearest to each end, and `leavesMapAt`, where the path, walked from the end
-  inside the brushes' bounds, leaves them. `portalfile_load` defaults to `compile/<base>.prt`, then
+  inside the brushes' bounds, leaves them; if both ends are inside them (the leak ends in the void between
+  rooms), the first point, sampled every quarter cell from the end that is not in the void, that the space
+  analysis (`analyzeSpaces`) labels as void; else null. `portalfile_load` defaults to `compile/<base>.prt`, then
   `<base>.prt`. Both use `MapDocument::loadPointFile` / `loadPortalFile`, so the editor shows them.
 - **Engines** (`EngineTools.cpp`): `engine_profiles_list` and `engine_profile_save` read and write the game's
   `GameEngineConfig` through `GameManager::updateGameEngineConfig`, the store of the editor's engine dialog.
@@ -1517,7 +1594,10 @@ cameras live in the `Session` (at most 64) and are never shown as the user's cam
   top/front/side, or `{label, camera}`; at most 12); a text label block before each image; progress per image.
 - `map_plan_view` `format: "image" | "both"` (default `"text"`): an orthographic camera at the slice height
   looking down (near 0, far = `floorDepth`), up to 16 px per cell and at most 1024 px (`imageWidth`,
-  `imageHeight`), point entities as markers in the legend's colors. It stays synchronous.
+  `imageHeight`), every point entity of the region as a marker in the legend's colors at its origin, with z
+  clamped into the camera's depth range so that entities above the slice (lights) are marked too.
+  `entitiesTruncated` is always present and true only when `maxEntities` dropped entities from the list. It stays
+  synchronous.
 - `view_snapshot_compare`: `before` (a kept snapshot) and optional `after` (default: render now with the
   before snapshot's camera and options), or `undoSteps` (render, undo n steps, render, redo n steps, all in one
   step so no event loop runs in between; refused while any transaction is open, the user is busy, or fewer
@@ -1607,13 +1687,18 @@ large maps stay fast. `brushRole` classifies brushes:
   doors, triggers, `func_illusionary` and water do not block.
 
 `analyzeSpaces` returns a `SpaceMap` that holds no node pointers (safe across deferred steps). Segmentation: the
-empty cells are eroded (chessboard distance) by `openingSize / 2`; the connected cores grow back 26-connected up
+empty cells are eroded (chessboard distance) by `floor(openingSize / cellSize / 2)` cells, so an opening of n cells
+across its smaller side separates spaces when `ceil(n / 2)` is at most that (`openingSize` acts rounded down to a
+multiple of twice the cell size); rooms not larger than that in every direction have no core (`hasCore` false),
+and when no space has one the space tools warn `OPENING_SIZE_TOO_LARGE`. The connected cores grow back 26-connected up
 to the erosion distance (the inner bounds), then one step into the openings; long leftover passages become their
 own spaces, leftovers connected to the outside become void, everything else grows 6-connected, and small isolated
 leftovers become pockets. Boundaries between two grown regions are openings (`doorway` when they reach the floor,
 `window`, `hole`; the `func_door`s in them). A core connected to the outside is a leaking room (`sealed: false`)
 if most of its cells are enclosed in at least five directions, otherwise outdoor void. Space ids are an FNV hash of
-the inner bounds in cells: they survive unrelated edits and change when a surrounding wall moves. The default cell
+the inner bounds in cells: they survive unrelated edits and change when a surrounding wall moves; they depend on
+the segmentation, i.e. are only valid with the same `cellSize` and `openingSize`. The doors of an opening are the
+`func_door*` brushes whose bounds touch the opening's box widened by one cell along its axis. The default cell
 size is half the player width rounded to a power of two (16 in Quake).
 
 `predictLeaks` floods the sealing grid from outside (cell size 8, doubled until the grid has at most 1M cells;
@@ -1623,9 +1708,11 @@ entities inside sealing brushes are not reported. The gap is where the flood pat
 outside first reaches a cell that sees solid in fewer than four of the six axis directions; `gapBrushes` lists up to
 eight sealing brushes nearest to it. Entities outside the grid or in cells that are not enclosed get no gap.
 `findFreeSpots` checks every candidate against the real brushes with `intersectsInterior` and against point
-entities with their model bounds; `planWalk` fits the player box with its lowest `stepHeight` units ignored, finds
-floors with five rays, and moves to the four neighbouring columns (step 18, jump 45 for all games; 63 is a
-Half-Life crouch jump).
+entities with their model bounds; `wallDistance` applies to space-solid world and `func_group` brushes and to brushes
+whose innermost group's bounds contain the candidate's center (a room built as a group), `objectDistance` to
+everything else (point entities, brush entities, `func_detail`, groups that do not enclose the spot); `planWalk`
+fits the player box with its lowest `stepHeight` units ignored, finds floors with five rays, and moves to the four
+neighbouring columns (step 18, jump 45 for all games; 63 is a Half-Life crouch jump).
 
 Tools (`SpaceTools.cpp`; all read-only and asynchronous with progress, cancellation between steps):
 - `spaces_list {region, cellSize, openingSize (96), detail summary|full, limit (100)}` → `{cellSize, openingSize,
@@ -1683,7 +1770,11 @@ runs once per call, only when a check or a suggested move needs it, and fixes us
   more than 16 units above the floor or without floor); other classes get `ENTITY_IN_SOLID` only when their origin
   lies at least 1 unit inside a space-solid brush; flying and swimming monsters and entities in liquids may float;
   position-independent classes (info_null, info_notnull, info_target, info_landmark, info_compile_parameters,
-  info_texlights, light_environment) are skipped.
+  info_texlights, light_environment) and logic classes that work anywhere (game_*, multisource, multi_manager,
+  trigger_relay, trigger_auto, trigger_changetarget, trigger_counter, scripted_sentence, env_global, env_render,
+  env_fade, env_message and the Quake 2/3 relay, delay, message and score target_* classes) are skipped. The class
+  rules are `placementRule` (`EntityModelUtils`), shared with the model placement checks; the definition box is
+  checked with the 1 unit tolerance.
 - *player_start*: start classes from the definitions (prefixes info_player_start, info_player_deathmatch,
   info_player_coop; fallback info_player_start / info_player_deathmatch); `MISSING_PLAYER_START` suggests
   `entity_create_point` on a free floor spot of the largest sealed space; `MISSING_SINGLE_PLAYER_START` (info) when
@@ -1697,7 +1788,12 @@ runs once per call, only when a check or a suggested move needs it, and fixes us
 - *materials*: `MISSING_MATERIAL` per material name (info for tool materials) with a `material_replace` to a similar
   loaded material, else a pointer to `materials_collections_set`.
 - *rooms*: `ENTITY_OUTSIDE_HULL` (leak prediction) and `ENTITY_OUTSIDE_SPACES` (the origin's cell and its neighbours
-  belong to no space; fix: move into the nearest space).
+  belong to no space; fix: move into the nearest space). With a gap, the fix is a `brush_create_box` over the hole
+  when the free region around the gap, in the slice across the leak path, is bounded and widens further inside
+  (a local voxel grid of the sealing brushes, 16 cells around the gap): the hole's cells over the wall's thickness,
+  one cell into the rim, recessed by a unit on both sides against z-fighting, with the first non-tool material of
+  the gap brushes. A gap that is no such hole (a missing wall) has no suggested fix and says so in the description;
+  without a gap the fix moves the entity into the nearest room.
 
 **`issue_fix`** (`Mutation::Map`, destructive): the issues are named by `issues` (ids), `codes` and/or `ids`
 (objects), `includeHidden` for hidden editor issues matched by code or object; `fix` names the fix
@@ -1838,8 +1934,11 @@ breaks, with the subsections and the parent, previous and next sections. Without
 | `tst_Json`, `tst_JsonVm`, `tst_JsonRpc` | conversion, rounding, parse/serialize, ids, batch gating, error codes |
 | `tst_McpServer` | initialize/version negotiation, capability gating, ping, `notifications/initialized` ordering, cancellation, progress |
 | `tst_HttpParser`, `tst_HttpResponse`, `tst_StreamableHttp`, `tst_SseParser` | split packets, limits, status codes, sessions, SSE framing, Origin/Host checks over a fake connection |
+| `tst_BridgeSession` | stdio bridge: routing (offline methods vs. editor), offline answers equal to the editor server's (initialize, lists, prompts), handshake replay, `list_changed` on connect and disconnect |
 | `tst_Schema`, `tst_Args`, `tst_Errors`, `tst_Pagination` | JSON Schema output, validation errors with paths, defaults, cursors, fields |
 | `tst_ToolRegistry`, `tst_ResourceRegistry`, `tst_PromptRegistry`, `tst_Resources` | listing, paging, dispatch, subscriptions, coalesced updates |
+| `tst_Prompts` | the nine prompts with their arguments, missing required arguments, inserted and default values; every tool named in the prompts and the agent guide is registered |
+| `tst_ToolCatalog` | every registered tool: a title, a description of at least 60 characters starting with an upper-case letter, at least one JSON object after "Example" and every such object accepted by the input schema, an object input schema with a description on every property (nested objects, array items, oneOf branches), an output schema |
 | `tst_ObjectIds`, `tst_Targets` | id format/parse; delete→undo→same id; redo; linked-group aliasing; reload remap; target resolution |
 | `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks; asynchronous read-only calls (immediate while busy, concurrent, cancel, session close, document close, no undo step) |
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
@@ -1979,7 +2078,13 @@ findings), and game paths in `mdl/Game/`.
 - `clipboard_paste` does not convert between incompatible formats (`map_import` does); pasted face text
   applies only its last face; `clipboard_cut` cuts objects, not faces. `map_import` does not recreate the
   source layers.
-- The bridge ignores portable mode when locating the discovery file.
+- The bridge ignores portable mode when locating the discovery file. It links the whole tool code for its offline
+  catalog (a large Debug binary). Its offline lists are those of its own build: connected to an editor of another
+  build it sends `list_changed` for tools and resources, but prompts do not announce changes (`listChanged: false`).
+- There is no tool that converts a map to another map format in place; `cleanup_map` guides the agent through
+  `document_new` in the target format and `map_import`.
+- Every `issue_fix` undo step is named "AI: Fix Issues". Editor quick fixes (e.g. Snap Vertices) also change hidden
+  objects, while MCP fixes and the edit tools refuse them; a snap that splits a face is not warned about.
 - UV neighbours must share an edge segment (overlapping coplanar faces are not neighbours) and seams are only
   checked between coplanar faces; density mismatches and seams are not reported for panels, decals and trims;
   the `material_fit_geometry` resize is exact for axis-aligned brushes only.

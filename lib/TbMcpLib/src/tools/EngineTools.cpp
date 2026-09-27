@@ -425,19 +425,21 @@ ToolResult engineLaunch(CallContext& context, const Args& args)
 Field gameField()
 {
   return field("game", string())
-    .describe("Game name (game_list); default: the target document's game");
+    .describe(
+      "Game name as game_list lists it, e.g. 'Quake'; default: the target "
+      "document's game");
 }
 
 Schema profileSchema()
 {
   return object({
     field("id", string()).describe("Id, used by launchEngine compile tasks"),
-    field("name", string()).required(),
+    field("name", string()).required().describe("Profile name"),
     field("path", string()).describe("Absolute path of the engine executable"),
     field("parameters", string()).describe("Parameter spec with ${...} variables"),
     field("status", string()).describe("ok, notSet, notFound, notAFile or notExecutable"),
-    field("exists", boolean()),
-    field("executable", boolean()),
+    field("exists", boolean()).describe("Whether the executable exists"),
+    field("executable", boolean()).describe("Whether it can be executed"),
   });
 }
 
@@ -452,7 +454,8 @@ void registerEngineTools(ToolRegistry& registry)
         "Lists the game engine profiles of a game (the editor's Launch Engine dialog): "
         "name, id, executable path with its status, and the parameter spec, e.g. "
         "'+map ${MAP_BASE_NAME}'. launchEngine compile tasks refer to a profile by its "
-        "id. Example: {\"game\": \"Quake\"}")
+        "id. Read-only; add or change profiles with engine_profile_save and start one "
+        "with engine_launch. Examples: {}; {\"game\": \"Quake\"}")
       .input(object({gameField()}))
       .output(object({
         field("game", string()).required(),
@@ -473,18 +476,21 @@ void registerEngineTools(ToolRegistry& registry)
         "use the variables ${MAP_BASE_NAME}, ${GAME_DIR_PATH}, ${MODS} (e.g. "
         "${MODS[-1]}) and the compile tools. A profile with the same name is only "
         "replaced with overwrite: true; omitted parameters then keep their value. "
-        "Example: {\"name\": \"Half-Life\", \"path\": \"/opt/hl/hl_linux\", "
-        "\"parameters\": \"-game valve -dev +map ${MAP_BASE_NAME}\"}")
+        "Returns the saved profile with its path status. Example: {\"name\": "
+        "\"Half-Life\", \"path\": \"/opt/hl/hl_linux\", \"parameters\": \"-game valve "
+        "-dev +map ${MAP_BASE_NAME}\"}")
       .input(object({
         gameField(),
-        field("name", string()).required().describe("Profile name"),
+        field("name", string()).required().describe("Profile name, e.g. 'Quakespasm'"),
         field("path", string())
           .required()
           .describe("Absolute path of the engine executable"),
         field("parameters", string())
-          .describe("Parameter spec; default: '' (or the replaced profile's)"),
+          .describe("Command line parameters with ${...} variables, e.g. '+map "
+                    "${MAP_BASE_NAME}'; default: '' (or the replaced profile's)"),
         field("overwrite", boolean().defaultsTo(false))
-          .describe("Replace a profile with the same name"),
+          .describe("Replace a profile with the same name; otherwise such a name fails "
+                    "with FILE_EXISTS"),
       }))
       .output(object({
         field("game", string()).required(),
@@ -506,13 +512,18 @@ void registerEngineTools(ToolRegistry& registry)
         "(compile_run); unsaved changes are reported as a warning, and a map that was "
         "never saved is an error. 'parameters' overrides the profile's parameter spec "
         "for this launch; ${...} variables are interpolated. 'profile' may be omitted "
-        "if the game has exactly one. Example: {\"profile\": \"Quakespasm\", "
-        "\"parameters\": \"-basedir /opt/quake +map ${MAP_BASE_NAME}\"}")
+        "if the game has exactly one (engine_profiles_list). Not undoable. Returns the "
+        "profile, the executable path, the interpolated parameters and processId. "
+        "Examples: {}; {\"profile\": \"Quakespasm\", \"parameters\": \"-basedir "
+        "/opt/quake +map ${MAP_BASE_NAME}\"}")
       .input(object({
         field("profile", string())
-          .describe("Name (or id) of an engine profile; default: the only profile"),
+          .describe(
+            "Name (or id) of an engine profile (engine_profiles_list); default: the "
+            "game's only profile"),
         field("parameters", string())
-          .describe("Parameter spec for this launch; default: the profile's"),
+          .describe("Parameters with ${...} variables for this launch only; default: the "
+                    "profile's"),
       }))
       .output(object({
         field("profile", string()).required(),

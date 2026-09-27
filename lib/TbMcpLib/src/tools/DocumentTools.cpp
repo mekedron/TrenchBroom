@@ -91,8 +91,9 @@ Schema documentInfoSchema()
              field("focused", boolean()),
              field("active", boolean()),
              field("gamePath", string()).describe("Configured game folder ('' if unset)"),
-             field("gamePathValid", boolean()),
-             field("worldBounds", box()),
+             field("gamePathValid", boolean())
+               .describe("Whether the game folder exists (game_set_path)"),
+             field("worldBounds", box()).describe("Hard limits of the map, map units"),
              field("mods", any()).describe("{default, enabled}"),
              field("entityDefinitions", any()).describe("{type, path, definitionCount}"),
              field("materials", any()).describe("Material collections or WAD files"),
@@ -370,9 +371,35 @@ ToolResult documentNew(CallContext& context, const Args& args)
 
   const auto& opened = created.value();
   activate(context, opened.document);
+
+  // the objects of the initial map template, e.g. a single brush the agent usually
+  // deletes
+  auto& newDocument = *opened.document.document;
+  const auto& ids = context.server().documentState(newDocument).ids;
+  auto initialObjects = Json::array();
+  for (const auto* layer : newDocument.map().worldNode().allLayers())
+  {
+    for (const auto* child : layer->children())
+    {
+      initialObjects.push_back(ids.format(*child));
+    }
+  }
+  if (!initialObjects.empty())
+  {
+    context.warn(
+      "INITIAL_OBJECTS",
+      fmt::format(
+        "The new map contains {} object(s) from the game's initial map template; delete "
+        "them with objects_delete before building if you do not need them (they overlap "
+        "the first room built at the origin).",
+        initialObjects.size()),
+      initialObjects.get<std::vector<std::string>>());
+  }
+
   return Json{
     {"document", documentInfo(context.server(), opened.document, context.session())},
     {"initialMap", initialMapValue},
+    {"initialObjects", std::move(initialObjects)},
     {"replaced", replaced ? Json(replaced->id) : Json(nullptr)},
     {"loadMessages", toJson(opened.messages)},
   };
@@ -731,7 +758,8 @@ ToolResult documentClose(CallContext& context, const Args& args)
     return makeError(
       ErrorCode::OperationFailed,
       fmt::format("A compilation of {} is running.", describeDocument(document)),
-      "Wait until the compilation has finished, then close the document.");
+      "Wait until compile_status reports that the run has ended, or stop it with "
+      "compile_cancel, then close the document.");
   }
 
   const auto modified = context.map().modified();
@@ -1035,15 +1063,20 @@ ToolResult autosaveList(CallContext& context, const Args& args)
   return page;
 }
 
-Schema fileItemSchema()
+Schema fileItemSchema(std::vector<Field> extraFields = {})
 {
-  return object({
-    field("path", string()).required(),
-    field("name", string()),
-    field("size", any()).describe("Size in bytes"),
+  auto fields = std::vector<Field>{
+    field("path", string()).required().describe("Absolute path"),
+    field("name", string()).describe("File name"),
+    field("size", any()).describe("Size in bytes, or null if unreadable"),
     field("modified", any()).describe("Last modification time, ISO 8601 UTC"),
     field("openAs", any()).describe("Handle of the document showing this file, or null"),
-  });
+  };
+  for (auto& extra : extraFields)
+  {
+    fields.push_back(std::move(extra));
+  }
+  return object(std::move(fields));
 }
 
 Schema wouldDoField()
@@ -1076,11 +1109,14 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_new"}
       .title("New Document")
       .description(
-        "Creates a new map for a game and opens it in a new editor window; it becomes "
-        "the active document of this session. The map starts from the game's initial "
-        "map template for the format if it has one (otherwise with a single 128x128x32 "
-        "brush, or empty for some games). The format defaults to the game's first "
-        "format. Use game_list for game and format names. Example: "
+        "Creates a new, unsaved map for a game and opens it in a new editor window (not "
+        "undoable); it becomes the active document of this session. The map starts from "
+        "the game's initial map template for the format if it has one (otherwise with a "
+        "single 128x128x32 brush, or empty for some games); 'initialObjects' lists these "
+        "objects, "
+        "delete them with objects_delete if you build from scratch. game_list gives game "
+        "and "
+        "format names; save it with document_save_as. Example: "
         "{\"game\": \"Quake\", \"format\": \"Valve\"}")
       .input(object({
         field("game", string())
@@ -1093,6 +1129,10 @@ void registerDocumentTools(ToolRegistry& registry)
       .output(object({
         field("document", documentInfoSchema()).describe("The new document"),
         field("initialMap", any()).describe("The template file used, or null"),
+        field("initialObjects", array(string()))
+          .describe(
+            "Ids of the objects the new map starts with (the template's brush); also "
+            "reported as an INITIAL_OBJECTS warning"),
         field("replaced", any())
           .describe("Handle of the document that was replaced (single-window mode)"),
         field("loadMessages", logMessagesSchema()),
@@ -1139,8 +1179,9 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_save"}
       .title("Save Document")
       .description(
-        "Saves the document to its file. Fails for a document that was never saved; "
-        "use document_save_as for that. Not undoable. Example: {}")
+        "Saves the document to its file (not undoable) and returns the path and time. "
+        "Fails with INVALID_ARGUMENT for a document that was never saved; use "
+        "document_save_as for that. Example: {}")
       .input(object({}))
       .output(object({
         field("path", string()).required(),
@@ -1156,9 +1197,10 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_save_as"}
       .title("Save Document As")
       .description(
-        "Saves the document under a new absolute path; the document then refers to the "
-        "new file. Fails with FILE_EXISTS if the file exists unless overwrite is true. "
-        "The folder must exist. Example: {\"path\": \"/home/me/maps/new.map\"}")
+        "Saves the document under a new absolute path (not undoable); the document then "
+        "refers to the new file. Fails with FILE_EXISTS if the file exists unless "
+        "overwrite is true; the folder must exist. Use document_export_map to write a "
+        "copy without switching files. Example: {\"path\": \"/home/me/maps/new.map\"}")
       .input(object({
         field("path", string()).required().describe("Absolute path, usually ending .map"),
         field("overwrite", boolean().defaultsTo(false))
@@ -1167,8 +1209,8 @@ void registerDocumentTools(ToolRegistry& registry)
       .output(object({
         field("path", string()).required(),
         field("previousPath", any()).describe("The former path, or null"),
-        field("overwritten", boolean()),
-        field("savedAt", string()),
+        field("overwritten", boolean()).describe("Whether an existing file was replaced"),
+        field("savedAt", string()).describe("ISO 8601 UTC time"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -1181,15 +1223,17 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_close"}
       .title("Close Document")
       .description(
-        "Closes the document and its window. With unsaved changes, 'unsavedChanges' "
-        "must say whether to save or discard them; otherwise the call fails with "
-        "UNSAVED_CHANGES. An open agent transaction on it is rolled back. Example: "
+        "Closes the document and its window (not undoable). With unsaved changes, "
+        "'unsavedChanges' must say whether to save or discard them; otherwise the call "
+        "fails with UNSAVED_CHANGES. An open agent transaction on it is rolled back; "
+        "fails with COMPILE_RUNNING while it is being compiled. Example: "
         "{\"document\": \"doc:2\", \"unsavedChanges\": \"save\"}")
       .input(object({unsavedChangesField("closed")}))
       .output(object({
         field("closed", string()).required().describe("Handle of the closed document"),
-        field("saved", boolean()),
-        field("discardedChanges", boolean()),
+        field("saved", boolean()).describe("Whether it was saved before closing"),
+        field("discardedChanges", boolean())
+          .describe("Whether unsaved changes were dropped"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -1201,15 +1245,18 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_revert"}
       .title("Revert Document")
       .description(
-        "Reloads the document from its file, dropping the undo history. With unsaved "
-        "changes, pass unsavedChanges: 'discard'. All object ids of the document become "
-        "invalid (idsInvalidated); layer and group ids are remapped. Example: "
+        "Reloads the document from its file, dropping the undo history (not undoable). "
+        "With unsaved changes, pass unsavedChanges: 'discard'. All object ids of the "
+        "document become invalid (idsInvalidated); layer and group ids are remapped, "
+        "so look objects up again (objects_find, map_tree). Example: "
         "{\"unsavedChanges\": \"discard\"}")
       .input(object({unsavedChangesField("reverted")}))
       .output(object({
         field("document", documentInfoSchema()),
-        field("idsInvalidated", boolean()),
-        field("loadMessages", logMessagesSchema()),
+        field("idsInvalidated", boolean())
+          .describe("True: object ids from before the call no longer resolve"),
+        field("loadMessages", logMessagesSchema())
+          .describe("Warnings and errors logged while loading"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -1221,11 +1268,17 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_recent"}
       .title("Recent Documents")
       .description(
-        "Lists recently opened map files, most recent first, with whether each still "
-        "exists and whether it is open. Open one with document_open. Example: {}")
+        "Lists the editor's recently opened map files (read-only), most recent first, "
+        "with size, modification time, whether each still exists and which document "
+        "shows it (openAs). Open one with document_open. Example: {}")
       .input(object({}))
       .output(object({
-        field("items", array(fileItemSchema())).required(),
+        field(
+          "items",
+          array(fileItemSchema({
+            field("exists", boolean()).describe("Whether the file still exists"),
+          })))
+          .required(),
       }))
       .mutation(Mutation::None)
       .handler(documentRecent));
@@ -1234,19 +1287,21 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"map_files_list"}
       .title("List Map Files")
       .description(
-        "Lists files in a folder whose names match a glob pattern (case-insensitive, "
-        "default '*.map'), optionally including subfolders. Paths are absolute and "
-        "sorted naturally. Example: {\"folder\": \"/home/me/quake/id1/maps\", "
-        "\"recursive\": true}")
+        "Lists files in a folder (read-only) whose names match a glob pattern "
+        "(case-insensitive, default '*.map'), optionally including subfolders, with "
+        "size, modification time and the document showing each (openAs). Paths are "
+        "absolute and sorted naturally; open one with document_open. Example: "
+        "{\"folder\": \"/home/me/quake/id1/maps\", \"recursive\": true}")
       .input(object({
         field("folder", string()).required().describe("Absolute folder path"),
-        field("pattern", string().defaultsTo("*.map")).describe("Glob such as '*.map'"),
+        field("pattern", string().defaultsTo("*.map"))
+          .describe("File name glob with * and ?, e.g. '*.bsp'"),
         field("recursive", boolean().defaultsTo(false)).describe("Include subfolders"),
       }))
       .output(object({
         field("items", array(fileItemSchema())).required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()),
+        field("total", integer()).required().describe("Number of matching files"),
+        field("nextCursor", any()).describe("Cursor of the next page, or null"),
       }))
       .mutation(Mutation::None)
       .paginated()
@@ -1257,21 +1312,23 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_export_map"}
       .title("Export Map")
       .description(
-        "Writes a copy of the map to another .map file, leaving out layers marked "
-        "'omit from export'. The document keeps its own path and modified state. "
-        "stripEditorProperties removes TrenchBroom-only properties (_tb_*). Example: "
+        "Writes a copy of the map to another .map file (not undoable), leaving out "
+        "layers marked omitFromExport (layer_set_state). The document keeps its own path "
+        "and modified state; the document's own file cannot be the target. Fails with "
+        "FILE_EXISTS unless overwrite is true. Example: "
         "{\"path\": \"/home/me/maps/export/e1m1.map\", \"stripEditorProperties\": true}")
       .input(object({
         field("path", string()).required().describe("Absolute path of the new file"),
         field("overwrite", boolean().defaultsTo(false))
           .describe("Replace an existing file"),
         field("stripEditorProperties", boolean().defaultsTo(false))
-          .describe("Remove TrenchBroom-specific properties such as layers and groups"),
+          .describe("Remove TrenchBroom-only properties (_tb_*: layers, groups, ...)"),
       }))
       .output(object({
         field("path", string()).required(),
         field("omittedLayers", array(any())).describe("Layers left out: {id, name}"),
-        field("strippedEditorProperties", boolean()),
+        field("strippedEditorProperties", boolean())
+          .describe("Whether _tb_* properties were removed"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -1284,9 +1341,10 @@ void registerDocumentTools(ToolRegistry& registry)
       .title("Export OBJ")
       .description(
         "Exports the map geometry as a Wavefront OBJ file plus an MTL file next to it "
-        "(same name, .mtl). materialPaths chooses how material image paths are written "
-        "in the MTL: relative to the game folder (default) or to the export folder. "
-        "Example: {\"path\": \"/tmp/e1m1.obj\", \"materialPaths\": "
+        "(same name, .mtl; not undoable). materialPaths chooses how material image paths "
+        "are written in the MTL: relative to the game folder (default) or to the export "
+        "folder. Fails with FILE_EXISTS unless overwrite is true. Example: "
+        "{\"path\": \"/home/me/export/e1m1.obj\", \"materialPaths\": "
         "\"relativeToExportPath\"}")
       .input(object({
         field("path", string()).required().describe("Absolute path of the .obj file"),
@@ -1299,8 +1357,8 @@ void registerDocumentTools(ToolRegistry& registry)
           .describe("How material paths are written in the MTL file"),
       }))
       .output(object({
-        field("objPath", string()).required(),
-        field("mtlPath", string()).required(),
+        field("objPath", string()).required().describe("Path of the written OBJ file"),
+        field("mtlPath", string()).required().describe("Path of the written MTL file"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -1312,16 +1370,22 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"autosave_list"}
       .title("List Autosaves")
       .description(
-        "Lists the autosave backups of the document (in the 'autosave' folder next to "
-        "the map, named <map>.<n>.map), newest first. Backups are only made for saved "
-        "maps. Open a backup with document_open. Example: {}")
+        "Lists the autosave backups of the document (read-only; in the 'autosave' "
+        "folder next to the map, named <map>.<n>.map), newest first. Backups are only "
+        "made for saved maps. Open a backup with document_open, then document_save_as "
+        "to restore it. Example: {}")
       .input(object({}))
       .output(object({
-        field("items", array(fileItemSchema())).required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()),
+        field(
+          "items",
+          array(fileItemSchema({
+            field("number", integer()).describe("Backup number <n>; higher is newer"),
+          })))
+          .required(),
+        field("total", integer()).required().describe("Number of backups"),
+        field("nextCursor", any()).describe("Cursor of the next page, or null"),
         field("folder", any()).describe("The autosave folder, or null"),
-        field("note", string()),
+        field("note", string()).describe("Why the list is empty, if it is"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)

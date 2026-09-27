@@ -365,7 +365,9 @@ ToolResult groupUngroup(CallContext& context, const Args& args)
             groups, [&](const auto& id) { return ids.resolve(id).is_success(); }))
       {
         return context.operationFailed(
-          "The groups could not be ungrouped.", "Check the editor messages.");
+          "The groups could not be ungrouped.",
+          "details.editorMessages holds the editor's reason; check that the groups are "
+          "editable (object_get).");
       }
       return Json{{"groups", groups}, {"objects", formatIds(children, ids)}};
     },
@@ -392,7 +394,9 @@ ToolResult groupRename(CallContext& context, const Args& args)
           targets.value(), [&](const auto* node) { return node->name() == name; }))
     {
       return context.operationFailed(
-        "The groups could not be renamed.", "Check the editor messages.");
+        "The groups could not be renamed.",
+        "details.editorMessages holds the editor's reason; check that the groups are "
+        "editable (object_get).");
     }
     return Json{{"groups", formatIds(targets.value(), ids)}, {"name", name}};
   });
@@ -693,7 +697,8 @@ ToolResult linkedGroupDuplicate(CallContext& context, const Args& args)
     {
       return context.operationFailed(
         "The linked duplicate of " + groupId + " could not be created.",
-        "Check the editor messages.");
+        "details.editorMessages holds the editor's reason; check that the copies stay "
+        "inside the world bounds.");
     }
     duplicates.push_back(duplicate);
 
@@ -942,7 +947,9 @@ ToolResult linkedGroupExtract(CallContext& context, const Args& args)
   if (newLinkedGroups.size() != oldLinkedGroups.size())
   {
     return context.operationFailed(
-      "The objects could not be extracted.", "Check the editor messages.");
+      "The objects could not be extracted.",
+      "details.editorMessages holds the editor's reason; pass objects of one linked "
+      "group, not all of its objects.");
   }
 
   // restore the open groups (the extraction closed the source group)
@@ -1026,12 +1033,16 @@ void registerGroupTools(ToolRegistry& registry)
     ToolDef{"group_create"}
       .title("Create Group")
       .description(
-        "Groups objects like Edit > Group and selects the new group. Brushes of brush "
+        "Groups objects like Edit > Group and selects the new group (one undo step). "
+        "Brushes of brush "
         "entities are grouped with their entity. The group is created where the first "
         "object is (its group or layer). "
         "Example: {\"ids\": [\"brush:12\", \"entity:15\"], \"name\": \"house\"}")
       .input(object({
-        idsField(GroupableKinds),
+        idsField(
+          GroupableKinds,
+          "Objects to group (groups, entities, brushes, patches). Default: "
+          "the current selection"),
         nameField("Name of the new group"),
       }))
       .output(object({
@@ -1047,7 +1058,8 @@ void registerGroupTools(ToolRegistry& registry)
     ToolDef{"group_ungroup"}
       .title("Ungroup")
       .description(
-        "Dissolves groups like Edit > Ungroup: their objects move to the groups' parents "
+        "Dissolves groups like Edit > Ungroup (one undo step): their objects move to the "
+        "groups' parents "
         "and keep their ids, and are selected. Ungrouping a linked group unlinks it "
         "first. Example: {\"ids\": [\"group:7\"]}")
       .input(object({idsField(
@@ -1065,15 +1077,15 @@ void registerGroupTools(ToolRegistry& registry)
   registry.add(
     ToolDef{"group_rename"}
       .title("Rename Groups")
-      .description(
-        "Renames groups. Example: {\"ids\": [\"group:7\"], \"name\": \"tower\"}")
+      .description("Renames groups (one undo step). "
+                   "Example: {\"ids\": [\"group:7\"], \"name\": \"tower\"}")
       .input(object({
         idsField({ObjectKind::Group}, "Groups to rename. Default: the selected groups"),
         nameField("New name"),
       }))
       .output(object({
-        field("groups", idListSchema()).required(),
-        field("name", string()).required(),
+        field("groups", idListSchema()).required().describe("The renamed groups"),
+        field("name", string()).required().describe("The new name"),
       }))
       .mutation(Mutation::Map)
       .idempotent()
@@ -1085,8 +1097,7 @@ void registerGroupTools(ToolRegistry& registry)
       .description(
         "Merges groups into a target group like 'Merge Groups into <name>': the objects "
         "of the other groups move into the target (keeping their ids), the emptied "
-        "groups "
-        "are removed, and the target is selected. "
+        "groups are removed, and the target is selected (one undo step). "
         "Example: {\"ids\": [\"group:7\", \"group:9\"], \"target\": \"group:7\"}")
       .input(object({
         idsField(
@@ -1111,7 +1122,8 @@ void registerGroupTools(ToolRegistry& registry)
       .title("Add Objects to Group")
       .description(
         "Moves objects into a group like 'Add Objects to Group' (the objects keep their "
-        "ids) and selects the group. Brushes of brush entities move with their entity. "
+        "ids) and selects the group (one undo step). Brushes of brush entities move with "
+        "their entity. "
         "Objects already in the group are skipped. If the group is linked, its linked "
         "copies get the objects too. "
         "Example: {\"group\": \"group:7\", \"ids\": [\"brush:12\"]}")
@@ -1122,7 +1134,7 @@ void registerGroupTools(ToolRegistry& registry)
         idsField(GroupableKinds, "Objects to add. Default: the current selection"),
       }))
       .output(object({
-        field("group", objectId({ObjectKind::Group})).required(),
+        field("group", objectId({ObjectKind::Group})).required().describe("The group"),
         field("objects", idListSchema()).required().describe("The moved objects"),
       }))
       .mutation(Mutation::Map)
@@ -1133,7 +1145,8 @@ void registerGroupTools(ToolRegistry& registry)
       .title("Remove Objects from Group")
       .description(
         "Moves objects out of their group into the group's parent (the enclosing group "
-        "or layer), like 'Remove Objects from Group'. The objects keep their ids and are "
+        "or layer), like 'Remove Objects from Group', in one undo step. The objects keep "
+        "their ids and are "
         "selected; the group does not need to be open. A group that becomes empty is "
         "removed, and open groups that no longer contain the objects are closed. Brushes "
         "of brush entities move with their entity. "
@@ -1146,7 +1159,7 @@ void registerGroupTools(ToolRegistry& registry)
         field(
           "moved",
           array(object({
-            field("id", objectId()).required(),
+            field("id", objectId()).required().describe("The moved object"),
             field("from", objectId()).required().describe("The old group"),
             field("to", objectId()).required().describe("The new parent"),
           })))
@@ -1182,7 +1195,8 @@ void registerGroupTools(ToolRegistry& registry)
         "selection. Changes to a linked group are applied to its linked copies. Warns "
         "with NO_OPEN_GROUP if no group is open. Example: {\"all\": true}")
       .input(object({
-        field("all", boolean().defaultsTo(false)).describe("Close all open groups"),
+        field("all", boolean().defaultsTo(false))
+          .describe("Close all open groups instead of only the innermost one"),
       }))
       .output(contextOutput({
         field("closed", idListSchema()).required().describe("The closed groups"),
@@ -1196,14 +1210,17 @@ void registerGroupTools(ToolRegistry& registry)
       .description(
         "Creates linked duplicates of a group, like Edit > Create Linked Duplicate: "
         "changes to the contents of any linked copy are applied to all of them, while "
-        "each copy keeps its own position. Copy i is moved by i * offset. Selects the "
-        "new groups. Example: {\"group\": \"group:7\", \"offset\": [512, 0, 0], "
+        "each copy keeps its own position. Copy i is moved by i * offset (map units). "
+        "Selects the new groups (one undo step). Example: {\"group\": \"group:7\", "
+        "\"offset\": [512, 0, 0], "
         "\"count\": 3}")
       .input(object({
         field("group", objectId({ObjectKind::Group}))
           .required()
           .describe("Group to copy"),
-        field("offset", vec3()).describe("Offset between consecutive copies"),
+        field("offset", vec3())
+          .describe("Offset between consecutive copies in map units. Default: none (the "
+                    "copy lies on the original)"),
         field("count", integer().min(1).max(64).defaultsTo(1))
           .describe("Number of copies; more than one needs an offset"),
       }))
@@ -1222,7 +1239,8 @@ void registerGroupTools(ToolRegistry& registry)
       .description(
         "Selects all groups linked with the given groups, or with the linked groups that "
         "contain the given objects. Groups that cannot be selected (hidden, locked, "
-        "inside a closed group) are skipped with a NOT_SELECTABLE warning. "
+        "inside a closed group) are skipped with a NOT_SELECTABLE warning. Changes only "
+        "the selection. "
         "Example: {\"ids\": [\"group:7\"]}")
       .input(object({
         field("ids", array(objectId(GroupableKinds)).nonEmpty())
@@ -1232,7 +1250,7 @@ void registerGroupTools(ToolRegistry& registry)
       }))
       .output(object({
         field("groups", idListSchema()).required().describe("The selected groups"),
-        field("count", integer()).required(),
+        field("count", integer()).required().describe("Number of selected groups"),
       }))
       .mutation(Mutation::Map)
       .handler(linkedGroupSelect));
@@ -1242,7 +1260,8 @@ void registerGroupTools(ToolRegistry& registry)
       .title("Separate Linked Groups")
       .description(
         "Unlinks the given groups from the other groups of their link set, like "
-        "Edit > Separate Linked Groups. Given groups of the same link set stay linked "
+        "Edit > Separate Linked Groups, in one undo step. Given groups of the same link "
+        "set stay linked "
         "with each other. The groups and their objects keep their ids. "
         "Example: {\"ids\": [\"group:9\"]}")
       .input(object({
@@ -1255,7 +1274,9 @@ void registerGroupTools(ToolRegistry& registry)
         field(
           "groups",
           array(object({
-            field("id", objectId({ObjectKind::Group})).required(),
+            field("id", objectId({ObjectKind::Group}))
+              .required()
+              .describe("A given group"),
             field("linkedWith", idListSchema())
               .required()
               .describe("The groups it is still linked with"),
@@ -1269,13 +1290,13 @@ void registerGroupTools(ToolRegistry& registry)
     ToolDef{"linked_group_extract"}
       .title("Extract Linked Groups")
       .description(
-        "Extracts objects out of their linked group, like Edit > Extract Linked Groups: "
+        "Extracts objects out of their linked group, like Edit > Extract Linked Groups, "
+        "in one undo step: "
         "the objects and their counterparts are removed from every group of the link set "
         "and put into new groups that are linked with each other and keep the positions "
         "of the old ones. The extracted objects get new ids (listed in 'objects'). The "
         "group does not need to be open; it is closed afterwards and the new group of "
-        "the "
-        "source is selected. Example: {\"ids\": [\"brush:12\"]}")
+        "the source is selected. Example: {\"ids\": [\"brush:12\"]}")
       .input(object({
         idsField(
           GroupableKinds,
@@ -1292,8 +1313,12 @@ void registerGroupTools(ToolRegistry& registry)
         field(
           "groups",
           array(object({
-            field("source", objectId({ObjectKind::Group})).required(),
-            field("extracted", objectId({ObjectKind::Group})).required(),
+            field("source", objectId({ObjectKind::Group}))
+              .required()
+              .describe("An old linked group"),
+            field("extracted", objectId({ObjectKind::Group}))
+              .required()
+              .describe("The new group of its extracted copy"),
           })))
           .required()
           .describe("For each old linked group, the new group of its extracted copy"),

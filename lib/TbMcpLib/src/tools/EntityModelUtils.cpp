@@ -31,8 +31,10 @@
 #include "mcp/ObjectIds.h"
 #include "mcp/tools/AssetUtils.h"
 #include "mcp/tools/GeometryUtils.h"
+#include "mcp/tools/SpaceAnalysis.h"
+#include "mdl/Brush.h"
+#include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
-#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityModel.h"
@@ -42,14 +44,17 @@
 #include "mdl/GameConfig.h"
 #include "mdl/GameFileSystem.h"
 #include "mdl/GameInfo.h"
+#include "mdl/LayerNode.h"
 #include "mdl/LoadEntityModel.h"
 #include "mdl/Map.h"
 #include "mdl/ModelDefinition.h"
 #include "mdl/Node.h"
+#include "mdl/NodeTree.h"
 #include "mdl/WorldNode.h"
 
 #include "kd/result.h"
 #include "kd/string_compare.h"
+#include "kd/string_format.h"
 
 #include "vm/ray.h"
 #include "vm/vec.h"
@@ -60,6 +65,8 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <initializer_list>
+#include <string_view>
 
 namespace tb::mcp
 {
@@ -71,6 +78,107 @@ constexpr auto Epsilon = 0.01;
 
 /** At most this many placement warnings are added by one call. */
 constexpr auto MaxPlacementWarnings = size_t(20);
+
+/** An origin lies in a liquid if it is at least this deep inside a liquid brush. */
+constexpr auto LiquidDepth = 1.0;
+
+bool isOneOf(const std::string_view str, std::initializer_list<std::string_view> list)
+{
+  return std::ranges::find(list, str) != list.end();
+}
+
+bool hasAnyPrefix(
+  const std::string_view str, std::initializer_list<std::string_view> prefixes)
+{
+  return std::ranges::any_of(
+    prefixes, [&](const auto prefix) { return str.starts_with(prefix); });
+}
+
+/** Classes whose position does not matter (targets of spotlights, compiler settings). */
+bool positionIndependent(const std::string_view classname)
+{
+  return isOneOf(
+    classname,
+    {"info_null",
+     "info_notnull",
+     "info_target",
+     "info_landmark",
+     "info_compile_parameters",
+     "info_texlights",
+     "light_environment"});
+}
+
+/** Monsters that fly or swim. */
+bool mayFly(const std::string_view classname)
+{
+  return isOneOf(
+    classname,
+    {"monster_wizard",
+     "monster_fish",
+     "monster_flyer",
+     "monster_hover",
+     "monster_alien_controller",
+     "monster_nihilanth",
+     "monster_apache",
+     "monster_osprey",
+     "monster_ichthyosaur",
+     "monster_leech",
+     "monster_flyer_flock"});
+}
+
+/** Classes that are often placed on walls, ceilings or in the air. */
+bool mayHang(const std::string_view classname)
+{
+  return hasAnyPrefix(
+    classname,
+    {"light",
+     "env_",
+     "ambient_",
+     "path_",
+     "target_",
+     "trigger_",
+     "misc_",
+     "func_",
+     "info_",
+     "speaker",
+     "scripted_",
+     "aiscripted_"});
+}
+
+bool hasModel(const mdl::Entity& entity)
+{
+  const auto spec = entity.modelSpecification();
+  return spec.is_success() && !spec.value().path.empty();
+}
+
+bool standingClass(const mdl::Entity& entity)
+{
+  const auto& classname = entity.classname();
+  if (hasAnyPrefix(classname, {"info_player_", "monster_", "item_", "weapon_", "ammo_"}))
+  {
+    return true;
+  }
+  return hasModel(entity) && !mayHang(classname);
+}
+
+bool inLiquid(const mdl::Map& map, const vm::vec3d& point)
+{
+  const auto box = vm::bbox3d{point - vm::vec3d{1, 1, 1}, point + vm::vec3d{1, 1, 1}};
+  for (const auto* node : map.worldNode().nodeTree().find_intersectors(box))
+  {
+    const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(node);
+    if (
+      brushNode && brushRole(*brushNode).liquid
+      && brushNode->brush().bounds().contains(point)
+      && std::ranges::all_of(brushNode->brush().faces(), [&](const auto& face) {
+           return face.boundary().point_distance(point) <= -LiquidDepth;
+         }))
+    {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Wraps a variable store: records the names of the variables an evaluation reads and
@@ -502,11 +610,11 @@ PlacementCheck checkModelPlacement(
   mdl::Map& map,
   const IdRegistry& ids,
   const std::string& entityId,
-  const std::string& subject)
+  const std::string& subject,
+  const double belowFloorTolerance)
 {
-  const auto& editorContext = map.editorContext();
   const auto isObstacle = [&](const mdl::Node& node) {
-    if (isPointEntity(node) || !editorContext.visible(node))
+    if (isPointEntity(node) || inOmittedLayer(node))
     {
       return false;
     }
@@ -549,9 +657,10 @@ PlacementCheck checkModelPlacement(
     }
     for (const auto& hit : hits)
     {
-      const auto distance = std::abs(hit.point.z() - bounds.min.z());
+      const auto depth = hit.point.z() - bounds.min.z();
+      const auto distance = std::abs(depth);
       if (
-        distance <= PlacementTolerance
+        depth >= -PlacementTolerance && depth <= belowFloorTolerance
         && (!support || distance < std::abs(support->z - bounds.min.z())))
       {
         support = PlacementSurface{hit.point.z(), hit.node, hit.faceIndex};
@@ -588,7 +697,7 @@ PlacementCheck checkModelPlacement(
     const auto floorId = ids.format(*result.surface->node);
     const auto floorZ = formatNumber(result.surface->z);
     const auto depth = result.surface->z - bounds.min.z();
-    if (depth > PlacementTolerance)
+    if (depth > belowFloorTolerance)
     {
       const auto amount = formatNumber(depth);
       result.findings.push_back(PlacementFinding{
@@ -668,6 +777,36 @@ PlacementCheck checkModelPlacement(
   return result;
 }
 
+PlacementRule placementRule(const mdl::Map& map, const mdl::Entity& entity)
+{
+  const auto& classname = entity.classname();
+  auto rule = PlacementRule{};
+  rule.positionIndependent = positionIndependent(classname);
+  rule.standing = !rule.positionIndependent && standingClass(entity);
+  rule.mayFloat = rule.standing && (mayFly(classname) || inLiquid(map, entity.origin()));
+  return rule;
+}
+
+bool checksModelPlacement(const PlacementRule& rule, const EntityModelState& state)
+{
+  if (!rule.standing)
+  {
+    return false;
+  }
+  const auto extension = kdl::str_to_lower(state.specification.path.extension().string());
+  return extension != ".spr" && extension != ".sp2";
+}
+
+void applyPlacementRule(PlacementCheck& check, const PlacementRule& rule)
+{
+  if (rule.mayFloat)
+  {
+    std::erase_if(check.findings, [](const auto& finding) {
+      return finding.code == "MODEL_FLOATING" || finding.code == "MODEL_NO_FLOOR";
+    });
+  }
+}
+
 std::string placementSubject(const std::string& entityId, const EntityModelState& state)
 {
   const auto* frame = state.frame();
@@ -728,8 +867,13 @@ void warnModelPlacement(
   auto omitted = size_t(0);
   for (const auto* entityNode : entityNodes)
   {
+    const auto rule = placementRule(map, entityNode->entity());
+    if (!rule.standing)
+    {
+      continue;
+    }
     const auto state = resolveEntityModel(entityNode->entity(), loader);
-    if (state.is_error())
+    if (state.is_error() || !checksModelPlacement(rule, state.value()))
     {
       continue;
     }
@@ -740,8 +884,9 @@ void warnModelPlacement(
     }
 
     const auto id = ids.format(*entityNode);
-    const auto check =
+    auto check =
       checkModelPlacement(*bounds, map, ids, id, placementSubject(id, state.value()));
+    applyPlacementRule(check, rule);
     for (const auto& finding : check.findings)
     {
       if (warned < MaxPlacementWarnings)

@@ -6,7 +6,13 @@ server, which lets AI agents inspect and edit maps. It links no `Qt6::` target, 
 indicator) lives in `TbMcpUiLib` (`McpServerController`, `McpTcpTransport`, `QtMcpHost`,
 ...), and the stdio bridge is the `TrenchBroomMcp` executable in `app/`.
 
-The design is described in `docs/mcp/05-technical-design.md`.
+The design is described in `docs/mcp/05-technical-design.md`. How to turn the server on and
+connect Claude Code, Claude Desktop or an IDE, the mapping skills and troubleshooting are in
+`docs/mcp/CONNECTING.md`; the scenario results in `docs/mcp/06-scenario-results.md`.
+
+For agents, the server offers the guide resource `trenchbroom://guide` (`Resources.cpp`), nine
+prompts (`Prompts.cpp`) and a description with an example for every tool
+(`tst_ToolCatalog` checks them).
 
 This code is maintained in a fork of TrenchBroom. Keep MCP code in this library and in new
 `Mcp*` files; change original TrenchBroom files only when there is no other way, and add
@@ -22,6 +28,10 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   streams and delete sessions. It owns the sessions and the registries.
 - `HttpParser`, `HttpResponse`, `SseParser`, `StreamableHttp`: the Streamable HTTP
   transport as a socket-free state machine over an abstract `HttpConnection`.
+- `BridgeSession`: the protocol logic of the stdio bridge that works without the editor.
+  An offline `McpServer` (all registries, a host without editor) answers `initialize` and
+  the list requests; it routes the other messages to the editor and builds the handshake
+  that opens the editor session on the first call that needs it.
 
 ## Tools, resources and prompts
 
@@ -30,6 +40,9 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   published JSON Schema and the argument validator.
 - `ResourceRegistry`, `PromptRegistry`: static resources, URI templates, subscriptions,
   prompt templates.
+- `Resources`: the static resources and the agent guide (`trenchbroom://guide`);
+  `Prompts`: the task prompts (`blockout_level`, `fix_issues`, ...). Both name tools in
+  backticks, and `tst_Prompts` checks that every named tool exists.
 - `tools/*`: the tool implementations, one file per domain. `RegisterAll` registers
   everything.
 

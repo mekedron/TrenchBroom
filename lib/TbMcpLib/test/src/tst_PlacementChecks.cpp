@@ -38,8 +38,11 @@
 
 #include "vm/approx.h"
 #include "vm/bbox_io.h"
+#include "vm/plane.h"
 #include "vm/vec.h"
 #include "vm/vec_io.h"
+
+#include <fmt/format.h>
 
 #include <chrono>
 #include <string>
@@ -51,6 +54,9 @@ namespace tb::mcp
 {
 namespace
 {
+
+const auto ModelCodes = Json::array(
+  {"MODEL_BELOW_FLOOR", "MODEL_FLOATING", "MODEL_PENETRATES_BRUSHES", "MODEL_NO_FLOOR"});
 
 std::string createBox(
   McpToolFixture& fixture,
@@ -341,6 +347,93 @@ TEST_CASE("PlacementChecks")
     result = fixture.call(
       "brush_create_box", Json{{"min", {512, 0, 0}}, {"max", {576, 64, 64}}});
     CHECK(issuesOf(result, "MODEL_PENETRATES_BRUSHES").empty());
+
+    // lights may hang anywhere, like map_check says: a light shown with a model high
+    // above the floor and reaching into a brush is fine
+    result = fixture.call(
+      "entity_create_point",
+      {{"classname", "light_lamp"}, {"position", {64, 64, 100}}, {"snapToGrid", false}});
+    const auto lamp = result["result"]["entity"].get<std::string>();
+    const auto noModelIssues = [&](const Json& callResult) {
+      for (const auto& code : ModelCodes)
+      {
+        CAPTURE(code);
+        CHECK(issuesOf(callResult, code.get<std::string>()).empty());
+      }
+    };
+    noModelIssues(result);
+    result = fixture.call(
+      "brush_create_box", Json{{"min", {48, 48, 120}}, {"max", {80, 80, 136}}});
+    noModelIssues(result);
+    CHECK(
+      fixture.call("issues_list", {{"codes", ModelCodes}, {"ids", {lamp}}})["total"]
+      == 0);
+  }
+
+  SECTION("sameIssue")
+  {
+    const auto uvIssue = [](const std::string& brush, const vm::plane3d& plane) {
+      auto issue = McpIssue{};
+      issue.code = std::string{UvDistortionCode};
+      issue.details = Json{{"brush", brush}, {"material", "k_tile"}};
+      issue.signature = fmt::format(
+        "UV|{}|{},{},{}|{}",
+        brush,
+        plane.normal.x(),
+        plane.normal.y(),
+        plane.normal.z(),
+        plane.distance);
+      issue.plane = plane;
+      return issue;
+    };
+    const auto up = vm::vec3d{0, 0, 1};
+    const auto tilted = vm::normalize(vm::vec3d{0, 0.1, 1});
+    const auto before = uvIssue("brush:1", {16, up});
+    // snapped vertices move the plane or split the face: the same issue
+    CHECK(sameIssue(before, uvIssue("brush:1", {16.4, up})));
+    CHECK(sameIssue(before, uvIssue("brush:1", {16, tilted})));
+    // another brush, material or direction
+    CHECK_FALSE(sameIssue(before, uvIssue("brush:2", {16, up})));
+    auto otherMaterial = uvIssue("brush:1", {16, up});
+    otherMaterial.details["material"] = "k_stone";
+    otherMaterial.signature += "|k_stone";
+    CHECK_FALSE(sameIssue(before, otherMaterial));
+    CHECK_FALSE(sameIssue(before, uvIssue("brush:1", {16, vm::vec3d{1, 0, 0}})));
+
+    const auto zIssue = [](const Json& brushes, const double distance) {
+      auto issue = McpIssue{};
+      issue.code = std::string{ZFightingCode};
+      issue.details = Json{{"brushes", brushes}};
+      issue.signature = fmt::format("Z|{}|{}", brushes.dump(), distance);
+      issue.plane = vm::plane3d{distance, vm::vec3d{0, 0, 1}};
+      return issue;
+    };
+    const auto pair = zIssue({"brush:1", "brush:2"}, 16);
+    CHECK(sameIssue(pair, zIssue({"brush:2", "brush:1"}, 16.5)));
+    CHECK_FALSE(sameIssue(pair, zIssue({"brush:1", "brush:2"}, 32)));
+    CHECK_FALSE(sameIssue(pair, zIssue({"brush:1", "brush:3"}, 16)));
+
+    // other issues match by signature
+    auto model = McpIssue{};
+    model.code = "MODEL_FLOATING";
+    model.signature = "MODEL_FLOATING|entity:1|brush:1";
+    auto other = model;
+    CHECK(sameIssue(model, other));
+    other.signature = "MODEL_FLOATING|entity:1|brush:2";
+    CHECK_FALSE(sameIssue(model, other));
+  }
+
+  SECTION("issuesIntroduced ignores existing face issues whose plane moved slightly")
+  {
+    fixture.create();
+    const auto slab = createBox(fixture, {0, 0, 0}, {128, 128, 16});
+    const auto inset = createBox(fixture, {32, 32, 8}, {96, 96, 16});
+
+    // like Snap Vertices, a call moves both brushes by less than a unit: the pair still
+    // z-fights, but it is not new
+    const auto result =
+      fixture.call("objects_move", Json{{"ids", {slab, inset}}, {"vector", {0, 0, 0.5}}});
+    CHECK(issuesOf(result, "Z_FIGHTING").empty());
   }
 
   SECTION("issuesIntroduced reports stretched textures")
@@ -366,6 +459,10 @@ TEST_CASE("PlacementChecks")
     CHECK(brushOf(issues[0]["objectId"]) == box);
     CHECK(issues[0]["details"]["material"] == "k_tile");
     CHECK(issues[0]["details"].contains("fix"));
+
+    // moving the brush by half a unit keeps the distortion: not introduced again
+    result = fixture.call("objects_move", Json{{"ids", {box}}, {"vector", {0, 0, 0.5}}});
+    CHECK(issuesOf(result, "UV_ASPECT_DISTORTION").empty());
   }
 
   SECTION("issuesIntroduced reports entities outside the hull")

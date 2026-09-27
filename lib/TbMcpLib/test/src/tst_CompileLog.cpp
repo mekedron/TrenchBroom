@@ -615,6 +615,44 @@ Leak pointfile generated
       CHECK(analysis.errors[0].line == 13);
     }
 
+    SECTION("sdHLT leak")
+    {
+      const auto log =
+        std::string{R"(#### Executing '/opt/sdhlt/sdHLBSP /maps/compile/test'
+SolidBSP [hull 0] 45 (0.00 seconds)
+Warning: === LEAK in hull 0 ===
+Entity light at ( 656  256  112)
+Error:
+  A LEAK is a hole in the map, where the inside of it is exposed to the
+(unwanted) outside region.  The entity listed in the error is just a helpful
+indication of where the beginning of the leak pointfile starts.
+
+Leak pointfile generated
+
+#### Finished with exit code 1
+
+)"};
+      const auto analysis = analyzeCompileLog(log, {runTool("bsp")}, true);
+      REQUIRE(analysis.leak);
+      CHECK(analysis.leak->line == 3);
+      CHECK(analysis.leak->entity == "light");
+      CHECK(analysis.leak->position == vm::vec3d{656, 256, 112});
+    }
+
+    SECTION("id qbsp leak")
+    {
+      const auto log = std::string{R"(#### Executing 'qbsp start.map'
+reached occupant at: ( -64, -64,  36)
+no filling performed
+#### Finished with exit code 0
+
+)"};
+      const auto analysis = analyzeCompileLog(log, {runTool("qbsp")}, true);
+      REQUIRE(analysis.leak);
+      CHECK(analysis.leak->entity == std::nullopt);
+      CHECK(analysis.leak->position == vm::vec3d{-64, -64, 36});
+    }
+
     SECTION("ericw-tools leak")
     {
       const auto log =

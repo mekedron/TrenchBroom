@@ -533,9 +533,14 @@ ToolResult materialsCollectionsSet(CallContext& context, const Args& args)
         "Use 'enabled' to choose the material collections (folders).");
     }
 
+    // compile tools open relative WAD paths relative to their working directory, so
+    // found relative paths are stored as absolute paths unless keepRelative is set
+    const auto keepRelative = args.get<bool>("keepRelative");
+    auto paths = std::vector<std::string>{};
     for (const auto& wad : *wads)
     {
-      if (!resolveExternalPath(map, wad))
+      const auto resolved = resolveExternalPath(map, wad);
+      if (!resolved)
       {
         context.warn(
           "FILE_NOT_FOUND",
@@ -543,11 +548,31 @@ ToolResult materialsCollectionsSet(CallContext& context, const Args& args)
             "The WAD file {} was not found (relative paths are searched next to the "
             "map, in the game folder and in the application folder).",
             wad));
+        paths.push_back(wad);
+      }
+      else if (std::filesystem::path{wad}.is_absolute())
+      {
+        paths.push_back(wad);
+      }
+      else if (keepRelative)
+      {
+        context.warn(
+          "RELATIVE_WAD_PATH",
+          fmt::format(
+            "The WAD path {} is relative; the editor finds it, but compile tools such "
+            "as hlcsg may not. The absolute path is {}.",
+            wad,
+            resolved->lexically_normal()));
+        paths.push_back(wad);
+      }
+      else
+      {
+        paths.push_back(resolved->lexically_normal().string());
       }
     }
 
     auto entity = map.worldNode().entity();
-    const auto value = mdl::joinWadProperty(*wads);
+    const auto value = mdl::joinWadProperty(paths);
     const auto* current = entity.property(*gameInfo.gameConfig.materialConfig.property);
     if (!current || *current != value)
     {
@@ -679,7 +704,8 @@ Schema modsSchema()
     field("enabled", array(string())).describe("Enabled mods; later ones take priority"),
     field("available", array(string()))
       .describe("Folders in the game folder that can be enabled"),
-    field("gamePathValid", boolean()),
+    field("gamePathValid", boolean())
+      .describe("Whether the game folder exists; without it no mods are available"),
   });
 }
 
@@ -693,7 +719,8 @@ Schema entityDefinitionsSchema()
       .describe("false if the game's default file is used"),
     field("definitionCount", integer()).describe("Number of loaded entity classes"),
     field("builtin", array(any())).describe("Builtin files: {path, current}"),
-    field("loadMessages", array(any())),
+    field("loadMessages", array(any()))
+      .describe("{level, message} logged while loading the definitions"),
   });
 }
 
@@ -707,17 +734,21 @@ Schema materialsSchema()
     field("collections", array(any()))
       .describe("Loaded collections: {path, materialCount, enabled}"),
     field("enabled", array(string())).describe("Enabled collection paths"),
-    field("collectionCount", integer()),
+    field("collectionCount", integer()).describe("Number of loaded collections"),
     field("materialCount", integer()).describe("Materials in enabled collections"),
-    field("loadMessages", array(any())),
+    field("loadMessages", array(any()))
+      .describe("{level, message} logged while loading the materials"),
   });
 }
 
 Schema softBoundsSchema()
 {
   return object({
-    field("mode", enumOf({"game", "unlimited", "custom"})),
-    field("bounds", any()).describe("The bounds in effect as {min, max}, or null"),
+    field("mode", enumOf({"game", "unlimited", "custom"}))
+      .describe(
+        "'game': the game default, 'unlimited': none, 'custom': stored in the map"),
+    field("bounds", any())
+      .describe("The bounds in effect as {min, max} in map units, or null"),
     field("gameDefault", any()).describe("The game's default bounds, or null"),
   });
 }
@@ -864,6 +895,23 @@ Json materialsJson(const mdl::Map& map)
   return result;
 }
 
+std::vector<RelativeWadPath> relativeWadPaths(const mdl::Map& map)
+{
+  auto result = std::vector<RelativeWadPath>{};
+  for (const auto& wad : wadPaths(map))
+  {
+    if (!wad.empty() && !std::filesystem::path{wad}.is_absolute())
+    {
+      auto absolutePath = resolveExternalPath(map, wad);
+      result.push_back(RelativeWadPath{
+        wad,
+        absolutePath ? std::optional{absolutePath->lexically_normal()} : std::nullopt,
+      });
+    }
+  }
+  return result;
+}
+
 Json softBoundsJson(const mdl::Map& map)
 {
   const auto bounds = mdl::softMapBounds(map);
@@ -881,25 +929,28 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"game_list"}
       .title("List Games")
       .description(
-        "Lists the games TrenchBroom supports with their map formats and whether the "
-        "game folder is set up (gamePathValid). Without a valid game folder, materials, "
-        "models and mods cannot be loaded; fix it with game_set_path. Example: {}")
+        "Lists the games TrenchBroom supports (read-only) with their map formats, game "
+        "folder and whether it is set up (gamePathValid). Without a valid game folder, "
+        "materials, models and mods cannot be loaded; fix it with game_set_path. "
+        "game_info describes one game in detail. Example: {}")
       .input(object({}))
       .output(object({
         field(
           "items",
           array(object({
-            field("name", string()).required(),
-            field("formats", array(string())).describe("Map format names"),
-            field("gamePath", string()),
-            field("gamePathValid", boolean()),
-            field("experimental", boolean()),
+            field("name", string()).required().describe("Game name, e.g. 'Quake'"),
+            field("formats", array(string()))
+              .describe("Map format names, the default first"),
+            field("gamePath", string()).describe("Configured game folder ('' if unset)"),
+            field("gamePathValid", boolean()).describe("Whether the game folder exists"),
+            field("experimental", boolean())
+              .describe("Whether TrenchBroom marks the game support as experimental"),
             field("activeDocumentGame", boolean())
               .describe("Whether the active document uses this game"),
           })))
           .required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()),
+        field("total", integer()).required().describe("Number of games"),
+        field("nextCursor", any()).describe("Cursor of the next page, or null"),
       }))
       .mutation(Mutation::None)
       .paginated()
@@ -910,28 +961,35 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"game_info"}
       .title("Game Info")
       .description(
-        "Describes a game configuration: map formats and their initial map templates, "
-        "file system (base folder, package format), game folder, material setup (WAD "
-        "list or folders, palette), builtin entity definition files, smart tags, "
-        "surface and content flags, default soft map bounds and compile tools. Without "
-        "'game' it describes the active document's game. Example: {\"game\": \"Quake "
-        "2\"}")
+        "Describes a game configuration (read-only): map formats and their initial map "
+        "templates, file system (base folder, package format), game folder, material "
+        "setup (WAD list or folders, palette), builtin entity definition files, smart "
+        "tags, surface and content flags, default soft map bounds and compile tools. "
+        "Without 'game' it describes the active document's game. Example: "
+        "{\"game\": \"Quake 2\"}")
       .input(object({
         field("game", string())
-          .describe("Game name; default: the active document's game"),
+          .describe("Game name from game_list; default: the active document's game"),
       }))
       .output(object({
                        field("name", string()).required(),
-                       field("formats", array(any())),
-                       field("gamePath", any()),
-                       field("fileSystem", any()),
-                       field("materials", any()),
-                       field("entityDefinitions", any()),
-                       field("tags", array(any())),
+                       field("formats", array(any()))
+                         .describe("{format, initialMap}: formats and their templates"),
+                       field("gamePath", any()).describe("{path, valid}"),
+                       field("fileSystem", any())
+                         .describe("{searchPath, packageFormat, packageExtensions}"),
+                       field("materials", any())
+                         .describe("{mode ('wad' or 'folders'), root, extensions, "
+                                   "palette, wadProperty, shaderSearchPath, excludes}"),
+                       field("entityDefinitions", any())
+                         .describe("{builtin (definition files), setDefaultProperties}"),
+                       field("tags", array(any())).describe("Smart tags"),
                        field("surfaceFlags", array(any())),
                        field("contentFlags", array(any())),
-                       field("softMapBounds", any()),
-                       field("compilationTools", array(any())),
+                       field("softMapBounds", any())
+                         .describe("Default soft bounds {min, max}, or null"),
+                       field("compilationTools", array(any()))
+                         .describe("{name, description, path} of the compile tools"),
                      })
                 .allowAdditionalProperties())
       .mutation(Mutation::None)
@@ -945,7 +1003,8 @@ void registerGameTools(ToolRegistry& registry)
       .description(
         "Sets the installation folder of a game (a preference, not undoable). Open "
         "documents of that game reload their materials, models and mods. Pass '' to "
-        "clear it. Example: {\"game\": \"Quake\", \"path\": \"/home/me/quake\"}")
+        "clear it. Fails with IO_ERROR if the folder does not exist. Example: "
+        "{\"game\": \"Quake\", \"path\": \"/home/me/quake\"}")
       .input(object({
         field("game", string()).required().describe("Game name from game_list"),
         field("path", string())
@@ -955,9 +1014,10 @@ void registerGameTools(ToolRegistry& registry)
       .output(object({
         field("game", string()).required(),
         field("path", string()).required(),
-        field("previousPath", string()),
-        field("valid", boolean()),
-        field("affectedDocuments", array(string())),
+        field("previousPath", string()).describe("The former folder ('' if unset)"),
+        field("valid", boolean()).describe("Whether the game folder is valid now"),
+        field("affectedDocuments", array(string()))
+          .describe("Handles of the open documents that were reloaded"),
         field("wouldDo", wouldDoField()),
       }))
       .mutation(Mutation::External)
@@ -969,9 +1029,10 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"mods_get"}
       .title("Get Mods")
       .description(
-        "Returns the mods (game subfolders) enabled for the document in priority order "
-        "(later ones override earlier ones), the game's default folder, and the folders "
-        "available in the game folder. Example: {}")
+        "Returns the mods (game subfolders) enabled for the document (read-only) in "
+        "priority order (later ones override earlier ones), the game's default folder, "
+        "and the folders available in the game folder. Change them with mods_set. "
+        "Example: {}")
       .input(object({}))
       .output(modsSchema())
       .mutation(Mutation::None)
@@ -985,10 +1046,13 @@ void registerGameTools(ToolRegistry& registry)
       .description(
         "Sets the enabled mods of the document in priority order (later ones override "
         "earlier ones); [] disables all. Stored in worldspawn (one undo step); entity "
-        "definitions, models and materials are reloaded. Unknown folders produce "
-        "warnings. Example: {\"mods\": [\"hipnotic\", \"quoth\"]}")
+        "definitions, models and materials are reloaded. Folders that do not exist give "
+        "warnings; mods_get lists the available ones. Example: "
+        "{\"mods\": [\"hipnotic\", \"quoth\"]}")
       .input(object({
-        field("mods", array(string())).required().describe("Mod folder names, in order"),
+        field("mods", array(string()))
+          .required()
+          .describe("Mod folder names in priority order, each once; [] for none"),
       }))
       .output(modsSchema())
       .mutation(Mutation::Map)
@@ -999,9 +1063,10 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"entity_definitions_get"}
       .title("Get Entity Definitions")
       .description(
-        "Returns the entity definition file the document uses (builtin file of the game "
-        "or an external file), the number of loaded entity classes, and the builtin "
-        "files to choose from. Example: {}")
+        "Returns the entity definition file the document uses (read-only; a builtin "
+        "file of the game or an external file), the number of loaded entity classes, "
+        "and the builtin files to choose from. Change it with entity_definitions_set; "
+        "entity_classes_list lists the classes. Example: {}")
       .input(object({}))
       .output(entityDefinitionsSchema())
       .mutation(Mutation::None)
@@ -1014,15 +1079,19 @@ void registerGameTools(ToolRegistry& registry)
       .title("Set Entity Definitions")
       .description(
         "Chooses the entity definition file (FGD, DEF or ENT): a builtin file of the "
-        "game (see entity_definitions_get) or an external file (absolute, or relative to "
-        "the map or game folder). Stored in worldspawn (one undo step); definitions and "
-        "models are reloaded and load problems are returned as warnings. Example: "
-        "{\"type\": \"builtin\", \"path\": \"Quoth2.fgd\"}")
+        "game or an external file. Stored in worldspawn (one undo step); definitions "
+        "and models are reloaded and load problems are returned as warnings (a missing "
+        "external file gives FILE_NOT_FOUND). Examples: {\"type\": \"builtin\", "
+        "\"path\": \"Quoth2.fgd\"}; {\"type\": \"external\", \"path\": "
+        "\"/home/me/quake/mymod/mymod.fgd\"}")
       .input(object({
-        field("type", enumOf({"builtin", "external"})).required(),
+        field("type", enumOf({"builtin", "external"}))
+          .required()
+          .describe("'builtin': a file of the game; 'external': your own file"),
         field("path", string())
           .required()
-          .describe("Builtin file name, or path of an external file"),
+          .describe("Builtin file name (entity_definitions_get), or path of an external "
+                    "file (absolute, or relative to the map or game folder)"),
       }))
       .output(entityDefinitionsSchema())
       .mutation(Mutation::Map)
@@ -1034,8 +1103,9 @@ void registerGameTools(ToolRegistry& registry)
       .title("Reload Entity Definitions")
       .description(
         "Reloads the entity definition file and entity models from disk, e.g. after "
-        "editing the FGD. Not undoable. Reports progress and can be cancelled before it "
-        "starts; returns load problems. Example: {}")
+        "editing the FGD (not undoable). Reports progress and can be cancelled before it "
+        "starts; returns the definition setup like entity_definitions_get, with load "
+        "problems. Example: {}")
       .input(object({}))
       .output(entityDefinitionsSchema())
       .mutation(Mutation::External)
@@ -1046,10 +1116,11 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"materials_collections_get"}
       .title("Get Material Collections")
       .description(
-        "Returns how the document gets its materials. 'wad' games (Quake, Half-Life) "
-        "use an ordered WAD file list in worldspawn; 'folders' games (Quake 2, Quake 3) "
-        "use material folders. Lists the loaded collections with material counts and "
-        "whether each is enabled. Example: {}")
+        "Returns how the document gets its materials (read-only). 'wad' games (Quake, "
+        "Half-Life) use an ordered WAD file list in worldspawn; 'folders' games (Quake "
+        "2, Quake 3) use material folders. Lists the loaded collections with material "
+        "counts and whether each is enabled. Change them with materials_collections_set; "
+        "materials_list lists the materials. Example: {}")
       .input(object({}))
       .output(materialsSchema())
       .mutation(Mutation::None)
@@ -1061,14 +1132,26 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"materials_collections_set"}
       .title("Set Material Collections")
       .description(
-        "Sets the ordered WAD file list ('wads', WAD games only; absolute paths or paths "
-        "relative to the map or game folder) and/or the enabled material collections "
-        "('enabled', collection paths from materials_collections_get). Stored in "
-        "worldspawn (one undo step); materials are reloaded. Example: {\"wads\": "
-        "[\"/home/me/quake/id1/wads/base.wad\"]} or {\"enabled\": [\"textures/e1u1\"]}")
+        "Sets the ordered WAD file list ('wads', WAD games only) and/or the enabled "
+        "material collections ('enabled'); pass at least one. Stored in worldspawn (one "
+        "undo step); materials are reloaded. Relative WAD paths that are found are "
+        "stored as absolute paths (like the editor's default), because compile tools "
+        "such as hlcsg cannot open paths relative to the game folder; keepRelative "
+        "stores them as passed (warning RELATIVE_WAD_PATH). Examples: {\"wads\": "
+        "[\"/home/me/quake/id1/wads/base.wad\"]}; {\"wads\": "
+        "[\"valve/halflife.wad\"]} (stored as <game folder>/valve/halflife.wad); "
+        "{\"enabled\": [\"textures/e1u1\"]}")
       .input(object({
-        field("wads", array(string())).describe("WAD files in search order"),
-        field("enabled", array(string())).describe("Collection paths to enable"),
+        field("wads", array(string()))
+          .describe("WAD files in search order, replacing the list: absolute paths or "
+                    "paths relative to the map, game or application folder"),
+        field("keepRelative", boolean().defaultsTo(false))
+          .describe("Store relative WAD paths as passed instead of as absolute paths "
+                    "(for maps shared between machines; compile tools may not find "
+                    "them)"),
+        field("enabled", array(string()))
+          .describe("Collection paths to enable (materials_collections_get); the "
+                    "others are disabled"),
       }))
       .output(materialsSchema())
       .mutation(Mutation::Map)
@@ -1080,8 +1163,9 @@ void registerGameTools(ToolRegistry& registry)
       .title("Reload Materials")
       .description(
         "Reloads all material collections (WAD files or folders) from disk, e.g. after "
-        "adding textures. Not undoable. Reports progress and can be cancelled before it "
-        "starts; returns load problems. Example: {}")
+        "adding textures (not undoable). Reports progress and can be cancelled before "
+        "it starts; returns the material setup like materials_collections_get, with "
+        "load problems. Example: {}")
       .input(object({}))
       .output(materialsSchema())
       .mutation(Mutation::External)
@@ -1092,9 +1176,10 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"soft_bounds_get"}
       .title("Get Soft Map Bounds")
       .description(
-        "Returns the soft map bounds: the area the map should stay in (objects outside "
-        "produce a validation issue). mode 'game' uses the game default, 'unlimited' "
-        "disables them, 'custom' is a box stored in the map. Example: {}")
+        "Returns the soft map bounds (read-only): the area in map units the map should "
+        "stay in (objects outside produce a validation issue). mode 'game' uses the "
+        "game default, 'unlimited' disables them, 'custom' is a box stored in the map. "
+        "Change them with soft_bounds_set. Example: {}")
       .input(object({}))
       .output(softBoundsSchema())
       .mutation(Mutation::None)
@@ -1106,12 +1191,17 @@ void registerGameTools(ToolRegistry& registry)
     ToolDef{"soft_bounds_set"}
       .title("Set Soft Map Bounds")
       .description(
-        "Sets the soft map bounds (one undo step): 'game' (game default), 'unlimited', "
-        "or 'custom' with a box. Example: {\"mode\": \"custom\", \"bounds\": {\"min\": "
-        "[-4096,-4096,-4096], \"max\": [4096,4096,4096]}}")
+        "Sets the soft map bounds (one undo step, stored in worldspawn): 'game' (game "
+        "default), 'unlimited', or 'custom' with a box in map units; 'bounds' is only "
+        "allowed with 'custom'. Examples: {\"mode\": \"custom\", \"bounds\": "
+        "{\"min\": [-4096,-4096,-4096], \"max\": [4096,4096,4096]}}; "
+        "{\"mode\": \"game\"}")
       .input(object({
-        field("mode", enumOf({"game", "unlimited", "custom"})).required(),
-        field("bounds", box()).describe("Required for mode 'custom'"),
+        field("mode", enumOf({"game", "unlimited", "custom"}))
+          .required()
+          .describe("'game': the game default, 'unlimited': no bounds, 'custom': "
+                    "'bounds'"),
+        field("bounds", box()).describe("Box in map units; required for mode 'custom'"),
       }))
       .output(softBoundsSchema())
       .mutation(Mutation::Map)

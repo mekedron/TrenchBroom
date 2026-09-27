@@ -40,7 +40,9 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace tb::mcp
 {
@@ -83,6 +85,65 @@ Json numbers(const vm::vec2d& v)
 std::string format2(const vm::vec2d& v)
 {
   return fmt::format("{:g} x {:g}", round3(v.x()), round3(v.y()));
+}
+
+std::string format3(const vm::vec3d& v)
+{
+  return fmt::format("[{:g}, {:g}, {:g}]", round3(v.x()), round3(v.y()), round3(v.z()));
+}
+
+/**
+ * Describes what makes the texture of two coplanar faces diverge along their shared edge:
+ * the scale and the rotation, or else the texture axes (e.g. Valve 220 axes that were
+ * rotated or mirrored without changing the rotation value). Values that only differ
+ * beyond 3 decimals are shown with more digits so that the message never reads "1 x 1 vs
+ * 1 x 1".
+ */
+std::string linearDifference(const mdl::BrushFace& lhs, const mdl::BrushFace& rhs)
+{
+  const auto lhsUv = lhs.uvAttributes();
+  const auto rhsUv = rhs.uvAttributes();
+  const auto lhsScale = vm::vec2d{lhsUv.scale};
+  const auto rhsScale = vm::vec2d{rhsUv.scale};
+  const auto precise = [](const vm::vec2d& v) {
+    return fmt::format("{:.7g} x {:.7g}", v.x(), v.y());
+  };
+
+  auto parts = std::vector<std::string>{};
+  if (lhsScale != rhsScale)
+  {
+    parts.push_back(
+      format2(lhsScale) != format2(rhsScale)
+        ? fmt::format(
+            "the scale differs ({} vs {})", format2(lhsScale), format2(rhsScale))
+        : fmt::format(
+            "the scale differs slightly ({} vs {})",
+            precise(lhsScale),
+            precise(rhsScale)));
+  }
+  if (lhsUv.rotation != rhsUv.rotation)
+  {
+    parts.push_back(fmt::format(
+      "the rotation differs ({:.7g} vs {:.7g} degrees)",
+      double(lhsUv.rotation),
+      double(rhsUv.rotation)));
+  }
+  if (parts.empty())
+  {
+    parts.push_back(fmt::format(
+      "the texture axes differ (U {} V {} vs U {} V {})",
+      format3(lhs.uAxis()),
+      format3(lhs.vAxis()),
+      format3(rhs.uAxis()),
+      format3(rhs.vAxis())));
+  }
+
+  auto result = std::string{};
+  for (size_t i = 0; i < parts.size(); ++i)
+  {
+    result += (i == 0 ? "" : i + 1 == parts.size() ? " and " : ", ") + parts[i];
+  }
+  return result;
 }
 
 double maxAbs(const vm::vec2d& v)
@@ -856,12 +917,12 @@ private:
     if (linearMismatch)
     {
       message = fmt::format(
-        "'{}' does not continue across the edge to its coplanar neighbour: the scale or "
-        "rotation differs ({} vs {}).",
+        "'{}' does not continue across the edge to its coplanar neighbour: {}.",
         lhs.materialName(),
-        format2(uvScale(face)),
-        format2(uvScale(neighbour)));
+        linearDifference(lhs, rhs));
       measured["mismatch"] = "scaleOrRotation";
+      measured["rotation"] = round3(double(lhs.uvAttributes().rotation));
+      measured["neighbourRotation"] = round3(double(rhs.uvAttributes().rotation));
     }
     else
     {

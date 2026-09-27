@@ -650,6 +650,32 @@ Schema angle()
   return number().describe("Angle in degrees");
 }
 
+namespace
+{
+
+/** An example id of the first given kind, or a brush id. */
+std::string objectIdExample(const std::vector<ObjectKind>& kinds)
+{
+  switch (kinds.empty() ? ObjectKind::Brush : kinds.front())
+  {
+  case ObjectKind::World:
+    return "world";
+  case ObjectKind::Layer:
+    return "layer:5";
+  case ObjectKind::Group:
+    return "group:3";
+  case ObjectKind::Entity:
+    return "entity:7";
+  case ObjectKind::Patch:
+    return "patch:9";
+  case ObjectKind::Brush:
+    break;
+  }
+  return "brush:12";
+}
+
+} // namespace
+
 Schema objectId(std::vector<ObjectKind> kinds)
 {
   auto description = std::string{"Object id"};
@@ -662,7 +688,7 @@ Schema objectId(std::vector<ObjectKind> kinds)
     }
     description += ")";
   }
-  description += ", e.g. 'brush:1042'";
+  description += ", e.g. '" + objectIdExample(kinds) + "'";
 
   return string()
     .describe(std::move(description))

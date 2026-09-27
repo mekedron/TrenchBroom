@@ -727,20 +727,16 @@ void registerEntityClassTools(ToolRegistry& registry)
       .title("List Entity Classes")
       .description(
         "Lists the entity classes of the document's entity definitions (FGD, DEF or "
-        "ENT), sorted by name. Filters are combined: type (point or brush), prefix "
-        "(classname prefix such as \"monster_\", or a glob with * and ?; ignores case), "
-        "group (the part before the first underscore, e.g. \"monster\"), search "
-        "(substring of name or description) and used (only classes used / not used in "
-        "the map). Items: {name, type, group, description (first line), usageCount}; "
-        "detail \"full\" adds color [r,g,b] (0..1), size {min,max} (point classes), "
-        "model (default model path or null) and propertyKeys. groups counts the point, "
-        "brush and used classes of all matches by group. Without definitions the list "
-        "is empty and a NO_ENTITY_DEFINITIONS warning is returned. Use "
-        "entity_class_describe for all details of a class. Example: "
-        "{\"prefix\":\"monster_\",\"limit\":5} -> {\"items\":[{\"name\":"
-        "\"monster_army\",\"type\":\"point\",\"group\":\"monster\",\"description\":"
-        "\"Grunt\",\"usageCount\":0}],\"total\":23,\"nextCursor\":\"...\",\"groups\":"
-        "[{\"name\":\"monster\",\"point\":23,\"brush\":0,\"used\":0}]}")
+        "ENT), sorted by name; read-only. Filters are combined: type, prefix (classname "
+        "prefix or a glob with * and ?; ignores case), group (the part before the first "
+        "underscore, e.g. \"monster\"), search and used. Items: {name, type, group, "
+        "description (first line), usageCount}; detail \"full\" adds color [r,g,b] "
+        "(0..1), size {min,max} (point classes), model (default model path or null) and "
+        "propertyKeys. groups counts the point, brush and used classes of all matches by "
+        "group. Without definitions the list is empty and a NO_ENTITY_DEFINITIONS "
+        "warning is returned. Use entity_class_describe for all details of a class. "
+        "Examples: {\"prefix\": \"monster_\", \"limit\": 5}; {\"type\": \"brush\", "
+        "\"search\": \"door\"}")
       .input(object({
         field("type", enumOf({"point", "brush"})).describe("Only classes of this type"),
         field("prefix", string().nonEmpty())
@@ -753,9 +749,13 @@ void registerEntityClassTools(ToolRegistry& registry)
           .describe("true: only classes used in the map, false: only unused ones"),
       }))
       .output(object({
-        field("items", array(any())).required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()).required(),
+        field("items", array(any()))
+          .required()
+          .describe("[{name, type, group, description, usageCount}]"),
+        field("total", integer()).required().describe("Number of matching classes"),
+        field("nextCursor", any())
+          .required()
+          .describe("Cursor of the next page, or null"),
         field("groups", array(any()))
           .required()
           .describe("[{name, point, brush, used}] over all matches"),
@@ -770,22 +770,19 @@ void registerEntityClassTools(ToolRegistry& registry)
     ToolDef{"entity_class_describe"}
       .title("Describe Entity Class")
       .description(
-        "Everything needed to place and configure an entity class: name, type (point "
-        "or brush), group, full description, color [r,g,b] (0..1), size {min,max} "
-        "(point classes, relative to the origin), model {default: {path, skin, frame} "
-        "| null} and decal (point classes, else null), properties in definition order "
-        "({key, type, description, default, choices, flags, colorRange, linkRole, "
-        "readOnly}), spawnflags ({bit, value, name, description, default}; set them by "
-        "name with entity_spawnflags_set), linkProperties {sources (keys naming other "
-        "entities, e.g. target), targets (the entity's own name, e.g. targetname)}, "
-        "defaults {key: value}, rotation {key, type} (the property that orients the "
-        "entity, or null) and usageCount. The classname is matched exactly, or ignoring "
-        "case. An unknown class fails with INVALID_ARGUMENT listing similar names. "
-        "Example: {\"classname\":\"monster_ogre\"} -> {\"name\":\"monster_ogre\","
-        "\"type\":\"point\",\"size\":{\"min\":[-32,-32,-24],\"max\":[32,32,64]},"
-        "\"model\":{\"default\":{\"path\":\"progs/ogre.mdl\",\"skin\":0,\"frame\":0}},"
-        "\"spawnflags\":[{\"bit\":0,\"value\":1,\"name\":\"Ambush\",\"default\":false},"
-        "...],\"rotation\":{\"key\":\"angle\",\"type\":\"angle_up_down\"},...}")
+        "Returns everything needed to place and configure an entity class; read-only: "
+        "name, type (point or brush), group, full description, color [r,g,b] (0..1), "
+        "size {min,max} (point classes, map units relative to the origin), model "
+        "{default: {path, skin, frame} | null} and decal (point classes, else null), "
+        "properties in definition order ({key, type, description, default, choices, "
+        "flags, colorRange, linkRole, readOnly}), spawnflags ({bit, value, name, "
+        "description, default}; set them by name with entity_spawnflags_set), "
+        "linkProperties {sources (keys naming other entities, e.g. target), targets "
+        "(the entity's own name, e.g. targetname)}, defaults {key: value}, rotation "
+        "{key, type} (the property that orients the entity, or null) and usageCount. "
+        "The classname is matched exactly, or ignoring case. An unknown class fails with "
+        "INVALID_ARGUMENT listing similar names; find classes with entity_classes_list. "
+        "Example: {\"classname\": \"monster_ogre\"}")
       .input(object({
         field("classname", string().nonEmpty())
           .required()
@@ -794,7 +791,9 @@ void registerEntityClassTools(ToolRegistry& registry)
       .output(object({
         field("name", string()).required(),
         field("type", enumOf({"point", "brush"})).required(),
-        field("group", string()).required(),
+        field("group", string())
+          .required()
+          .describe("Classname part before the first '_'"),
         field("description", string()).required(),
         field("color", array(number())).required().describe("[r, g, b], 0..1"),
         field("size", any()).required().describe("{min, max} or null (brush classes)"),
@@ -802,18 +801,29 @@ void registerEntityClassTools(ToolRegistry& registry)
           .required()
           .describe("{default: {path, skin, frame} | null} or null (brush classes)"),
         field("decal", any()).required().describe("{material} or null"),
-        field("properties", array(any())).required(),
-        field("spawnflags", array(any())).required(),
+        field("properties", array(any()))
+          .required()
+          .describe("[{key, type, description, default, choices, flags, colorRange, "
+                    "linkRole, readOnly}] in definition order"),
+        field("spawnflags", array(any()))
+          .required()
+          .describe("[{bit, value, name, description, default}]"),
         field(
           "linkProperties",
           object({
-            field("sources", array(string())).required(),
-            field("targets", array(string())).required(),
+            field("sources", array(string()))
+              .required()
+              .describe("Keys that name other entities, e.g. target"),
+            field("targets", array(string()))
+              .required()
+              .describe("Keys that hold the entity's own name, e.g. targetname"),
           }))
           .required(),
         field("defaults", any()).required().describe("{key: default value}"),
         field("rotation", any()).required().describe("{key, type, blocked?} or null"),
-        field("usageCount", integer()).required(),
+        field("usageCount", integer())
+          .required()
+          .describe("Entities of this class in the map"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -824,31 +834,21 @@ void registerEntityClassTools(ToolRegistry& registry)
     ToolDef{"entity_model_info"}
       .title("Get Entity Model Info")
       .description(
-        "The model of up to 50 entities (default: the selected entities), as the "
+        "Returns the model of up to 50 entities (default: the selected entities) as the "
         "editor evaluates it with the entity's properties (e.g. spawnflags that pick "
-        "another frame): model {path, skin, frame} or null (brush entities and classes "
-        "without model), modelLoaded (the model file was found and loaded, by the editor "
-        "or from the game files; false if the game data is missing, with the reason in "
-        "modelLoadError), modelBounds (world bounds of the current model frame, else "
-        "null), frameProperty (the property that selects the animation, e.g. "
-        "\"sequence\"; null if the frame is fixed; set it with entity_animation_set), "
-        "currentAnimation and animations (the model's frames / animations such as "
-        "studio model sequences: {index, name (null if the format has no names), bounds "
-        "(model space), worldBounds (with the entity's origin, rotation and scale)}; at "
-        "most maxAnimations, animationCount counts all, animationsTruncated), bounds "
-        "(the entity's bounds), definitionBounds (the class size), scale [x,y,z] and "
-        "rotation {key, type, yawPitchRoll} (degrees, or null if the entity cannot be "
-        "oriented). modelError reports a model expression that failed to evaluate. "
-        "Example: {\"ids\":[\"entity:40\"],\"maxAnimations\":2} -> {\"entities\":[{"
-        "\"id\":\"entity:40\",\"classname\":\"monster_scientist\",\"pointEntity\":"
-        "true,\"model\":{\"path\":\"models/scientist.mdl\",\"skin\":0,\"frame\":13},"
-        "\"modelLoaded\":true,\"modelBounds\":{...},\"frameProperty\":\"sequence\","
-        "\"currentAnimation\":{\"index\":13,\"name\":\"idle1\",\"bounds\":{...},"
-        "\"worldBounds\":{...}},\"animationCount\":80,\"animations\":[{\"index\":0,"
-        "\"name\":\"walk\",...},{\"index\":1,...}],\"animationsTruncated\":true,"
-        "\"bounds\":{...},\"definitionBounds\":{\"min\":[-16,-16,0],\"max\":[16,16,"
-        "72]},\"scale\":[1,1,1],\"rotation\":{\"key\":\"angle\",\"type\":"
-        "\"angle_up_down\",\"yawPitchRoll\":[90,0,0]}}]}")
+        "another frame); read-only. Per entity: model {path, skin, frame} or null (brush "
+        "entities, classes without model); modelLoaded (false if the game data is "
+        "missing, reason in modelLoadError); modelBounds (world bounds of the current "
+        "frame, else null); frameProperty (the property that selects the animation, "
+        "e.g. \"sequence\"; null if the frame is fixed; set it with "
+        "entity_animation_set); currentAnimation and animations ({index, name (null if "
+        "the format has no names), bounds (model space), worldBounds (with the entity's "
+        "origin, rotation and scale)}; at most maxAnimations, animationCount counts all, "
+        "animationsTruncated); bounds (the entity's bounds); definitionBounds (the class "
+        "size); scale [x,y,z]; rotation {key, type, yawPitchRoll} (degrees, or null if "
+        "the entity cannot be oriented). modelError reports a model expression that "
+        "failed to evaluate. Use entity_placement_check to test how the model stands. "
+        "Example: {\"ids\": [\"entity:40\"], \"maxAnimations\": 2}")
       .input(object({
         field("ids", array(objectId({ObjectKind::Entity})).minSize(1).maxSize(50))
           .describe("Entity ids. Default: the selected entities"),

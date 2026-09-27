@@ -21,7 +21,10 @@
 
 #include "mcp/Json.h"
 
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace tb::mdl
 {
@@ -59,6 +62,20 @@ Json entityDefinitionsJson(const mdl::Map& map);
 
 /** The material setup: WAD list or enabled folder collections, and loaded counts. */
 Json materialsJson(const mdl::Map& map);
+
+/** A relative entry of the map's WAD list. */
+struct RelativeWadPath
+{
+  std::string path;
+  /** The file the editor loads, if it was found. */
+  std::optional<std::filesystem::path> absolutePath;
+};
+
+/**
+ * The relative entries of the map's WAD list (WAD games only). Compile tools such as
+ * hlcsg open them relative to their working directory and usually fail.
+ */
+std::vector<RelativeWadPath> relativeWadPaths(const mdl::Map& map);
 
 /** The soft map bounds in effect. */
 Json softBoundsJson(const mdl::Map& map);

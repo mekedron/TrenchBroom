@@ -11,6 +11,7 @@ target_link_libraries(TrenchBroomMcp
     Qt6::Core
     Qt6::Network
     TbMcpLib
+    TbVersionLib
 )
 
 # The bridge is shipped next to the editor executable (inside the bundle on macOS, see

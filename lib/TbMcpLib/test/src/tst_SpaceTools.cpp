@@ -156,6 +156,25 @@ TEST_CASE("SpaceTools")
       CHECK((*room1)["openings"] == Json::array({opening["id"]}));
     }
 
+    SECTION("openingSize")
+    {
+      // the doorway is 64 wide and 112 high: openings up to openingSize separate, and
+      // openingSize is rounded down to a multiple of 2 x cellSize
+      const auto count = [&](const double openingSize) {
+        return fixture.call("spaces_list", Json{{"openingSize", openingSize}})["count"];
+      };
+      CHECK(count(64) == 2);
+      CHECK(count(95) == 2);
+      CHECK(count(63) == 1);
+
+      // not smaller than the rooms' height (192): the rooms have no core
+      const auto tooLarge = fixture.call("spaces_list", Json{{"openingSize", 192}});
+      CHECK(hasWarning(tooLarge, "OPENING_SIZE_TOO_LARGE"));
+      const auto fits = fixture.call("spaces_list", Json{{"openingSize", 176}});
+      CHECK(fits["count"] == 2);
+      CHECK_FALSE(hasWarning(fits, "OPENING_SIZE_TOO_LARGE"));
+    }
+
     SECTION("full detail and region filter")
     {
       const auto result = fixture.call(

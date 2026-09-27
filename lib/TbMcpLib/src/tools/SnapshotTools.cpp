@@ -176,12 +176,12 @@ Schema cameraSpecSchema()
     field("pitch", number().min(-90).max(90))
       .describe("Degrees, positive looks up, -90 looks straight down"),
     field("fov", number().min(1).max(170)).describe("Field of view in degrees (90)"),
-    field("near", number().min(0)).describe("Near plane distance"),
-    field("far", number().min(1)).describe("Far plane distance"),
+    field("near", number().min(0)).describe("Near plane distance in map units"),
+    field("far", number().min(1)).describe("Far plane distance in map units"),
     field(
       "frame",
       object({
-        field("ids", array(objectId())).describe("Objects to fit into the image"),
+        field("ids", array(objectId())).describe("Object ids to fit into the image"),
         field("box", box()).describe("Box to fit into the image"),
         field("margin", number().min(1).max(10))
           .describe("Scale of the fitted extent (1 = tight, default 1.1)"),
@@ -198,7 +198,8 @@ Schema cameraSpecSchema()
         field("yaw", number()).describe("View direction yaw (default 45)"),
         field("pitch", number().min(-90).max(90)).describe("View pitch (default -30)"),
         field("distance", number().min(1))
-          .describe("Distance from the target (default: fit the objects, or 512)"),
+          .describe(
+            "Distance from the target in map units (default: fit the objects, or 512)"),
       }))
       .describe("Look at a target from yaw/pitch at a distance"),
     field(
@@ -220,7 +221,10 @@ Schema cameraArgSchema()
 {
   return oneOf({
     string().nonEmpty().describe("The name of an agent camera"),
-    cameraSpecSchema(),
+    cameraSpecSchema().describe(
+      "An inline camera: perspective (position with lookAt, direction or yaw/pitch), "
+      "orthographic (view with center or frame) or a helper (frame, orbit, "
+      "eyeHeight)"),
   });
 }
 
@@ -228,23 +232,24 @@ Schema cameraOutputSchema()
 {
   return object({
     field("projection", enumOf({"perspective", "orthographic"})),
-    field("position", vec3()),
-    field("direction", vec3()),
-    field("up", vec3()),
-    field("yaw", number()),
-    field("pitch", number()),
-    field("fov", number()),
+    field("position", vec3()).describe("Camera position"),
+    field("direction", vec3()).describe("View direction (unit vector)"),
+    field("up", vec3()).describe("Up vector (unit vector)"),
+    field("yaw", number()).describe("Degrees, counterclockwise from +x"),
+    field("pitch", number()).describe("Degrees, positive looks up"),
+    field("fov", number()).describe("Field of view in degrees (perspective only)"),
     field("view", any()).describe("top, front, side or null (orthographic only)"),
     field("zoom", number()).describe("Image pixels per map unit (orthographic only)"),
-    field("near", number()),
-    field("far", number()),
+    field("near", number()).describe("Near plane distance in map units"),
+    field("far", number()).describe("Far plane distance in map units"),
   });
 }
 
 Schema optionsSchema()
 {
   return object({
-    field("faceMode", enumOf({"textured", "flat", "wireframe"}).defaultsTo("textured")),
+    field("faceMode", enumOf({"textured", "flat", "wireframe"}).defaultsTo("textured"))
+      .describe("textured, flat (material colors) or wireframe (edges only)"),
     field("shading", boolean().defaultsTo(true)).describe("Shade faces by orientation"),
     field("fog", boolean().defaultsTo(false)).describe("Fog (perspective only)"),
     field("edges", boolean().defaultsTo(true)).describe("Draw brush edges"),
@@ -303,7 +308,8 @@ Schema annotationsSchema()
         object({
           field("step", number().min(1).max(65536))
             .describe("Distance between lines (default 64)"),
-          field("planes", enumOf({"floor", "walls", "both"}).defaultsTo("both")),
+          field("planes", enumOf({"floor", "walls", "both"}).defaultsTo("both"))
+            .describe("Draw the grid on the floor, the walls or both"),
           field("box", box())
             .describe(
               "Floor = box bottom, walls = box sides (default: the space around the "
@@ -337,10 +343,10 @@ Schema highlightSchema()
 Schema imageOutputSchema()
 {
   return object({
-    field("width", integer()),
-    field("height", integer()),
+    field("width", integer()).describe("Width in pixels"),
+    field("height", integer()).describe("Height in pixels"),
     field("format", enumOf({"png", "jpeg"})),
-    field("bytes", integer()),
+    field("bytes", integer()).describe("Encoded size in bytes"),
     field("savedTo", any()).describe("The file path, or null"),
   });
 }
@@ -374,7 +380,8 @@ std::vector<Field> sizeFields(const size_t width, const size_t height)
 std::vector<Field> formatFields()
 {
   return {
-    field("format", enumOf({"png", "jpeg"}).defaultsTo("png")),
+    field("format", enumOf({"png", "jpeg"}).defaultsTo("png"))
+      .describe("Image format; jpeg is smaller"),
     field("quality", integer().min(1).max(100).defaultsTo(85)).describe("JPEG quality"),
     field("saveTo", string()).describe("Also save the image to this absolute file path"),
     field("overwrite", boolean().defaultsTo(false))
@@ -766,7 +773,10 @@ Result<vm::bbox3d, ToolError> boundsOfIds(
   }
   if (!result)
   {
-    return makeError(ErrorCode::InvalidArgument, "ids must not be empty.");
+    return makeError(
+      ErrorCode::InvalidArgument,
+      "ids must not be empty.",
+      "Pass object ids such as \"brush:12\", or a box instead.");
   }
   return *result;
 }
@@ -2513,7 +2523,8 @@ void registerSnapshotTools(ToolRegistry& registry)
   const auto countsField = field("counts", countsSchema()).describe("Drawn objects");
   const auto snapshotIdField =
     field("snapshotId", string())
-      .describe("Pass to view_pick to find what a pixel of the image shows");
+      .describe(
+        "Pass as 'snapshot' to view_pick to find what a pixel of the image shows");
   const auto annotationsOutputField =
     field("annotations", any())
       .describe(
@@ -2525,25 +2536,35 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"agent_camera_set"}
       .title("Set Agent Camera")
       .description(
-        "Creates or replaces a named camera of this session for view_snapshot. Agent "
-        "cameras are never shown as the user's camera. Forms: perspective with position "
-        "and lookAt, direction or yaw/pitch (yaw counterclockwise from +x, pitch up "
-        "positive, fov); orthographic with view top/front/side, center and zoom (pixels "
-        "per unit); or a helper: frame {ids | box} (fit objects, direction from "
+        "Creates or replaces a named camera of this session for view_snapshot and "
+        "the other snapshot tools; it never moves the user's views (camera_set "
+        "does). Forms: perspective with position and lookAt, direction or "
+        "yaw/pitch (degrees; yaw counterclockwise from +x, pitch positive up) and "
+        "fov; orthographic with view top/front/side, center and zoom (image pixels "
+        "per map unit); or a helper: frame {ids | box} (fit objects, looking along "
         "yaw/pitch), orbit {target | ids, yaw, pitch, distance}, eyeHeight {point} "
         "(stand on the floor below point at the game's player eye height). Framing "
-        "assumes width x height (1024 x 768). Example: {\"name\": \"hall\", \"camera\": "
-        "{\"eyeHeight\": {\"point\": [256, 256, 64]}, \"yaw\": 90}}")
+        "assumes the image size width x height. Returns the resolved camera "
+        "(position, direction, yaw, pitch, ...). Store cameras across sessions "
+        "with map_manifest_set saveCameras. Examples: {\"name\": \"hall\", "
+        "\"camera\": {\"eyeHeight\": {\"point\": [256, 256, 64]}, \"yaw\": 90}}; "
+        "{\"name\": \"plan\", \"camera\": {\"view\": \"top\", \"frame\": {\"ids\": "
+        "[\"group:3\"]}}}")
       .input(object({
         nameField,
-        field("camera", cameraSpecSchema()).required(),
+        field("camera", cameraSpecSchema())
+          .required()
+          .describe(
+            "The camera: perspective (position with lookAt, direction or yaw/pitch), "
+            "orthographic (view with center or frame) or a helper (frame, orbit, "
+            "eyeHeight)"),
         sizeFields(DefaultImageWidth, DefaultImageHeight)[0],
         sizeFields(DefaultImageWidth, DefaultImageHeight)[1],
       }))
       .output(object({
         field("name", string()),
-        field("camera", cameraOutputSchema()),
-        field("replaced", boolean()),
+        field("camera", cameraOutputSchema()).describe("The resolved camera"),
+        field("replaced", boolean()).describe("Whether a camera of that name existed"),
         field("placement", any()).describe("eyeHeight: {floor, eyeHeight, game}"),
       }))
       .mutation(Mutation::None)
@@ -2555,9 +2576,14 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"agent_camera_get"}
       .title("Get Agent Camera")
       .description(
-        "Returns a named agent camera of this session. Example: {\"name\": \"hall\"}")
+        "Returns a named agent camera of this session (read-only), resolved to "
+        "position, direction, up, yaw, pitch, fov or view and zoom. Example: "
+        "{\"name\": \"hall\"}")
       .input(object({nameField}))
-      .output(object({field("name", string()), field("camera", cameraOutputSchema())}))
+      .output(object({
+        field("name", string()),
+        field("camera", cameraOutputSchema()).describe("The resolved camera"),
+      }))
       .mutation(Mutation::None)
       .idempotent()
       .handler(agentCameraGet));
@@ -2566,12 +2592,14 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"agent_camera_list"}
       .title("List Agent Cameras")
       .description(
-        "Lists the agent cameras and the kept snapshots (view_snapshot keepAs) of this "
-        "session. Example: {}")
+        "Lists the agent cameras and the kept snapshots (view_snapshot keepAs) of "
+        "this session (read-only). Example: {}")
       .input(object({}))
       .output(object({
         field("cameras", array(any())).describe("{name, camera}"),
-        field("keptSnapshots", array(any())).describe("{name, document, width, height}"),
+        field("keptSnapshots", array(any()))
+          .describe("{name, document, width, height}; names for view_snapshot_compare "
+                    "and view_pick"),
       }))
       .mutation(Mutation::None)
       .idempotent()
@@ -2581,9 +2609,10 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"agent_camera_delete"}
       .title("Delete Agent Camera")
       .description(
-        "Deletes a named agent camera of this session. Example: {\"name\": \"hall\"}")
+        "Deletes a named agent camera of this session (session state only; the map "
+        "and the manifest are not changed). Example: {\"name\": \"hall\"}")
       .input(object({nameField}))
-      .output(object({field("deleted", string())}))
+      .output(object({field("deleted", string()).describe("The deleted camera's name")}))
       .mutation(Mutation::None)
       .handler(agentCameraDelete));
 
@@ -2602,9 +2631,8 @@ void registerSnapshotTools(ToolRegistry& registry)
   }
   snapshotInput.push_back(
     field("keepAs", string().matching(CameraNamePattern))
-      .describe("Keep the image under this name for "
-                "view_snapshot_compare and view_pick (at most 8 "
-                "are kept; the image is kept without annotations)"));
+      .describe("Keep the image under this name for view_snapshot_compare and view_pick "
+                "(at most 8 are kept; the image is kept without annotations)"));
   snapshotInput.push_back(
     field("annotations", annotationsSchema())
       .describe("Draw labels, a coordinate grid, a compass or a player box for scale"));
@@ -2613,26 +2641,28 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"view_snapshot"}
       .title("View Snapshot")
       .description(
-        "Renders an image of the map offscreen from an agent camera or an inline camera "
-        "(perspective or orthographic top/front/side), with its own options; the user's "
-        "views, filters and camera are not changed. By default objects hidden in the "
-        "editor are not drawn (includeHidden draws them), but the editor's view filters "
-        "(hidden tags, entity classes, show flags) do not apply. Options: faceMode, "
-        "shading, fog, edges, hideTags (e.g. trigger, clip, skip, hint), "
-        "hideClassnames, pointEntities, brushEntities, patches, entityModels, bounds, "
-        "classnames, entityLinks, leakPath, grid, axes; isolate draws only the given "
-        "objects; highlight tints objects. annotations draws object labels (id, "
-        "classname or group name, size), a coordinate grid on the floor and walls, a "
-        "compass and a player-sized box onto the image. Returns the image as image "
-        "content and a snapshotId: view_pick tells what any pixel of the image shows. "
-        "Example: {\"camera\": {\"frame\": {\"ids\": [\"brush:12\"]}, \"yaw\": 30}, "
-        "\"options\": {\"hideTags\": [\"trigger\"]}, \"annotations\": {\"labels\": "
-        "true, \"compass\": true}}")
+        "Renders an image of the map offscreen and returns it as image content, "
+        "with a snapshotId; read-only, the user's views, filters and camera are "
+        "not changed. camera: an agent camera name (agent_camera_set) or an inline "
+        "camera of the same forms; default: frame everything drawn from yaw 45, "
+        "pitch -30. Objects hidden in the editor are not drawn unless "
+        "options.includeHidden, but the editor's view filters (view_options_set) "
+        "do not apply. options: faceMode, shading, fog, edges, hideTags (e.g. "
+        "trigger, clip, skip, hint), hideClassnames, pointEntities, brushEntities, "
+        "patches, entityModels, bounds, classnames, entityLinks, leakPath, grid, "
+        "axes; isolate draws only the given objects; highlight tints objects. "
+        "annotations draws object labels (id, classname or group name, size), a "
+        "coordinate grid on floor and walls, a compass and a player-sized box. "
+        "keepAs keeps the image for view_snapshot_compare. Pass the snapshotId as "
+        "'snapshot' to view_pick to find what a pixel shows. Example: {\"camera\": "
+        "{\"frame\": {\"ids\": [\"brush:12\"]}, \"yaw\": 30}, \"options\": "
+        "{\"hideTags\": [\"trigger\"]}, \"annotations\": {\"labels\": true, "
+        "\"compass\": true}}")
       .input(object(snapshotInput))
       .output(object({
         snapshotIdField,
-        field("image", imageOutputSchema()),
-        field("camera", cameraOutputSchema()),
+        field("image", imageOutputSchema()).describe("The image's size and format"),
+        field("camera", cameraOutputSchema()).describe("The resolved camera"),
         field("cameraName", any()).describe("The agent camera used, or null"),
         countsField,
         field("keptAs", any()).describe("keepAs, or null"),
@@ -2664,8 +2694,10 @@ void registerSnapshotTools(ToolRegistry& registry)
            "front",
            "side"}),
         object({
-          field("label", string().nonEmpty()).required(),
-          field("camera", cameraArgSchema()).required(),
+          field("label", string().nonEmpty()).required().describe("The image's label"),
+          field("camera", cameraArgSchema())
+            .required()
+            .describe("An agent camera name or an inline camera"),
         }),
       })))
       .defaultsTo(Json::array({"north", "east", "south", "west", "top"}))
@@ -2688,10 +2720,16 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"view_snapshots_around"}
       .title("View Snapshots Around")
       .description(
-        "Renders several labelled images around objects or a region in one call, e.g. "
-        "from the four sides and from the top; each image is preceded by a text label. "
-        "Same options as view_snapshot. Reports progress per image and can be "
-        "cancelled. Example: {\"ids\": [\"group:3\"], \"views\": [\"north\", \"east\", "
+        "Renders several labelled images around objects or a region in one call "
+        "(read-only), e.g. from the four sides and from the top; each image is "
+        "preceded by a text label. Target: ids or box (default: everything drawn). "
+        "views: side names (the camera stands on that side looking at the target "
+        "from slightly above), above (perspective looking down), top/front/side "
+        "(orthographic), or {label, camera} with an agent camera name or inline "
+        "camera; at most 12. Same options, isolate, highlight and annotations as "
+        "view_snapshot. Returns per image its label, snapshotId (for view_pick), "
+        "camera and counts. Reports progress per image and can be cancelled. "
+        "Example: {\"ids\": [\"group:3\"], \"views\": [\"north\", \"east\", "
         "\"south\", \"west\", \"top\"]}")
       .input(object(aroundInput))
       .output(object({
@@ -2728,29 +2766,39 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"view_snapshot_compare"}
       .title("Compare Snapshots")
       .description(
-        "Shows the same camera before and after a change: returns the two images side "
-        "by side (before | after) and a changed-pixel mask, with the number, ratio and "
-        "bounding box of changed pixels. Either compare kept snapshots (before, "
-        "optional after), or pass undoSteps to compare the current state with an "
-        "earlier one (refused while a transaction is open; the undo history and the "
-        "map are left as they were). Example: {\"undoSteps\": 1, \"camera\": \"hall\"}")
+        "Shows the same camera before and after a change (read-only): returns the "
+        "two images side by side (before | after) and a changed-pixel mask, with "
+        "the number, ratio and bounding box of changed pixels. Either compare kept "
+        "snapshots ('before' from view_snapshot keepAs, optional 'after'; default: "
+        "the current state rendered with the before snapshot's camera and "
+        "options), or pass undoSteps to compare the current state with an earlier "
+        "one (renders, undoes, renders and redoes; the history and the map are "
+        "left as they were; refused while a transaction is open). camera and "
+        "options apply only to undoSteps. The returned snapshotId is the after "
+        "image for view_pick, in the coordinates of one image, not the "
+        "side-by-side picture. Examples: {\"undoSteps\": 1, \"camera\": \"hall\"}; "
+        "{\"before\": \"hall_before\"}")
       .input(object(compareInput))
       .output(object({
-        field("mode", enumOf({"kept", "undo"})),
-        field("width", integer()),
-        field("height", integer()),
-        field("changedPixels", integer()),
-        field("changedRatio", number()),
+        field("mode", enumOf({"kept", "undo"}))
+          .describe("kept: kept snapshots compared; undo: undoSteps compared"),
+        field("width", integer()).describe("Width of one image in pixels"),
+        field("height", integer()).describe("Height of one image in pixels"),
+        field("changedPixels", integer()).describe("Number of changed pixels"),
+        field("changedRatio", number()).describe("Changed pixels / all pixels (0-1)"),
         field("changedBounds", any())
           .describe("{x, y, width, height} in pixels, or null"),
-        field("camera", cameraOutputSchema()),
-        field("before", any()),
-        field("after", any()),
-        field("undoSteps", integer()),
+        field("camera", cameraOutputSchema()).describe("The camera of both images"),
+        field("before", any()).describe("The before snapshot's name, or null"),
+        field("after", any()).describe("The after snapshot's name, or null"),
+        field("undoSteps", integer()).describe("undo mode: the steps compared across"),
         field("undone", array(string())).describe("The undo steps compared across"),
-        field("historyRestored", boolean()),
+        field("historyRestored", boolean())
+          .describe("undo mode: the undo history was restored afterwards"),
         field("snapshotId", string())
-          .describe("The after image's camera, for view_pick (pixels of one image)"),
+          .describe(
+            "The after image, for view_pick; pixels are in the coordinates of one "
+            "image, not the side-by-side picture"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -2771,17 +2819,19 @@ void registerSnapshotTools(ToolRegistry& registry)
     ToolDef{"view_snapshot_user"}
       .title("Capture User View")
       .description(
-        "Captures what the user currently sees in an editor view (3d, xy, xz, yz) of "
-        "the document's window, without changing anything, and lists the views with "
-        "their cameras (copy one into agent_camera_set to render it with your own "
-        "options). Example: {\"view\": \"3d\"}")
+        "Captures what the user currently sees in one of the editor views (3d, xy, "
+        "xz, yz) of the document's window, without changing anything, and lists "
+        "the views with their cameras. Returns the image as image content and a "
+        "snapshotId for view_pick. Copy a listed camera into agent_camera_set to "
+        "render it with your own options through view_snapshot. listOnly returns "
+        "only the list. Examples: {\"view\": \"3d\"}; {\"listOnly\": true}")
       .input(object(userInput))
       .output(object({
         field("views", array(any())).describe("{id, visible, width, height, camera}"),
         field("view", any()).describe("The captured view, or null"),
-        field("camera", cameraOutputSchema()),
-        field("image", imageOutputSchema()),
-        field("snapshotId", string()).describe("For view_pick"),
+        field("camera", cameraOutputSchema()).describe("The captured view's camera"),
+        field("image", imageOutputSchema()).describe("The image's size and format"),
+        field("snapshotId", string()).describe("Pass as 'snapshot' to view_pick"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)

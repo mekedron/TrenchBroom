@@ -528,6 +528,45 @@ TEST_CASE("UvCheck")
         checkUv({faceOf(right, Front)}, map, profiles.provider(), {UvIssue::Seam});
       REQUIRE(findings.size() == 1);
       CHECK(findings.front().measured["mismatch"] == "scaleOrRotation");
+      CHECK(
+        findings.front().message
+        == "'k_tile' does not continue across the edge to its coplanar neighbour: the "
+           "scale differs (0.5 x 0.5 vs 1 x 1).");
+    }
+
+    SECTION("different rotation")
+    {
+      auto* right =
+        addCuboid(map, {{64, 0, 0}, {128, 16, 64}}, "k_tile", {.rotation = 90.0f});
+      const auto findings =
+        checkUv({faceOf(right, Front)}, map, profiles.provider(), {UvIssue::Seam});
+      REQUIRE(findings.size() == 1);
+      CHECK(
+        findings.front().message
+        == "'k_tile' does not continue across the edge to its coplanar neighbour: the "
+           "rotation differs (90 vs 0 degrees).");
+      CHECK(findings.front().measured["rotation"] == 90.0);
+      CHECK(findings.front().measured["neighbourRotation"] == 0.0);
+    }
+
+    SECTION("different texture axes with the same scale and rotation")
+    {
+      // a sheared Valve 220 face keeps its scale and rotation but not its axes
+      auto brush =
+        brushBuilder(map).createCuboid({{64, 0, 0}, {128, 16, 64}}, "k_tile").value();
+      const auto frontIndex = brush.findFace(Front);
+      REQUIRE(frontIndex);
+      brush.face(*frontIndex).shearUv({0.5f, 0.0f});
+      auto* right =
+        static_cast<mdl::BrushNode*>(addBrushes(map, {std::move(brush)}).front());
+      REQUIRE(right->brush().face(*frontIndex).uvAttributes().scale == vm::vec2f{1, 1});
+
+      const auto findings =
+        checkUv({faceOf(right, Front)}, map, profiles.provider(), {UvIssue::Seam});
+      REQUIRE(findings.size() == 1);
+      const auto& message = findings.front().message;
+      CHECK(message.find("the texture axes differ") != std::string::npos);
+      CHECK(message.find("1 x 1 vs 1 x 1") == std::string::npos);
     }
 
     SECTION("different materials have no seam")

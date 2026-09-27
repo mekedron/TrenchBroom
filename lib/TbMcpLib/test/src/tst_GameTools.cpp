@@ -297,6 +297,33 @@ TEST_CASE("GameTools")
       CHECK(resultOf(reloaded)["collections"].size() == 1);
     }
 
+    SECTION("relative WAD paths")
+    {
+      newDocument(fixture, "Quake");
+      env.createDirectory("maps/wads");
+      std::filesystem::copy_file(wadPath(), env.dir() / "maps/wads/test.wad");
+      fixture.call(
+        "document_save_as", Json{{"path", (env.dir() / "maps/test.map").string()}});
+      const auto absolute = (env.dir() / "maps/wads/test.wad").lexically_normal();
+
+      // found relative paths are stored as absolute paths
+      const auto resolved =
+        fixture.call("materials_collections_set", Json{{"wads", Json{"wads/test.wad"}}});
+      CHECK(resolved["warnings"].empty());
+      CHECK(resultOf(resolved)["wads"] == Json{absolute.string()});
+      CHECK(resultOf(resolved)["materialCount"].get<size_t>() > 0);
+
+      const auto kept = fixture.call(
+        "materials_collections_set",
+        Json{{"wads", Json{"wads/test.wad"}}, {"keepRelative", true}});
+      CHECK(resultOf(kept)["wads"] == Json{"wads/test.wad"});
+      REQUIRE(kept["warnings"].size() == 1);
+      CHECK(kept["warnings"][0]["code"] == "RELATIVE_WAD_PATH");
+      CHECK(
+        kept["warnings"][0]["message"].get<std::string>().find(absolute.string())
+        != std::string::npos);
+    }
+
     SECTION("folder games")
     {
       auto& document = newDocument(fixture, "Quake 2");

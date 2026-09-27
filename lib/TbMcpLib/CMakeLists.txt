@@ -7,6 +7,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AgentCamera.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Annotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BridgeSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallRunner.cpp
@@ -29,6 +30,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Pagination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/PromptRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Prompts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ProtocolVersion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RegisterAll.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ResourceRegistry.cpp
@@ -103,6 +105,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Args.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/AgentCamera.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Annotations.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/BridgeSession.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallContext.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallRunner.h
@@ -125,6 +128,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ObjectIds.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Pagination.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/PromptRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Prompts.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ProtocolVersion.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/RegisterAll.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ResourceRegistry.h

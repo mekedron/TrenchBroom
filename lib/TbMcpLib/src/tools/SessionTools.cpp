@@ -229,28 +229,36 @@ void registerSessionTools(ToolRegistry& registry)
     ToolDef{"editor_status"}
       .title("Editor Status")
       .description(
-        "Returns the editor state: version, open documents, the active document (the one "
-        "tools act on by default), current tool, grid, alignment/UV locks, selection, "
-        "whether a compile is running, and any open agent transaction. Call this first "
-        "to "
-        "orient yourself. Example: {}")
+        "Returns the editor state (read-only): version, open documents, the active "
+        "document (the one tools act on without a 'document' argument), current tool, "
+        "grid, alignment/UV locks, a selection summary, whether a compile is running, "
+        "the open agent transaction and what the agents are doing. Call it first to "
+        "orient yourself; map_summary describes the map's content. Example: {}")
       .input(object({}))
       .output(object({
         field("version", string()).required(),
-        field("protocolVersion", string()),
+        field("protocolVersion", string()).describe("Negotiated MCP protocol revision"),
         field("sessions", integer()).describe("Number of connected MCP clients"),
         field("documents", array(documentSummarySchema())).required(),
         field("activeDocument", any()).describe("Handle of the active document or null"),
         field("tool", any()).describe("Name of the active editor tool or null"),
-        field("grid", any()).describe("{size, visible, snap} or null"),
+        field("grid", any()).describe("{size (map units), visible, snap} or null"),
         field(
           "locks",
-          object({field("alignmentLock", boolean()), field("uvLock", boolean())})),
-        field("compileRunning", boolean()),
+          object({
+            field("alignmentLock", boolean())
+              .describe("Materials stay aligned when objects move (locks_set)"),
+            field("uvLock", boolean())
+              .describe("UVs stay fixed on faces when vertices move (locks_set)"),
+          })),
+        field("compileRunning", boolean())
+          .describe("Whether a compile of the active document is running"),
         field("transaction", any())
-          .describe("{name, owner} of the open agent transaction"),
-        field("selection", any()).describe("Selection summary of the active document"),
-        field("agentActivity", any()),
+          .describe("{name, owner} of the open agent transaction, or null"),
+        field("selection", any())
+          .describe("Selection summary of the active document (up to 20 items)"),
+        field("agentActivity", any())
+          .describe("{state: 'idle', 'running' or 'waitingForUser', tool}"),
       }))
       .mutation(Mutation::None)
       .idempotent()
@@ -260,8 +268,10 @@ void registerSessionTools(ToolRegistry& registry)
     ToolDef{"document_list"}
       .title("List Documents")
       .description(
-        "Lists the open documents (one per editor window) with handle, path, game, "
-        "format, modified flag and which one is active. Example: {}")
+        "Lists the open documents (one per editor window), read-only: handle ('doc:1'), "
+        "path, game, format, modified flag, focused window and which one is active for "
+        "this session. Use document_activate to change the active document. Example: "
+        "{}")
       .input(object({}))
       .output(object({
         field("documents", array(documentSummarySchema())).required(),
@@ -275,14 +285,15 @@ void registerSessionTools(ToolRegistry& registry)
     ToolDef{"document_activate"}
       .title("Activate Document")
       .description(
-        "Chooses the document that this session's tools act on by default (without a "
-        "'document' argument). It does not change the focused window. Without it, tools "
-        "act on the focused window. Example: {\"document\": \"doc:2\"}")
+        "Chooses the document that this session's tools act on when they get no "
+        "'document' argument; until then they act on the focused window. It does not "
+        "change the focused window or the map. Handles come from document_list. "
+        "Example: {\"document\": \"doc:2\"}")
       .input(object({
         field("document", documentId()).required().describe("Handle from document_list"),
       }))
       .output(object({
-        field("activeDocument", string()).required(),
+        field("activeDocument", string()).required().describe("The new active document"),
         field("document", documentSummarySchema()).required(),
       }))
       .mutation(Mutation::None)
@@ -293,19 +304,20 @@ void registerSessionTools(ToolRegistry& registry)
     ToolDef{"session_log"}
       .title("Session Log")
       .description(
-        "Returns the agent calls performed so far, newest first: tool, time, duration, "
-        "success or error code, undo step and change counts. detail 'full' includes the "
-        "arguments. Example: {\"scope\": \"all\", \"errorsOnly\": true, \"limit\": 20}")
+        "Returns the agent calls performed so far (read-only), newest first: tool, "
+        "time, duration, success or error code, undo step and change counts; detail "
+        "'full' adds the arguments. Filter by client (scope), tool name or failures. "
+        "Example: {\"scope\": \"all\", \"errorsOnly\": true, \"limit\": 20}")
       .input(object({
         field("scope", enumOf({"session", "all"}).defaultsTo("session"))
           .describe("'session': calls of this client; 'all': calls of all clients"),
-        field("tool", string()).describe("Only calls of this tool"),
+        field("tool", string()).describe("Only calls of this tool, e.g. 'objects_move'"),
         field("errorsOnly", boolean().defaultsTo(false)).describe("Only failed calls"),
       }))
       .output(object({
-        field("items", array(any())).required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()),
+        field("items", array(any())).required().describe("Log entries, newest first"),
+        field("total", integer()).required().describe("Number of matching entries"),
+        field("nextCursor", any()).describe("Cursor of the next page, or null"),
       }))
       .mutation(Mutation::None)
       .paginated()

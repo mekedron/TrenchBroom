@@ -391,22 +391,28 @@ void registerManifestTools(ToolRegistry& registry)
     ToolDef{"map_manifest_get"}
       .title("Get Map Manifest")
       .description(
-        "Returns the map's manifest: the agent's notes about the map, kept in a file "
-        "next to it (<name>.mcp.json for <name>.map) across sessions: spaces (id, name, "
-        "purpose, notes, bounds), keyPoints (name, position, note), notes (texts) and "
-        "named agent cameras. Read it when you start working on a map. restoreCameras "
+        "Returns the map's manifest: the agent's notes about the map, kept across "
+        "sessions in a file next to it (<name>.mcp.json for <name>.map) and not "
+        "part of the map: spaces (id, name, purpose, notes, bounds), keyPoints "
+        "(name, position, note), notes (texts) and named agent cameras. Read it "
+        "when you start working on a map. Does not change the map; restoreCameras "
         "(true or a list of names) loads saved cameras into this session's agent "
-        "cameras (for view_snapshot). For a map that was never saved the manifest is "
-        "kept in memory ('pending') until the map is saved. The manifest is not part "
-        "of the map and not undoable. Example: {\"sections\": [\"spaces\", "
-        "\"cameras\"], \"restoreCameras\": true} -> {\"path\": \"/maps/e1.mcp.json\", "
-        "\"exists\": true, \"pending\": false, \"spaces\": [{\"id\": \"space:1\", "
-        "\"name\": \"Hall\", \"purpose\": \"arrival\"}], \"cameras\": [{\"name\": "
-        "\"hall\", \"camera\": {...}}], \"restoredCameras\": [\"hall\"]}")
+        "cameras for view_snapshot. For a map that was never saved the manifest is "
+        "kept in memory (pending: true) until the map is saved. Update it with "
+        "map_manifest_set. Example: {\"sections\": [\"spaces\", \"cameras\"], "
+        "\"restoreCameras\": true}")
       .input(object({
         field("sections", array(enumOf(sections)).nonEmpty())
-          .describe("Only these sections. Default: all"),
-        field("restoreCameras", oneOf({boolean(), array(string()).nonEmpty()}))
+          .describe(
+            "Only these sections (spaces, keyPoints, notes, cameras). Default: all"),
+        field(
+          "restoreCameras",
+          oneOf({
+            boolean().describe("true: restore all saved cameras"),
+            array(string().describe("A saved camera name"))
+              .nonEmpty()
+              .describe("Restore only these cameras"),
+          }))
           .describe(
             "true: load all saved cameras into this session's agent cameras; a list: "
             "only these. Existing session cameras of the same name are replaced"),
@@ -417,11 +423,12 @@ void registerManifestTools(ToolRegistry& registry)
         field("pending", boolean())
           .required()
           .describe("Kept in memory until the map is saved"),
-        field("spaces", array(any())),
-        field("keyPoints", array(any())),
-        field("notes", array(string())),
-        field("cameras", array(cameraEntrySchema())),
-        field("restoredCameras", array(string())),
+        field("spaces", array(any())).describe("{id, name, purpose, notes, bounds}"),
+        field("keyPoints", array(any())).describe("{name, position, note}"),
+        field("notes", array(string())).describe("Free-text notes"),
+        field("cameras", array(cameraEntrySchema())).describe("Saved agent cameras"),
+        field("restoredCameras", array(string()))
+          .describe("Cameras loaded into this session's agent cameras"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -431,62 +438,81 @@ void registerManifestTools(ToolRegistry& registry)
     ToolDef{"map_manifest_set"}
       .title("Update Map Manifest")
       .description(
-        "Updates the map's manifest (see map_manifest_get) and writes it next to the "
-        "map, or keeps it in memory until a never-saved map is saved; saving under a "
-        "new name carries it along. Not undoable. Sections merge by default: spaces by "
-        "id (a spaces_list id or your own; given fields replace stored ones, null "
+        "Updates the map's manifest (see map_manifest_get) and writes "
+        "<name>.mcp.json next to the map, or keeps it in memory until a "
+        "never-saved map is saved (saving under a new name carries it along). Not "
+        "undoable and not part of the map. Sections merge by default: spaces by id "
+        "(a spaces_list id or your own; given fields replace stored ones, null "
         "removes a field), keyPoints by name (new ones need a position), notes are "
-        "appended unless the text exists; 'replace' lists sections that are replaced "
-        "instead (cleared if not given). saveCameras: \"all\" or names of this "
-        "session's agent cameras to store (replacing saved cameras of the same name). "
-        "'remove' deletes entries by key: {spaces: [ids], keyPoints: [names], notes: "
-        "[texts], cameras: [names]}. A manifest file that is not valid is never "
-        "overwritten unless overwriteInvalid is true. Example: {\"spaces\": [{\"id\": "
-        "\"space:2\", \"name\": \"Armory\", \"purpose\": \"weapons, ambush from the "
-        "balcony\"}], \"keyPoints\": [{\"name\": \"ambush\", \"position\": [320, 64, "
-        "128], \"note\": \"monsters wait here\"}], \"saveCameras\": [\"armory\"]}")
+        "appended unless the text exists; 'replace' lists sections that are "
+        "replaced instead (cleared if not given). saveCameras: \"all\" or names of "
+        "this session's agent cameras (agent_camera_set) to store, replacing saved "
+        "cameras of the same name. 'remove' deletes entries by id, name or text. A "
+        "manifest file that is not valid is only overwritten with "
+        "overwriteInvalid: true. Returns changed, removed, notFound, savedCameras "
+        "and counts per section. Example: {\"spaces\": [{\"id\": \"space:2\", "
+        "\"name\": \"Armory\", \"purpose\": \"weapons, ambush from the "
+        "balcony\"}], \"keyPoints\": [{\"name\": \"ambush\", \"position\": [320, "
+        "64, 128], \"note\": \"monsters wait here\"}], \"saveCameras\": "
+        "[\"armory\"]}")
       .input(object({
         field(
           "spaces",
-          array(object({field("id", string()).required()}).allowAdditionalProperties()))
+          array(object({field("id", string()).required().describe("The space id")})
+                  .allowAdditionalProperties()
+                  .describe("{id, name?, purpose?, notes?, bounds?}")))
           .describe(
             "Spaces to add or change, by id: {id, name?, purpose?, notes?, bounds?: "
             "{min, max}}; null removes a field"),
         field(
           "keyPoints",
-          array(object({field("name", string()).required()}).allowAdditionalProperties()))
+          array(
+            object({field("name", string()).required().describe("The key point name")})
+              .allowAdditionalProperties()
+              .describe("{name, position?, note?}")))
           .describe(
             "Key points to add or change, by name: {name, position?: [x, y, z] (needed "
             "for new ones), note?}; a null note removes it"),
         field("notes", array(string())).describe("Notes to append"),
         field("replace", array(enumOf(sections)))
-          .describe("Sections to replace instead of merging"),
-        field("saveCameras", oneOf({enumOf({"all"}), array(string()).nonEmpty()}))
+          .describe(
+            "Sections to replace instead of merging (a listed section that is not given "
+            "is cleared)"),
+        field(
+          "saveCameras",
+          oneOf({
+            enumOf({"all"}).describe("All agent cameras of this session"),
+            array(string().describe("An agent camera name"))
+              .nonEmpty()
+              .describe("Only these agent cameras"),
+          }))
           .describe("\"all\" or names of this session's agent cameras to save"),
         field(
           "remove",
           object({
-            field("spaces", array(string())),
-            field("keyPoints", array(string())),
-            field("notes", array(string())),
-            field("cameras", array(string())),
+            field("spaces", array(string())).describe("Space ids"),
+            field("keyPoints", array(string())).describe("Key point names"),
+            field("notes", array(string())).describe("Note texts"),
+            field("cameras", array(string())).describe("Saved camera names"),
           }))
           .describe("Entries to remove, by id, name or text"),
         field("overwriteInvalid", boolean().defaultsTo(false))
           .describe("Replace a manifest file that is not valid (its content is lost)"),
       }))
       .output(object({
-        field("path", any()).required(),
+        field("path", any()).required().describe("The manifest file, or null"),
         field("written", boolean()).required().describe("The file was written"),
         field("pending", boolean())
           .required()
           .describe("Kept in memory until the map is saved"),
         field("changed", any()).required().describe("Entries added or changed"),
-        field("removed", integer()).required(),
-        field("notFound", array(string())).required(),
-        field("savedCameras", array(string())).required(),
+        field("removed", integer()).required().describe("Number of entries removed"),
+        field("notFound", array(string()))
+          .required()
+          .describe("Keys in 'remove' that matched no entry"),
+        field("savedCameras", array(string())).required().describe("Cameras stored"),
         field("counts", any()).required().describe("Entries per section afterwards"),
-        field("wouldDo", string()),
+        field("wouldDo", string()).describe("Dry run only: what the call would do"),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)

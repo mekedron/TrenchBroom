@@ -394,16 +394,28 @@ void addLeakDetails(CompileLeak& leak, std::string_view line)
   const auto text = trim(line);
 
   // VHLT / ZHLT: "Entity info_player_start @ (  -64, -64,  36)"
+  // sdHLT / HLBSP: "Entity light at ( 656  256  112)"
   if (!leak.entity && startsWithCi(text, "entity "))
   {
-    if (const auto at = text.find(" @ "); at != std::string_view::npos)
+    const auto lower = kdl::str_to_lower(text);
+    for (const auto separator : {" @ ", " at ", " at: "})
     {
-      leak.entity = std::string{trim(text.substr(7, at - 7))};
-      leak.position = parsePosition(text.substr(at));
+      if (const auto at = lower.find(separator, 7); at != std::string::npos)
+      {
+        const auto name = trim(text.substr(7, at - 7));
+        const auto position = parsePosition(text.substr(at));
+        if (!name.empty() && position)
+        {
+          leak.entity = std::string{name};
+          leak.position = position;
+          break;
+        }
+      }
     }
   }
 
   // ericw-tools / tyrutils: Reached occupant "info_player_start" at (-64 -64 36)
+  // id qbsp: reached occupant at: ( -64, -64,  36)
   if (const auto lower = kdl::str_to_lower(text);
       lower.find("reached occupant") != std::string::npos)
   {
@@ -421,7 +433,7 @@ void addLeakDetails(CompileLeak& leak, std::string_view line)
     }
     if (!leak.position)
     {
-      if (const auto at = kdl::str_to_lower(rest).find(" at ("); at != std::string::npos)
+      if (const auto at = kdl::str_to_lower(rest).find(" at"); at != std::string::npos)
       {
         leak.position = parsePosition(rest.substr(at));
       }

@@ -91,6 +91,24 @@ TEST_CASE("Pagination")
       == Json::parse(R"({"id":"brush:1","faces":[{"material":"a"},{"material":"b"}]})"));
     CHECK(selectFields(item, {"missing"}) == Json::object());
   }
+
+  SECTION("unknownFields")
+  {
+    const auto brush = Json::parse(
+      R"({"id":"brush:1","faces":[{"material":"a","vertices":[]},{"material":"b"}]})");
+    const auto entity =
+      Json::parse(R"({"id":"entity:2","classname":"light","definition":null})");
+    CHECK(unknownFields({brush, entity}, {}).empty());
+    // paths that exist in some items only, in some array elements only, or with null
+    // values are known
+    CHECK(
+      unknownFields({brush, entity}, {"id", "classname", "faces.vertices", "definition"})
+        .empty());
+    CHECK(
+      unknownFields({brush, entity}, {"vertices", "faces.normal", "id.x", "id"})
+      == std::vector<std::string>{"vertices", "faces.normal", "id.x"});
+    CHECK(unknownFields({}, {"id"}) == std::vector<std::string>{"id"});
+  }
 }
 
 } // namespace tb::mcp

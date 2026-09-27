@@ -117,8 +117,8 @@ Schema gridSchema()
     field("effectiveSize", number())
       .required()
       .describe("The size tools snap to: size, or 1 if snapping is off"),
-    field("visible", boolean()).required(),
-    field("snap", boolean()).required(),
+    field("visible", boolean()).required().describe("Whether the grid is shown"),
+    field("snap", boolean()).required().describe("Whether tools snap to the grid"),
     field("angle", number()).required().describe("Rotation snap angle in degrees"),
   });
 }
@@ -301,27 +301,29 @@ Schema cameraSchema()
     field("position", vec3())
       .required()
       .describe("Eye position (3D) or view center (2D; the axis coordinate is unused)"),
-    field("direction", vec3()).required(),
-    field("up", vec3()).required(),
+    field("direction", vec3()).required().describe("View direction (unit vector)"),
+    field("up", vec3()).required().describe("Up vector (unit vector)"),
     field("yaw", number()).describe("Degrees, counterclockwise from +x"),
     field("pitch", number()).describe("Degrees, positive looks up"),
     field("fov", number()).describe("3D: field of view in degrees"),
     field("view", any()).describe("2D: top, front or side"),
     field("zoom", number()).describe("2D: screen pixels per map unit"),
-    field("near", number()),
-    field("far", number()),
+    field("near", number()).describe("Near plane distance in map units"),
+    field("far", number()).describe("Far plane distance in map units"),
   });
 }
 
 Schema viewSchema()
 {
   return object({
-    field("id", enumOf(ViewIdList)).required(),
+    field("id", enumOf(ViewIdList))
+      .required()
+      .describe("3d, xy (top), xz (front) or yz (side)"),
     field("visible", boolean())
       .required()
       .describe("Shown in the current layout (not hidden by the layout or maximizing)"),
-    field("width", integer()).required().describe("Size in pixels"),
-    field("height", integer()).required(),
+    field("width", integer()).required().describe("Width in pixels"),
+    field("height", integer()).required().describe("Height in pixels"),
     field("camera", cameraSchema()).required(),
   });
 }
@@ -1170,8 +1172,8 @@ Schema viewOptionsSchema()
     field(
       "tags",
       array(object({
-        field("name", string()).required(),
-        field("visible", boolean()).required(),
+        field("name", string()).required().describe("Smart tag name"),
+        field("visible", boolean()).required().describe("Whether it is shown"),
       })))
       .required()
       .describe("The game's smart tags and whether objects / faces with them are shown"));
@@ -1182,9 +1184,9 @@ Schema viewOptionsSchema()
     field(
       "classGroups",
       array(object({
-        field("name", string()).required(),
-        field("classes", integer()).required(),
-        field("hidden", integer()).required(),
+        field("name", string()).required().describe("Group name, e.g. monster"),
+        field("classes", integer()).required().describe("Entity classes in the group"),
+        field("hidden", integer()).required().describe("Hidden classes of the group"),
       })))
       .required()
       .describe("The entity definition groups (classname prefixes) with hidden counts"));
@@ -1475,9 +1477,10 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"grid_get"}
       .title("Get Grid")
       .description(
-        "Returns the grid of the document: size in map units (a power of two from 0.125 "
-        "to 256), exponent (size = 2^exponent), whether it is visible and whether "
-        "snapping is on, and the rotation snap angle. Example: {}")
+        "Returns the document's grid (read-only): size in map units (a power of "
+        "two from 0.125 to 256), exponent (size = 2^exponent), effectiveSize (what "
+        "tools snap to), whether it is visible and whether snapping is on, and the "
+        "rotation snap angle in degrees. Change it with grid_set. Example: {}")
       .input(object({}))
       .output(gridSchema())
       .mutation(Mutation::None)
@@ -1489,11 +1492,11 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"grid_set"}
       .title("Set Grid")
       .description(
-        "Changes the grid of the document, like the View > Grid menu: 'size' in map "
-        "units "
-        "(0.125, 0.25, ..., 256) or 'exponent' (-3 to 8), and whether the grid is "
-        "'visible' and 'snap'ping is on. Not undoable. Returns the new and the previous "
-        "grid. Example: {\"size\": 16} or {\"snap\": false}")
+        "Changes the document's grid, like the View > Grid menu: 'size' in map "
+        "units (0.125, 0.25, ..., 256) or 'exponent' (-3 to 8), and whether the "
+        "grid is 'visible' and 'snap' is on. Not undoable. The grid size is also "
+        "the default step of uv_nudge. Returns the new grid and 'previous'. "
+        "Examples: {\"size\": 16}; {\"snap\": false}")
       .input(object({
         field("size", number()).describe("Grid size in map units, a power of two"),
         field("exponent", integer().min(mdl::Grid::MinSize).max(mdl::Grid::MaxSize))
@@ -1502,13 +1505,15 @@ void registerViewTools(ToolRegistry& registry)
         field("snap", boolean()).describe("Snap to the grid"),
       }))
       .output(object({
-        field("size", number()).required(),
-        field("exponent", integer()).required(),
-        field("effectiveSize", number()).required(),
-        field("visible", boolean()).required(),
-        field("snap", boolean()).required(),
-        field("angle", number()).required(),
-        field("previous", gridSchema()).required(),
+        field("size", number()).required().describe("Grid size in map units"),
+        field("exponent", integer()).required().describe("size = 2^exponent"),
+        field("effectiveSize", number())
+          .required()
+          .describe("The size tools snap to: size, or 1 if snapping is off"),
+        field("visible", boolean()).required().describe("Whether the grid is shown"),
+        field("snap", boolean()).required().describe("Whether tools snap to the grid"),
+        field("angle", number()).required().describe("Rotation snap angle in degrees"),
+        field("previous", gridSchema()).required().describe("The grid before the call"),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)
@@ -1519,13 +1524,15 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"camera_get"}
       .title("Get User Cameras")
       .description(
-        "Returns the user's editor views of the document's window: the 3D view and the "
-        "2D views xy (top), xz (front) and yz (side), each with its camera (3D: "
-        "position, direction, up, yaw/pitch, fov; 2D: center position and zoom in "
-        "screen pixels per map unit), size in pixels and whether the current layout "
-        "shows it; the layout (panes, maximized and current view), whether 2D cameras "
-        "are linked, and the loaded point file position. These are the cameras the "
-        "user looks through; agent cameras (agent_camera_*) are separate. Example: {}")
+        "Returns the user's editor views of the document's window (read-only): the "
+        "3D view and the 2D views xy (top), xz (front) and yz (side), each with "
+        "its camera (3D: position, direction, up, yaw/pitch, fov; 2D: center "
+        "position and zoom in screen pixels per map unit), size in pixels and "
+        "whether the current layout shows it; the layout (panes, maximized and "
+        "current view), whether 2D cameras are linked, and the loaded point file "
+        "position. These are the cameras the user looks through; agent cameras "
+        "(agent_camera_set) are separate, and view_snapshot_user captures what a "
+        "view shows. Example: {}")
       .input(object({}))
       .output(object({
         field("views", array(viewSchema())).required(),
@@ -1539,8 +1546,8 @@ void registerViewTools(ToolRegistry& registry)
         field(
           "pointFile",
           object({
-            field("index", integer()).required(),
-            field("count", integer()).required(),
+            field("index", integer()).required().describe("The current point, from 0"),
+            field("count", integer()).required().describe("The number of points"),
           }))
           .describe("The current point of the loaded point file, if any"),
       }))
@@ -1553,42 +1560,48 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"camera_set"}
       .title("Set User Camera")
       .description(
-        "Moves the camera of one of the user's editor views without animation; this "
-        "changes what the user sees. 3D view: position, and the orientation as lookAt "
-        "(a point), direction (a vector) or yaw/pitch in degrees (yaw counterclockwise "
-        "from +x, pitch positive up; one of them may be omitted to keep it); up is "
-        "optional (default: upright); fov changes the view's field of view until the "
-        "'Controls/Camera/Field of vision' preference changes or the layout is switched "
-        "(use preferences_set for a permanent change). 2D views (xy, xz, yz): position "
-        "moves the view center (the coordinate along the view axis is ignored) and zoom "
-        "is screen pixels per map unit (0.02 to 100); their direction is fixed. With "
-        "linked 2D cameras the other 2D views follow (linkedViews). Not undoable. "
-        "Returns the new and the previous camera. Example: {\"position\": [0, -512, "
-        "256], \"lookAt\": [0, 0, 64]} or {\"view\": \"xy\", \"position\": [512, 256, "
-        "0], \"zoom\": 0.5}")
+        "Moves the camera of one of the user's editor views without animation, "
+        "which changes what the user sees; not undoable. 3D view: position, and "
+        "the orientation as lookAt (a point), direction (a vector) or yaw/pitch in "
+        "degrees (yaw counterclockwise from +x, pitch positive up; either may be "
+        "omitted to keep it); up is optional (default: upright); fov lasts until "
+        "the 'Controls/Camera/Field of vision' preference changes or the layout is "
+        "switched (use preferences_set for a permanent change). 2D views (xy, xz, "
+        "yz): position moves the view center (the coordinate along the view axis "
+        "is ignored) and zoom is screen pixels per map unit (0.02 to 100); their "
+        "direction is fixed. With linked 2D cameras the other 2D views follow "
+        "(linkedViews). Returns the new camera and 'previous'. To look at the map "
+        "yourself use agent cameras (view_snapshot) instead. Examples: "
+        "{\"position\": [0, -512, 256], \"lookAt\": [0, 0, 64]}; {\"view\": "
+        "\"xy\", \"position\": [512, 256, 0], \"zoom\": 0.5}")
       .input(object({
-        field("view", viewIdSchema().defaultsTo("3d")).describe("The view to move"),
+        field("view", viewIdSchema().defaultsTo("3d"))
+          .describe("The view to move: 3d, xy (top), xz (front) or yz (side)"),
         field("position", vec3())
           .describe("3D: the eye position; 2D: the point in the view center"),
         field("lookAt", vec3()).describe("3D: the point to look at"),
-        field("direction", vec3()).describe("3D: the view direction"),
+        field("direction", vec3())
+          .describe("3D: the view direction (need not be normalized)"),
         field("yaw", number())
           .describe("3D: degrees counterclockwise from +x (0 = east, 90 = north)"),
         field("pitch", number().min(-90).max(90))
           .describe("3D: degrees, positive looks up, -90 looks straight down"),
         field("up", vec3()).describe("3D: the up vector (default: upright)"),
-        field("fov", number().min(1).max(150)).describe("3D: field of view in degrees"),
+        field("fov", number().min(1).max(150))
+          .describe("3D: field of view in degrees, until the preference changes"),
         field("zoom", number().min(MinViewZoom).max(MaxViewZoom))
           .describe("2D: screen pixels per map unit"),
       }))
       .output(object({
-        field("view", string()).required(),
-        field("camera", cameraSchema()).required(),
-        field("previous", cameraSchema()).required(),
+        field("view", string()).required().describe("The view moved"),
+        field("camera", cameraSchema()).required().describe("Its new camera"),
+        field("previous", cameraSchema())
+          .required()
+          .describe("Its camera before the call"),
         field(
           "linkedViews",
           array(object({
-            field("id", string()).required(),
+            field("id", string()).required().describe("xy, xz or yz"),
             field("camera", cameraSchema()).required(),
           })))
           .required()
@@ -1604,21 +1617,23 @@ void registerViewTools(ToolRegistry& registry)
       .description(
         "Points the user's editor views at objects, a box or a point, like View > "
         "Focus Camera on Selection but without animation and without changing the "
-        "selection: the 3D view keeps its direction and moves back until the whole "
-        "target fits; the 2D views center on the target and keep their zoom unless the "
-        "target does not fit (then they zoom out just enough; linked 2D cameras share "
-        "one zoom). Targets: ids (objects or faces), box, point (a 128-unit box around "
-        "it), or by default the current selection. Not undoable. Returns the new and "
-        "previous camera of each view. Example: {\"ids\": [\"entity:12\"]} or "
-        "{\"box\": {\"min\": [0, 0, 0], \"max\": [512, 512, 128]}, \"views\": "
-        "[\"3d\"]}")
+        "selection; not undoable. The 3D view keeps its direction and moves back "
+        "until the whole target fits; the 2D views center on the target and keep "
+        "their zoom unless it does not fit (then they zoom out just enough; linked "
+        "2D cameras share one zoom). Targets (one of): ids (object or face ids), "
+        "box, point (a 128-unit box around it); default: the current selection. "
+        "Returns the focused box and the new and previous camera of each view. "
+        "Examples: {\"ids\": [\"entity:12\"]}; {\"box\": {\"min\": [0, 0, 0], "
+        "\"max\": [512, 512, 128]}, \"views\": [\"3d\"]}")
       .input(object({
         field("ids", array(objectId()))
-          .describe("Objects or faces to focus on. Default: the current selection"),
+          .describe(
+            "Object ids or face ids ('brush:12/face:3') to focus on. Default: the "
+            "current selection"),
         field("box", box()).describe("A box to focus on"),
-        field("point", vec3()).describe("A point to focus on"),
+        field("point", vec3()).describe("A point to focus on (a 128-unit box around it)"),
         field("views", array(viewIdSchema()).nonEmpty())
-          .describe("The views to move (default: all)"),
+          .describe("The views to move: 3d, xy, xz, yz (default: all)"),
         field("margin", number().min(1).max(10))
           .describe("Scale of the fitted extent (1 = tight, default 1.1)"),
       }))
@@ -1627,11 +1642,12 @@ void registerViewTools(ToolRegistry& registry)
         field(
           "views",
           array(object({
-            field("id", string()).required(),
-            field("camera", cameraSchema()).required(),
-            field("previous", cameraSchema()).required(),
+            field("id", string()).required().describe("3d, xy, xz or yz"),
+            field("camera", cameraSchema()).required().describe("The new camera"),
+            field("previous", cameraSchema()).required().describe("The camera before"),
           })))
-          .required(),
+          .required()
+          .describe("The views moved"),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)
@@ -1641,26 +1657,30 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"camera_step_pointfile"}
       .title("Step Through Point File")
       .description(
-        "Moves the user's cameras along the loaded point file (leak path), like View > "
-        "Move Camera to Next / Previous Point but without animation: the 3D camera is "
-        "placed 16 units above the point looking along the path, the 2D views center on "
-        "the point. direction: next (default), previous, first, last or current. At the "
-        "end of the path the camera stays (moved: false, warning END_OF_TRACE). Needs "
-        "a point file loaded with pointfile_load. Not undoable. Example: {} or "
-        "{\"direction\": \"first\"}")
+        "Moves the user's cameras along the loaded point file (leak path), like "
+        "View > Move Camera to Next / Previous Point but without animation; not "
+        "undoable. The 3D camera is placed 16 units above the point looking along "
+        "the path, the 2D views center on the point. At the end of the path the "
+        "camera stays (moved: false, warning END_OF_TRACE). Needs a point file "
+        "loaded with pointfile_load. Returns the point index and count, the point, "
+        "the path direction and the 3D camera. Examples: {}; {\"direction\": "
+        "\"first\"}")
       .input(object({
         field(
           "direction",
-          enumOf({"next", "previous", "first", "last", "current"}).defaultsTo("next")),
+          enumOf({"next", "previous", "first", "last", "current"}).defaultsTo("next"))
+          .describe("Which point to move to; current re-centers on the current point"),
       }))
       .output(object({
         field("index", integer()).required().describe("The current point, from 0"),
         field("count", integer()).required().describe("The number of points"),
         field("moved", boolean()).required().describe("Whether the index changed"),
-        field("point", vec3()).required(),
+        field("point", vec3()).required().describe("The current point"),
         field("direction", vec3()).required().describe("Along the path at the point"),
-        field("hasNext", boolean()).required(),
-        field("hasPrevious", boolean()).required(),
+        field("hasNext", boolean()).required().describe("Whether a next point exists"),
+        field("hasPrevious", boolean())
+          .required()
+          .describe("Whether a previous point exists"),
         field("camera", any()).required().describe("The 3D camera"),
       }))
       .mutation(Mutation::External)
@@ -1671,13 +1691,14 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"view_options_get"}
       .title("Get View Options")
       .description(
-        "Returns the view options of the editor's View Options popup: face render mode "
-        "(textured, flat, skip), shading, fog, edges, entity display (classnames, "
-        "group / brush entity / point entity bounds, point entities, models), brushes, "
-        "patches, soft map bounds and the entity link mode (global preferences), and "
-        "the per-document visibility of smart tags (trigger, clip, ...) and entity "
-        "classes. These affect the user's views; snapshots have their own options. "
-        "Example: {}")
+        "Returns the options of the editor's View Options popup (read-only): face "
+        "render mode (textured, flat, skip), shading, fog, edges, entity display "
+        "(classnames, group / brush entity / point entity bounds, point entities, "
+        "models), brushes, patches, soft map bounds and the entity link mode "
+        "(global preferences), and the per-document visibility of smart tags "
+        "(trigger, clip, ...) and entity classes. These affect only the user's "
+        "views; view_snapshot has its own options. Change them with "
+        "view_options_set. Example: {}")
       .input(object({}))
       .output(viewOptionsSchema())
       .mutation(Mutation::None)
@@ -1697,7 +1718,8 @@ void registerViewTools(ToolRegistry& registry)
   }
   setFields.push_back(
     field("showTags", array(string()))
-      .describe("Smart tags to show (case-insensitive), e.g. [\"trigger\"]"));
+      .describe(
+        "Smart tags to show (case-insensitive; see tags_list), e.g. [\"trigger\"]"));
   setFields.push_back(
     field("hideTags", array(string()))
       .describe("Smart tags to hide, e.g. [\"clip\", \"skip\", \"hint\"]"));
@@ -1715,21 +1737,25 @@ void registerViewTools(ToolRegistry& registry)
   auto setOutput = viewOptionsSchema();
   setOutput.fields.push_back(
     field("changed", array(string())).required().describe("The options that changed"));
-  setOutput.fields.push_back(field("previous", viewOptionsSchema()).required());
+  setOutput.fields.push_back(field("previous", viewOptionsSchema())
+                               .required()
+                               .describe("The options before the call"));
 
   registry.add(
     ToolDef{"view_options_set"}
       .title("Set View Options")
       .description(
-        "Changes the view options of the editor's View Options popup, which changes "
-        "what the user sees: faceMode, shading, fog, edges, classnames, groupBounds, "
-        "brushEntityBounds, pointEntityBounds, pointEntities, pointEntityModels, "
-        "brushes, patches, softMapBounds, entityLinkMode (global preferences, for all "
-        "windows), and per document showTags / hideTags (smart tags) and "
-        "showClassnames / hideClassnames (entity classes by classname, glob or group). "
-        "Hidden objects stay in the map and are compiled. Not undoable. Returns the new "
-        "and previous options. Example: {\"hideTags\": [\"trigger\", \"clip\"], "
-        "\"faceMode\": \"flat\"} or {\"hideClassnames\": [\"light*\"]}")
+        "Changes the options of the editor's View Options popup, which changes "
+        "what the user sees; not undoable. faceMode, shading, fog, edges, "
+        "classnames, groupBounds, brushEntityBounds, pointEntityBounds, "
+        "pointEntities, pointEntityModels, brushes, patches, softMapBounds and "
+        "entityLinkMode are global preferences for all windows; showTags / "
+        "hideTags (smart tags) and showClassnames / hideClassnames (classnames, "
+        "globs or group names) are per document. Hidden objects stay in the map "
+        "and are compiled. Snapshots are not affected (view_snapshot has its own "
+        "options). Returns the new options, 'changed' and 'previous'. Examples: "
+        "{\"hideTags\": [\"trigger\", \"clip\"], \"faceMode\": \"flat\"}; "
+        "{\"hideClassnames\": [\"light*\"]}")
       .input(object(std::move(setFields)))
       .output(std::move(setOutput))
       .mutation(Mutation::External)
@@ -1741,26 +1767,31 @@ void registerViewTools(ToolRegistry& registry)
     ToolDef{"view_layout_set"}
       .title("Set View Layout")
       .description(
-        "Changes the layout of the user's editor views: panes (1 to 4; the global "
-        "'Views/Map view layout' preference, applied to all windows; switching "
-        "recreates the views, which resets their cameras and restores a maximized view) "
-        "and the maximized view (3d, xy, xz, yz, or none to restore all views; needs 2 "
-        "or more panes). Maximizing makes the view current; a view that shares a "
-        "cycling pane is cycled into it first. Not undoable. Returns the new and "
-        "previous layout. Example: {\"panes\": 4} or {\"maximized\": \"3d\"}")
+        "Changes the layout of the user's editor views; not undoable. panes (1 to "
+        "4) is the global 'Views/Map view layout' preference for all windows; "
+        "switching recreates the views, which resets their cameras and restores a "
+        "maximized view. maximized (3d, xy, xz, yz, or none to restore all views) "
+        "needs 2 or more panes; maximizing makes the view current, and a view that "
+        "shares a cycling pane is cycled into it first. Returns the new layout, "
+        "viewsRecreated and 'previous'. Examples: {\"panes\": 4}; {\"maximized\": "
+        "\"3d\"}")
       .input(object({
         field("panes", integer().min(1).max(4)).describe("The number of view panes"),
         field("maximized", enumOf({"3d", "xy", "xz", "yz", "none"}))
           .describe("The view to maximize, or none"),
       }))
       .output(object({
-        field("panes", integer()).required(),
-        field("maximizedView", any()).required(),
-        field("currentView", any()).required(),
+        field("panes", integer()).required().describe("1 to 4, a global preference"),
+        field("maximizedView", any()).required().describe("3d, xy, xz, yz or null"),
+        field("currentView", any())
+          .required()
+          .describe("The view that has (or last had) the keyboard focus, or null"),
         field("viewsRecreated", boolean())
           .required()
           .describe("The pane count changed: the views were recreated"),
-        field("previous", layoutSchema()).required(),
+        field("previous", layoutSchema())
+          .required()
+          .describe("The layout before the call"),
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)

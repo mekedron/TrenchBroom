@@ -727,15 +727,19 @@ void registerKnowledgeTools(ToolRegistry& registry)
       .title("Search Manual")
       .description(
         "Searches the TrenchBroom user manual (how the editor's tools, views, "
-        "preferences and workflows work). Returns the matching sections, best first, "
+        "preferences and workflows work; read-only). Returns the matching sections, best "
+        "first, "
         "with their parent titles and text snippets; read a section with "
         "manual_section. Menu items and shortcuts in the text are rendered as "
         "'**View > Maximize Current View** (Ctrl+Space)', with the current shortcuts. "
-        "Example: {\"query\": \"vertex tool\"}")
+        "Examples: {\"query\": \"vertex tool\"}; {\"query\": \"smart tags\", "
+        "\"limit\": 3}")
       .input(object({
         field("query", string().nonEmpty())
           .required()
-          .describe("Words to search for (case-insensitive)"),
+          .describe(
+            "Words to search for (case-insensitive); sections with more of them rank "
+            "higher"),
         field("limit", integer().min(1).max(100).defaultsTo(10))
           .describe("Maximum number of sections to return"),
       }))
@@ -747,9 +751,9 @@ void registerKnowledgeTools(ToolRegistry& registry)
             field("title", string()),
             field("level", integer()),
             field("path", array(string())).describe("Titles of the enclosing sections"),
-            field("score", number()),
-            field("snippets", array(string())),
-            field("uri", string()),
+            field("score", number()).describe("Relevance, higher is better"),
+            field("snippets", array(string())).describe("Text around the matches"),
+            field("uri", string()).describe("The section's manual resource"),
           })))
           .required(),
         field("total", integer()).required(),
@@ -770,8 +774,10 @@ void registerKnowledgeTools(ToolRegistry& registry)
         "manual_search or the trenchbroom://manual table of contents) or exact title. "
         "Long texts are paged: pass 'offset' = nextOffset for the rest. With "
         "includeSubsections the nested sections follow with their headings. Also "
-        "returns the subsections and the parent, previous and next sections. Example: "
-        "{\"section\": \"camera_navigation\", \"includeSubsections\": true}")
+        "returns the subsections and the parent, previous and next sections. "
+        "Read-only. Examples: {\"section\": \"camera_navigation\", "
+        "\"includeSubsections\": true}; {\"section\": \"Vertex Editing\", \"offset\": "
+        "12000}")
       .input(object({
         field("section", string().nonEmpty())
           .required()
@@ -782,7 +788,7 @@ void registerKnowledgeTools(ToolRegistry& registry)
         field("maxChars", integer().min(500).max(100000).defaultsTo(12000))
           .describe("Maximum length of the returned text in bytes"),
         field("includeSubsections", boolean().defaultsTo(false))
-          .describe("Append the nested sections"),
+          .describe("Append the nested sections with their headings"),
       }))
       .output(object({
         field("id", string()).required(),
@@ -791,11 +797,12 @@ void registerKnowledgeTools(ToolRegistry& registry)
         field("path", array(string())),
         field("uri", string()),
         field("text", string()).required(),
-        field("offset", integer()),
-        field("length", integer()),
-        field("totalLength", integer()),
+        field("offset", integer()).describe("Start of text in the section, in bytes"),
+        field("length", integer()).describe("Length of text in bytes"),
+        field("totalLength", integer()).describe("Length of the whole section in bytes"),
         field("nextOffset", any()).describe("Offset of the rest, or null"),
-        field("subsections", array(any())),
+        field("subsections", array(any()))
+          .describe("{id, title, level} per direct subsection"),
         field("parent", sectionRefSchema()),
         field("previous", sectionRefSchema()),
         field("next", sectionRefSchema()),

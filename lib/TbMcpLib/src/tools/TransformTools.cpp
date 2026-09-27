@@ -95,7 +95,10 @@ schema::Field alignmentLockField()
 
 Schema axisSchema()
 {
-  return oneOf({enumOf({"x", "y", "z"}), vec3()})
+  return oneOf({
+                 enumOf({"x", "y", "z"}).describe("A principal axis"),
+                 vec3().describe("A direction vector [x, y, z], not zero"),
+               })
     .describe("'x', 'y', 'z' or a direction vector [x, y, z]");
 }
 
@@ -607,7 +610,9 @@ ToolResult objectsDuplicate(CallContext& context, const Args& args)
       if (copies.empty())
       {
         return context.operationFailed(
-          "The objects could not be duplicated.", "Check the editor messages.");
+          "The objects could not be duplicated.",
+          "details.editorMessages holds the editor's reason; check that the objects are "
+          "editable (object_get).");
       }
 
       if (offset && !vm::is_zero(*offset, Epsilon))
@@ -934,7 +939,8 @@ ToolResult objectsArray(CallContext& context, const Args& args)
         {
           return context.operationFailed(
             "Instance " + std::to_string(i) + " could not be created.",
-            "Check the editor messages.");
+            "details.editorMessages holds the editor's reason; try a smaller count or "
+            "check that the copies stay inside the world bounds.");
         }
         const auto transform = instanceTransform(p, i, originalCenter);
         if (!transform.apply(map))
@@ -1123,16 +1129,17 @@ void registerTransformTools(ToolRegistry& registry)
     ToolDef{"objects_move"}
       .title("Move Objects")
       .description(
-        "Moves objects by a vector, like dragging them or using the move shortcuts. "
-        "Respects texture lock unless alignmentLock is false. Fails with "
+        "Moves objects by a vector in map units, like dragging them or using the move "
+        "shortcuts (one undo step). Respects texture lock unless alignmentLock is false. "
+        "Fails with "
         "OUT_OF_WORLD_BOUNDS if an object would reach the world bounds. Moved point "
         "entities whose model can be loaded are checked like entity_placement_check "
         "(warnings MODEL_BELOW_FLOOR, MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, "
-        "MODEL_NO_FLOOR). "
+        "MODEL_NO_FLOOR). Use objects_duplicate to move copies instead. "
         "Example: {\"ids\": [\"brush:12\"], \"vector\": [64, 0, 0]}")
       .input(object({
         transformIdsField(),
-        field("vector", vec3()).required().describe("Offset in map units"),
+        field("vector", vec3()).required().describe("Offset [x, y, z] in map units"),
         alignmentLockField(),
       }))
       .output(objectsResultSchema())
@@ -1144,7 +1151,8 @@ void registerTransformTools(ToolRegistry& registry)
       .title("Rotate Objects")
       .description(
         "Rotates objects counter-clockwise (right-handed) by an angle in degrees around "
-        "an axis through a center (default: the center of the objects' bounds). Like the "
+        "an axis through a center (default: the center of the objects' bounds), in one "
+        "undo step. Like the "
         "editor's rotate tool, it updates entity angle properties (angle, angles, "
         "mangle) unless updateEntityAngles is false, and respects texture lock. "
         "Rotations "
@@ -1153,9 +1161,16 @@ void registerTransformTools(ToolRegistry& registry)
         "Example: {\"ids\": [\"entity:7\"], \"angle\": 90, \"axis\": \"z\"}")
       .input(object({
         transformIdsField(),
-        field("angle", angle()).required(),
+        field("angle", angle())
+          .required()
+          .describe(
+            "Angle in degrees; positive turns counter-clockwise seen from the tip of "
+            "the axis"),
         field("axis", axisSchema().defaultsTo("z")),
-        field("center", vec3()).describe("Default: the center of the objects' bounds"),
+        field("center", vec3())
+          .describe(
+            "A point on the rotation axis (map units). Default: the center of the "
+            "objects' bounds"),
         field("updateEntityAngles", boolean().defaultsTo(true))
           .describe("Update the angle properties of rotated entities"),
         alignmentLockField(),
@@ -1170,15 +1185,22 @@ void registerTransformTools(ToolRegistry& registry)
       .description(
         "Scales objects either by 'factors' [x, y, z] (all > 0) around an 'anchor' "
         "('center' of the bounds (default), 'min' or 'max' corner, or a point), or so "
-        "that their bounds fit the target 'box'. Respects texture lock. To mirror, use "
+        "that their bounds fit the target 'box' (map units); pass exactly one of "
+        "'factors' and 'box'. One undo step. Respects texture lock. To mirror, use "
         "objects_flip. "
-        "Example: {\"factors\": [2, 2, 1], \"anchor\": \"min\"} or {\"box\": {\"min\": "
+        "Examples: {\"factors\": [2, 2, 1], \"anchor\": \"min\"}; {\"box\": {\"min\": "
         "[0, 0, 0], \"max\": [256, 128, 128]}}")
       .input(object({
         transformIdsField(),
         field("factors", vec3()).describe("Scale factors per axis, all > 0"),
-        field("box", schema::box()).describe("Target bounds of the objects"),
-        field("anchor", oneOf({enumOf({"center", "min", "max"}), vec3()}))
+        field("box", schema::box()).describe("Target bounds of the objects (map units)"),
+        field(
+          "anchor",
+          oneOf({
+            enumOf({"center", "min", "max"})
+              .describe("The center or the min / max corner of the objects' bounds"),
+            vec3().describe("A point [x, y, z] in map units"),
+          }))
           .describe(
             "With factors: the fixed point, 'center' (default), 'min', 'max' or [x, y, "
             "z]"),
@@ -1194,15 +1216,18 @@ void registerTransformTools(ToolRegistry& registry)
       .description(
         "Shears objects like the editor's shear tool: the given side of the objects' "
         "bounds box moves by 'offset' within its plane while the opposite side stays "
-        "fixed. The offset must be perpendicular to the side's normal. "
-        "Example: {\"side\": \"+z\", \"offset\": [32, 0, 0]} leans the top 32 units "
-        "towards +x")
+        "fixed (one undo step). The offset must be perpendicular to the side's normal; "
+        "e.g. side '+z' with offset [32, 0, 0] leans the top 32 units towards +x. "
+        "Example: {\"ids\": [\"brush:12\"], \"side\": \"+z\", \"offset\": [32, 0, 0]}")
       .input(object({
         transformIdsField(),
         field("side", enumOf({"+x", "-x", "+y", "-y", "+z", "-z"}))
           .required()
           .describe("The side of the bounds box that moves"),
-        field("offset", vec3()).required().describe("How far the side moves"),
+        field("offset", vec3())
+          .required()
+          .describe("How far the side moves (map units); the component along the side's "
+                    "axis must be 0"),
         alignmentLockField(),
       }))
       .output(objectsResultSchema())
@@ -1214,14 +1239,17 @@ void registerTransformTools(ToolRegistry& registry)
       .title("Flip Objects")
       .description(
         "Mirrors objects along an axis through a center (default: the center of their "
-        "bounds, so they stay in place). Entity angles are mirrored as well. "
+        "bounds, so they stay in place), in one undo step. Entity angles are mirrored as "
+        "well. "
         "Example: {\"ids\": [\"brush:12\"], \"axis\": \"x\"}")
       .input(object({
         transformIdsField(),
         field("axis", enumOf({"x", "y", "z"}))
           .required()
-          .describe("Axis to mirror along"),
-        field("center", vec3()).describe("Default: the center of the objects' bounds"),
+          .describe("Axis to mirror along ('x' swaps -x and +x)"),
+        field("center", vec3())
+          .describe("A point on the mirror plane (map units). Default: the center of the "
+                    "objects' bounds"),
       }))
       .output(objectsResultSchema())
       .mutation(Mutation::Map)
@@ -1232,13 +1260,15 @@ void registerTransformTools(ToolRegistry& registry)
       .title("Duplicate Objects")
       .description(
         "Duplicates objects like Edit > Duplicate, optionally moving the copies by an "
-        "offset, and selects the copies. Returns which copy belongs to which original. "
+        "offset, and selects the copies (one undo step). Returns which copy belongs to "
+        "which original. "
         "Duplicate with an offset, then command_repeat, to make more copies with the "
         "same spacing. "
         "Example: {\"ids\": [\"brush:12\"], \"offset\": [0, 128, 0]}")
       .input(object({
         transformIdsField(),
-        field("offset", vec3()).describe("Move the copies by this vector"),
+        field("offset", vec3())
+          .describe("Move the copies by this vector (map units). Default: no offset"),
         alignmentLockField(),
       }))
       .output(object({
@@ -1255,12 +1285,15 @@ void registerTransformTools(ToolRegistry& registry)
       .title("Delete Objects")
       .description(
         "Deletes objects like Edit > Delete. Brush entities and groups that become empty "
-        "are removed as well (see changes.removed). Undoable. "
+        "are removed as well (see changes.removed). One undo step. "
         "Example: {\"ids\": [\"brush:12\", \"entity:40\"]}")
-      .input(object({transformIdsField()}))
+      .input(object({idsField(
+        TransformableKinds,
+        "Objects to delete (groups with their contents, entities, brushes, patches). "
+        "Default: the current selection")}))
       .output(object({
         field("removed", array(string())).required().describe("The deleted objects"),
-        field("count", integer()).required(),
+        field("count", integer()).required().describe("Number of deleted objects"),
       }))
       .mutation(Mutation::Map)
       .destructive()
@@ -1283,38 +1316,51 @@ void registerTransformTools(ToolRegistry& registry)
         "keep facing the center, including entity angles; false only moves them. "
         "Leaves all instances selected. Non-integer vertices are reported as "
         "NON_INTEGER_VERTICES. "
-        "Example: {\"pattern\": \"circle\", \"count\": 12, \"center\": [0, 0, 0], "
-        "\"radius\": 384} or {\"pattern\": \"line\", \"count\": 5, \"offset\": [64, 0, "
-        "0]}")
+        "Examples: {\"pattern\": \"circle\", \"count\": 12, \"center\": [0, 0, 0], "
+        "\"radius\": 384}; {\"pattern\": \"line\", \"count\": 5, \"offset\": [64, 0, "
+        "0]}; {\"pattern\": \"grid\", \"counts\": [4, 2, 1], \"spacing\": [128, 128, 0]}")
       .input(object({
         transformIdsField(),
-        field("pattern", enumOf({"line", "grid", "circle"})).required(),
+        field("pattern", enumOf({"line", "grid", "circle"}))
+          .required()
+          .describe("Layout of the instances; see the description for the parameters "
+                    "of each"),
         field("count", integer().min(2).max(double(MaxArrayInstances)))
           .describe("Total number of instances including the originals (line, circle)"),
-        field("offset", vec3()).describe("line: offset between neighboring instances"),
+        field("offset", vec3())
+          .describe("line: offset between neighboring instances (map units)"),
         field("counts", array(integer().min(1)).minSize(3).maxSize(3))
-          .describe("grid: instances along x, y and z"),
-        field("spacing", vec3()).describe("grid: distance between instances per axis"),
-        field("center", vec3()).describe("circle: a point on the rotation axis"),
+          .describe(
+            "grid: instances along x, y and z; their product is the total, so omit "
+            "'count'"),
+        field("spacing", vec3())
+          .describe("grid: distance between instances per axis (map units)"),
+        field("center", vec3())
+          .describe("circle: a point on the rotation axis (map units)"),
         field("axis", axisSchema()).describe("circle: rotation axis, default 'z'"),
-        field("angleStep", angle()).describe("circle: default 360 / count"),
+        field("angleStep", angle())
+          .describe("circle: rotation between neighboring instances in degrees. Default: "
+                    "360 / count"),
         field("radius", number().min(0))
-          .describe("circle: move the originals to this distance from the axis first"),
+          .describe("circle: move the originals to this distance (map units) from the "
+                    "axis first"),
         field("startAngle", angle().defaultsTo(0))
           .describe(
-            "circle: angle of the originals around the axis when they lie on it (0 = "
-            "+x for the z axis)"),
+            "circle: angle in degrees of the originals around the axis when they lie on "
+            "it (0 = +x for the z axis)"),
         field("rotate", boolean().defaultsTo(true))
           .describe("circle: rotate the copies to keep facing the center"),
         field("rise", number().defaultsTo(0))
-          .describe("circle: offset along the axis per instance"),
+          .describe("circle: offset along the axis per instance (map units)"),
         field("updateEntityAngles", boolean().defaultsTo(true))
           .describe("Update the angle properties of rotated entities"),
         alignmentLockField(),
       }))
       .output(object({
         field("pattern", string()).required(),
-        field("count", integer()).required(),
+        field("count", integer())
+          .required()
+          .describe("Instances including the originals"),
         field("instances", array(array(string())))
           .required()
           .describe("Object ids per instance; the first instance is the originals"),
@@ -1322,7 +1368,9 @@ void registerTransformTools(ToolRegistry& registry)
         field("objects", array(any()))
           .required()
           .describe("Summaries of the copies (at most 100)"),
-        field("truncated", boolean()).required(),
+        field("truncated", boolean())
+          .required()
+          .describe("Whether 'objects' was cut at 100"),
       }))
       .mutation(Mutation::Map)
       .handler(objectsArray));
@@ -1345,7 +1393,7 @@ void registerTransformTools(ToolRegistry& registry)
         "Example: {\"times\": 3}")
       .input(object({
         field("times", integer().min(1).max(1000).defaultsTo(1))
-          .describe("How often to repeat"),
+          .describe("How often to repeat the recorded commands"),
       }))
       .output(object({
         field("times", integer()).required().describe("0 if there was nothing to repeat"),

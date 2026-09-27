@@ -20,10 +20,13 @@
 // TrenchBroomMcp: a stdio <-> Streamable HTTP bridge for the TrenchBroom MCP server.
 //
 // MCP clients that only support the stdio transport launch this executable. It reads
-// newline-delimited JSON-RPC messages from stdin, forwards them to the editor's MCP
-// endpoint (http://127.0.0.1:<port>/mcp), and writes the responses and notifications to
-// stdout, one message per line. It finds the editor through the discovery file that the
-// editor writes while its MCP server listens, and launches the editor if necessary.
+// newline-delimited JSON-RPC messages from stdin and writes the responses and
+// notifications to stdout, one message per line. It answers initialize and the list
+// requests itself (BridgeSession), so that starting a client does not start the editor.
+// The first message that needs the editor opens a session with the editor's MCP
+// endpoint (http://127.0.0.1:<port>/mcp); from then on the bridge forwards the messages.
+// It finds the editor through the discovery file that the editor writes while its MCP
+// server listens, and launches the editor if necessary.
 //
 // stdout is reserved for the protocol; all diagnostics go to stderr.
 
@@ -42,8 +45,10 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "mcp/BridgeSession.h"
 #include "mcp/Json.h"
 #include "mcp/SseParser.h"
+#include "version/Version.h"
 
 #include <algorithm>
 #include <array>
@@ -196,24 +201,62 @@ struct PendingMessage
 {
   std::string text;
   Json json;
+  /** Whether the message was queued again because the editor session had expired. */
+  bool retried = false;
 
   std::string method() const { return json.is_object() ? json.value("method", "") : ""; }
 };
+
+/** The outcome of a POST of a handshake message. */
+struct HandshakeReply
+{
+  int status = 0;
+  QNetworkReply::NetworkError error = QNetworkReply::NoError;
+  QString errorString;
+  std::string sessionId;
+  /** The JSON-RPC response to the posted request, or null. */
+  Json response;
+};
+
+enum class EditorSession
+{
+  /** The bridge has no session with the editor. */
+  None,
+  /** The bridge is sending the handshake (BridgeSession::handshake). */
+  Opening,
+  Open,
+};
+
+const auto NotRunningMessage = QString{
+  "TrenchBroom is not running. Start TrenchBroom with its MCP server enabled "
+  "(Preferences > AI Agents > Enable MCP server, or trenchbroom --mcp-server) and try "
+  "again."};
+
+bool isConnectionRefused(const QNetworkReply::NetworkError error)
+{
+  return error == QNetworkReply::ConnectionRefusedError
+         || error == QNetworkReply::HostNotFoundError;
+}
 
 class Bridge : public QObject
 {
 private:
   Options m_options;
+  BridgeSession m_session;
   QNetworkAccessManager m_network;
 
   /** The port of the editor, if known. */
   std::optional<quint16> m_port;
+  EditorSession m_editorSession = EditorSession::None;
   std::string m_sessionId;
   std::string m_protocolVersion;
 
-  /** Messages that wait for the editor or for the initialize response. */
+  /** Messages that wait for the editor session. */
   std::deque<PendingMessage> m_queue;
-  bool m_initializing = false;
+  /** The handshake messages that remain to be sent, and the list results received. */
+  std::deque<Json> m_handshake;
+  Json m_editorTools;
+  Json m_editorResources;
 
   bool m_launching = false;
   std::optional<QDateTime> m_staleDiscoveryTime;
@@ -229,6 +272,7 @@ private:
 public:
   explicit Bridge(Options options)
     : m_options{std::move(options)}
+    , m_session{VERSION_STR}
   {
     m_pollTimer.setInterval(DiscoveryPollInterval);
     connect(&m_pollTimer, &QTimer::timeout, this, [this]() { pollDiscoveryFile(); });
@@ -259,6 +303,28 @@ public:
       return;
     }
 
+    const auto route = m_session.route(*json, m_editorSession == EditorSession::Open);
+    if (route == BridgeRoute::Bridge)
+    {
+      if (json->is_object() && json->value("method", "") == "initialize")
+      {
+        // The client starts a new session; the editor session of the old one is useless
+        closeEditorSession();
+      }
+      if (const auto response = m_session.answer(*json))
+      {
+        writeLine(dumpJson(*response));
+      }
+      return;
+    }
+
+    if (route == BridgeRoute::EditorIfConnected && m_queue.empty())
+    {
+      // Only the editor could use the message, and no session with it exists
+      return;
+    }
+
+    m_session.forwarded(*json);
     m_queue.push_back({std::move(line), std::move(*json)});
     pump();
   }
@@ -310,12 +376,21 @@ private:
     return request;
   }
 
+  QNetworkRequest makePostRequest() const
+  {
+    auto request = makeRequest();
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Accept", "application/json, text/event-stream");
+    return request;
+  }
+
   /**
-   * Forwards queued messages as far as possible.
+   * Forwards queued messages as far as possible, connecting to the editor first.
    */
   void pump()
   {
-    while (!m_queue.empty() && !m_initializing && !m_shuttingDown)
+    while (!m_queue.empty() && !m_shuttingDown
+           && m_editorSession != EditorSession::Opening)
     {
       if (!m_port)
       {
@@ -327,29 +402,267 @@ private:
         }
       }
 
+      if (m_editorSession == EditorSession::None)
+      {
+        openEditorSession();
+        return;
+      }
+
       auto message = std::move(m_queue.front());
       m_queue.pop_front();
       forward(std::move(message));
     }
   }
 
-  void forward(PendingMessage message)
+  /**
+   * Opens a session with the editor for the client: sends the client's initialize
+   * parameters and replays its state, then forwards the queued messages.
+   */
+  void openEditorSession()
   {
-    const auto method = message.method();
-    const auto isInitialize = method == "initialize";
-    if (isInitialize)
+    m_editorSession = EditorSession::Opening;
+    m_sessionId.clear();
+    m_protocolVersion.clear();
+    m_editorTools = nullptr;
+    m_editorResources = nullptr;
+
+    const auto messages = m_session.handshake();
+    m_handshake = std::deque<Json>{messages.begin(), messages.end()};
+    sendNextHandshakeMessage();
+  }
+
+  void sendNextHandshakeMessage()
+  {
+    if (m_shuttingDown)
     {
-      // A new session starts; the headers of the old one must not be sent
-      m_sessionId.clear();
-      m_protocolVersion.clear();
-      m_initializing = true;
+      return;
+    }
+    if (m_handshake.empty())
+    {
+      editorSessionOpened();
+      return;
     }
 
-    auto request = makeRequest();
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Accept", "application/json, text/event-stream");
+    auto message = std::move(m_handshake.front());
+    m_handshake.pop_front();
 
-    auto* reply = m_network.post(request, QByteArray::fromStdString(message.text));
+    const auto id = message.value("id", Json{});
+    auto* reply =
+      m_network.post(makePostRequest(), QByteArray::fromStdString(dumpJson(message)));
+    connect(
+      reply,
+      &QNetworkReply::finished,
+      this,
+      [this, reply, id, method = message.value("method", "")]() {
+        reply->deleteLater();
+        handshakeReplied(method, readHandshakeReply(*reply, id));
+      });
+  }
+
+  static HandshakeReply readHandshakeReply(QNetworkReply& reply, const Json& id)
+  {
+    auto result = HandshakeReply{
+      reply.attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(),
+      reply.error(),
+      reply.errorString(),
+      toStdString(reply.rawHeader(SessionIdHeader)),
+      nullptr,
+    };
+
+    auto messages = std::vector<Json>{};
+    const auto body = reply.readAll();
+    if (isEventStream(&reply))
+    {
+      auto parser = SseParser{};
+      for (const auto& event :
+           parser.feed(std::string_view{body.constData(), size_t(body.size())}))
+      {
+        if (auto json = event.event == "message" ? parseJson(event.data) : std::nullopt)
+        {
+          messages.push_back(std::move(*json));
+        }
+      }
+    }
+    else if (auto json = parseJson(toStdString(body)))
+    {
+      messages.push_back(std::move(*json));
+    }
+
+    for (auto& message : messages)
+    {
+      if (
+        message.is_object()
+        && (message.value("id", Json{}) == id || messages.size() == 1))
+      {
+        result.response = std::move(message);
+      }
+    }
+    return result;
+  }
+
+  void handshakeReplied(const std::string& method, const HandshakeReply& reply)
+  {
+    if (m_shuttingDown)
+    {
+      return;
+    }
+
+    const auto fail = [&](const QString& text) {
+      m_handshake.clear();
+      m_editorSession = EditorSession::None;
+      m_sessionId.clear();
+      m_protocolVersion.clear();
+      failQueued(text);
+    };
+
+    if (reply.status == 0)
+    {
+      if (isConnectionRefused(reply.error))
+      {
+        // The editor is not running (anymore); launch it or wait for it
+        logMessage(
+          QString{"Cannot connect to TrenchBroom on port %1"}.arg(m_port.value_or(0)));
+        m_handshake.clear();
+        m_editorSession = EditorSession::None;
+        m_sessionId.clear();
+        m_protocolVersion.clear();
+        m_port = std::nullopt;
+        editorUnavailable();
+      }
+      else
+      {
+        fail("Connection to TrenchBroom failed: " + reply.errorString);
+      }
+      return;
+    }
+
+    const auto succeeded = reply.status >= 200 && reply.status < 300;
+    const auto* result = findMember(reply.response, "result");
+    const auto* error = findMember(reply.response, "error");
+    if (method == "initialize")
+    {
+      const auto* version = result ? findMember(*result, "protocolVersion") : nullptr;
+      if (!succeeded || reply.sessionId.empty() || !version || !version->is_string())
+      {
+        fail(QString{"TrenchBroom did not accept the MCP session (HTTP %1)%2"}
+               .arg(reply.status)
+               .arg(error ? QString::fromStdString(": " + dumpJson(*error)) : QString{}));
+        return;
+      }
+      m_sessionId = reply.sessionId;
+      m_protocolVersion = version->get<std::string>();
+    }
+    else if (!succeeded)
+    {
+      fail(QString{"TrenchBroom returned HTTP %1 for %2 while connecting"}
+             .arg(reply.status)
+             .arg(QString::fromStdString(method)));
+      return;
+    }
+    else if (method == "tools/list")
+    {
+      m_editorTools = result ? *result : Json{};
+    }
+    else if (method == "resources/list")
+    {
+      m_editorResources = result ? *result : Json{};
+    }
+    else if (error)
+    {
+      // e.g. a subscription of a document that is not open anymore
+      logMessage(QString{"Could not replay %1: %2"}
+                   .arg(QString::fromStdString(method))
+                   .arg(QString::fromStdString(dumpJson(*error))));
+    }
+
+    sendNextHandshakeMessage();
+  }
+
+  void editorSessionOpened()
+  {
+    logMessage(QString{"Connected to TrenchBroom on port %1"}.arg(m_port.value_or(0)));
+    m_editorSession = EditorSession::Open;
+    for (const auto& notification :
+         m_session.editorConnected(m_editorTools, m_editorResources))
+    {
+      writeLine(dumpJson(notification));
+    }
+
+    m_streamAttempts = 0;
+    openStream();
+    pump();
+  }
+
+  /**
+   * Forgets the editor session after the editor has quit or dropped it. The next
+   * message that needs the editor opens a new one.
+   */
+  void editorSessionLost()
+  {
+    if (m_editorSession != EditorSession::Open)
+    {
+      return;
+    }
+
+    m_editorSession = EditorSession::None;
+    m_sessionId.clear();
+    m_protocolVersion.clear();
+    if (m_streamReply)
+    {
+      m_streamReply->abort();
+    }
+
+    // The bridge answers the list requests again
+    for (const auto& notification : m_session.editorDisconnected())
+    {
+      writeLine(dumpJson(notification));
+    }
+  }
+
+  /**
+   * Closes the editor session because the client starts a new session.
+   */
+  void closeEditorSession()
+  {
+    if (m_editorSession != EditorSession::Open)
+    {
+      return;
+    }
+
+    auto* reply = m_network.deleteResource(makeRequest());
+    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
+
+    m_editorSession = EditorSession::None;
+    m_sessionId.clear();
+    m_protocolVersion.clear();
+    if (m_streamReply)
+    {
+      m_streamReply->abort();
+    }
+    m_session.editorDisconnected();
+  }
+
+  /**
+   * Queues a message again that the editor could not handle because it has quit or
+   * dropped the session. The bridge answers it itself if it can.
+   */
+  void requeue(PendingMessage message)
+  {
+    if (m_session.route(message.json, false) == BridgeRoute::Bridge)
+    {
+      if (const auto response = m_session.answer(message.json))
+      {
+        writeLine(dumpJson(*response));
+      }
+      return;
+    }
+    m_queue.push_front(std::move(message));
+  }
+
+  void forward(PendingMessage message)
+  {
+    auto* reply =
+      m_network.post(makePostRequest(), QByteArray::fromStdString(message.text));
     auto parser = std::make_shared<SseParser>();
 
     connect(reply, &QNetworkReply::readyRead, this, [reply, parser]() {
@@ -362,9 +675,13 @@ private:
       reply,
       &QNetworkReply::finished,
       this,
-      [this, reply, parser, message = std::move(message), isInitialize]() mutable {
+      [this,
+       reply,
+       parser,
+       message = std::move(message),
+       sessionId = m_sessionId]() mutable {
         reply->deleteLater();
-        postFinished(*reply, *parser, std::move(message), isInitialize);
+        postFinished(*reply, *parser, std::move(message), sessionId);
       });
   }
 
@@ -372,13 +689,8 @@ private:
     QNetworkReply& reply,
     SseParser& parser,
     PendingMessage message,
-    const bool isInitialize)
+    const std::string& sessionId)
   {
-    if (isInitialize)
-    {
-      m_initializing = false;
-    }
-
     if (m_shuttingDown)
     {
       return;
@@ -387,23 +699,24 @@ private:
     const auto status = reply.attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (status == 0)
     {
-      if (
-        reply.error() == QNetworkReply::ConnectionRefusedError
-        || reply.error() == QNetworkReply::HostNotFoundError)
+      if (isConnectionRefused(reply.error()))
       {
-        // The editor is not running (anymore); retry once it is
+        // The editor is not running anymore; launch it or wait for it
         logMessage(
           QString{"Cannot connect to TrenchBroom on port %1"}.arg(m_port.value_or(0)));
-        m_port = std::nullopt;
-        m_queue.push_front(std::move(message));
-        editorUnavailable();
+        if (sessionId == m_sessionId)
+        {
+          editorSessionLost();
+          m_port = std::nullopt;
+        }
+        requeue(std::move(message));
       }
       else
       {
         replyWithError(
           message, "Connection to TrenchBroom failed: " + reply.errorString());
-        pump();
       }
+      pump();
       return;
     }
 
@@ -413,19 +726,7 @@ private:
     }
     else if (status >= 200 && status < 300)
     {
-      const auto body = reply.readAll();
-      if (isInitialize)
-      {
-        m_sessionId = toStdString(reply.rawHeader(SessionIdHeader));
-        const auto json = parseJson(toStdString(body));
-        const auto* result = json ? findMember(*json, "result") : nullptr;
-        const auto* version = result ? findMember(*result, "protocolVersion") : nullptr;
-        if (version && version->is_string())
-        {
-          m_protocolVersion = version->get<std::string>();
-        }
-      }
-      if (!body.isEmpty())
+      if (const auto body = reply.readAll(); !body.isEmpty())
       {
         writeLine(toStdString(body));
       }
@@ -441,27 +742,31 @@ private:
                    .arg(QString::fromStdString(message.method()))
                    .arg(QString::fromStdString(text)));
 
-      if (status == 404 && !m_sessionId.empty())
+      if (status == 404 && !sessionId.empty())
       {
-        m_sessionId.clear();
-        m_protocolVersion.clear();
-        replyWithError(
-          message,
-          "The MCP session has expired (was TrenchBroom restarted?). Reconnect to start "
-          "a new session.",
-          error);
+        // The editor was restarted or has dropped the session: open a new one
+        if (sessionId == m_sessionId)
+        {
+          editorSessionLost();
+        }
+        if (!message.retried)
+        {
+          message.retried = true;
+          requeue(std::move(message));
+        }
+        else
+        {
+          replyWithError(
+            message,
+            "The MCP session has expired again (was TrenchBroom restarted?).",
+            error);
+        }
       }
       else
       {
         replyWithError(
           message, QString{"TrenchBroom returned HTTP %1"}.arg(status), error);
       }
-    }
-
-    if (message.method() == "notifications/initialized" && status >= 200 && status < 300)
-    {
-      m_streamAttempts = 0;
-      openStream();
     }
 
     pump();
@@ -537,7 +842,7 @@ private:
 
     if (m_options.noLaunch)
     {
-      failQueued("TrenchBroom is not running");
+      failQueued(NotRunningMessage);
       return;
     }
 
@@ -594,7 +899,13 @@ private:
     }
 
     logMessage("Launching " + editor);
-    if (!QProcess::startDetached(editor, {"--mcp-server"}))
+    // The editor must not inherit the bridge's stdout: it is reserved for the protocol.
+    auto process = QProcess{};
+    process.setProgram(editor);
+    process.setArguments({"--mcp-server"});
+    process.setStandardInputFile(QProcess::nullDevice());
+    process.setStandardOutputFile(QProcess::nullDevice());
+    if (!process.startDetached())
     {
       failQueued("Could not launch " + editor);
       return;
@@ -647,6 +958,7 @@ private:
     auto* reply = m_network.get(request);
     auto parser = std::make_shared<SseParser>();
     m_streamReply = reply;
+    const auto sessionId = m_sessionId;
 
     connect(reply, &QNetworkReply::readyRead, this, [this, reply, parser]() {
       if (isEventStream(reply))
@@ -655,11 +967,12 @@ private:
         forwardEvents(*parser, reply->readAll());
       }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, sessionId]() {
       reply->deleteLater();
       m_streamReply = nullptr;
-      if (m_shuttingDown)
+      if (m_shuttingDown || sessionId != m_sessionId)
       {
+        // The session was closed or replaced
         return;
       }
 
@@ -670,6 +983,18 @@ private:
         // The session is gone or the server does not offer a stream
         logMessage(
           QString{"The notification stream was rejected with HTTP %1"}.arg(status));
+        if (status == 404)
+        {
+          editorSessionLost();
+        }
+        return;
+      }
+
+      if (status == 0 && isConnectionRefused(reply->error()))
+      {
+        // TrenchBroom has quit; the next message that needs it connects again
+        logMessage("TrenchBroom closed the connection");
+        editorSessionLost();
         return;
       }
 
@@ -730,6 +1055,9 @@ int main(int argc, char** argv)
   }
   options.noLaunch = parser.isSet(noLaunchOption);
   options.editorPath = parser.value(editorOption);
+
+  // The bridge answers the list requests with its own MCP server, which needs preferences
+  tb::mcp::BridgeSession::createNullPreferenceManager();
 
   auto bridge = tb::mcp::Bridge{std::move(options)};
   auto* bridgePtr = &bridge;

@@ -1284,15 +1284,14 @@ void addPlacementFields(std::vector<Field>& fields)
   fields.push_back(
     field("position", vec3())
       .describe("Place the objects so that the anchor of their bounds lands on "
-                "this point. Default: keep the original coordinates"));
+                "this point (map units). Default: keep the original coordinates"));
   fields.push_back(
     field("anchor", enumOf({"min", "center", "max", "bottomCenter"}).defaultsTo("min"))
-      .describe(
-        "With position: the point of the bounds that lands on it: 'min' corner "
-        "(default), 'center', 'max' corner, or 'bottomCenter' (center of the bottom "
-        "face)"));
+      .describe("With position: the point of the bounds that lands on it: 'min' corner, "
+                "'center', 'max' corner, or 'bottomCenter' (center of the bottom face)"));
   fields.push_back(
-    field("offset", vec3()).describe("Move the objects by this vector instead"));
+    field("offset", vec3())
+      .describe("Move the objects by this vector (map units) instead of 'position'"));
   fields.push_back(
     field("snapToGrid", boolean().defaultsTo(false))
       .describe(
@@ -1307,12 +1306,14 @@ std::vector<Field> pasteOutputFields()
 {
   return {
     field("ids", array(string())).describe("The new objects (selected)"),
-    field("count", integer()),
+    field("count", integer()).describe("Number of new objects"),
     field("objects", array(any())).describe("Summaries of the new objects (at most 100)"),
-    field("truncated", boolean()),
+    field("truncated", boolean()).describe("Whether 'objects' was cut at 100"),
     field("bounds", any()).describe("Bounds of the new objects"),
     field("offset", vec3()).describe("The translation applied to the objects"),
-    field("placement", any()),
+    field("placement", any())
+      .describe("{mode: 'original' | 'point' | 'offset', position, anchor, offset, "
+                "snapToGrid}"),
     field("layer", any()).describe("The layer of the new objects"),
     field("missingMaterials", array(string()))
       .describe("Materials of the new objects that no material collection provides"),
@@ -1328,13 +1329,14 @@ void registerClipboardTools(ToolRegistry& registry)
       .title("Copy")
       .description(
         "Copies objects or faces as map text in the document's format, like Edit > Copy, "
-        "into the server's clipboard (one clipboard shared by all sessions and "
-        "documents; "
-        "the operating system's clipboard is not touched) and returns the text. Objects: "
-        "'ids' or the selected objects. Faces: 'faces' or the selected faces; face text "
-        "carries the material and alignment, and pasting it applies the last copied face "
-        "to other faces. Example: {\"ids\": [\"group:12\"]} -> {\"mode\": \"objects\", "
-        "\"text\": \"// entity 0\\n{\\n...\", ...}")
+        "into the server's clipboard and returns the text. The map is not changed; the "
+        "clipboard is one for all sessions and documents, and the operating system's "
+        "clipboard is not touched. Objects: 'ids' or the selected objects. Faces: "
+        "'faces' or the selected faces; face text carries the material and alignment, "
+        "and clipboard_paste applies the last copied face to other faces. Returns mode, "
+        "ids, count, lineCount, bytes and text. "
+        "Examples: {\"ids\": [\"group:12\"]}; {\"faces\": [\"brush:12/face:3\"], "
+        "\"includeText\": false}")
       .input(object({
         idsField(ClipboardKinds, "Objects to copy. Default: the selection"),
         field("faces", faceTargetsField().schema)
@@ -1347,10 +1349,13 @@ void registerClipboardTools(ToolRegistry& registry)
       .output(object({
         field("mode", enumOf({"objects", "faces"})).required(),
         field("ids", array(string())).required().describe("The copied objects or faces"),
-        field("count", integer()).required(),
-        field("lineCount", integer()).required(),
-        field("bytes", integer()).required(),
-        field("text", string()).describe("The map text"),
+        field("count", integer())
+          .required()
+          .describe("Number of copied objects or faces"),
+        field("lineCount", integer()).required().describe("Lines of the map text"),
+        field("bytes", integer()).required().describe("Size of the map text in bytes"),
+        field("text", string())
+          .describe("The map text (omitted if includeText is false)"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -1371,10 +1376,11 @@ void registerClipboardTools(ToolRegistry& registry)
       .output(object({
         field("mode", enumOf({"objects"})).required(),
         field("ids", array(string())).required().describe("The cut objects"),
-        field("count", integer()).required(),
-        field("lineCount", integer()).required(),
-        field("bytes", integer()).required(),
-        field("text", string()).describe("The map text"),
+        field("count", integer()).required().describe("Number of cut objects"),
+        field("lineCount", integer()).required().describe("Lines of the map text"),
+        field("bytes", integer()).required().describe("Size of the map text in bytes"),
+        field("text", string())
+          .describe("The map text (omitted if includeText is false)"),
       }))
       .mutation(Mutation::Map)
       .destructive()
@@ -1401,16 +1407,18 @@ void registerClipboardTools(ToolRegistry& registry)
     ToolDef{"clipboard_paste"}
       .title("Paste")
       .description(
-        "Pastes map text (default: the server's clipboard) like Edit > Paste. Object "
-        "text "
-        "(entities, brushes, groups in the document's format or a compatible one) "
+        "Pastes map text (default: the server's clipboard) like Edit > Paste, in one "
+        "undo step. Object text (entities, brushes, groups in the document's format or a "
+        "compatible one) "
         "becomes new objects in the current layer (or 'targetLayer'), at their original "
-        "coordinates, at 'position' (the 'anchor' of their bounds, default the min "
-        "corner, lands on the point) or moved by 'offset'; they are selected. Face text "
+        "coordinates, at 'position' (map units; the 'anchor' of their bounds lands on "
+        "the point) or moved by 'offset' (not both); they are selected. Face text "
         "(brush face lines from clipboard_copy with 'faces') applies the material and "
         "alignment of its last face to 'faces' or the selected faces. Materials missing "
-        "from the material collections are reported (MISSING_MATERIALS). Example: "
-        "{\"position\": [512, 0, 0], \"anchor\": \"min\"}")
+        "from the material collections are reported (MISSING_MATERIALS). Use "
+        "map_import to paste from a map file. Examples: {\"position\": [512, 0, 0], "
+        "\"anchor\": \"min\"}; {\"offset\": [0, 256, 0]}; {\"faces\": "
+        "[\"brush:12/face:3\"]}")
       .input(object(std::move(pasteInput)))
       .output(object(std::move(pasteOutput)))
       .mutation(Mutation::Map)
@@ -1421,7 +1429,8 @@ void registerClipboardTools(ToolRegistry& registry)
       .title("Inspect Map File")
       .description(
         "Reads another map file (absolute path) without opening it and lists what "
-        "map_import can take from it: its format (from the header comment or detected), "
+        "map_import can take from it; read-only. Lists "
+        "its format (from the header comment or detected), "
         "layers (index 0 is the default layer), groups (name, layer, bounds, contents, "
         "materials), entity classnames, materials and the materials missing from the "
         "document's collections. Example: {\"path\": \"/maps/prefabs/rooms.map\"}")
@@ -1433,19 +1442,31 @@ void registerClipboardTools(ToolRegistry& registry)
       .output(object({
         field("path", string()).required(),
         field("format", string()).required().describe("The file's map format"),
-        field("formatSource", enumOf({"header", "detected"})).required(),
+        field("formatSource", enumOf({"header", "detected"}))
+          .required()
+          .describe("Whether the format comes from the header comment or was detected"),
         field("game", any()).describe("The game named in the header, or null"),
-        field("documentFormat", string()).required(),
+        field("documentFormat", string())
+          .required()
+          .describe("The document's map format"),
         field("converted", boolean())
           .required()
           .describe("Whether map_import converts the objects to the document's format"),
-        field("bounds", any()).required(),
+        field("bounds", any()).required().describe("Bounds of all objects in the file"),
         field("contents", any()).required().describe("Counts by kind"),
-        field("layers", array(any())).required(),
-        field("groups", array(any())).required().describe("At most 500"),
-        field("classnames", array(any())).required(),
-        field("materials", array(string())).required(),
-        field("missingMaterials", array(string())).required(),
+        field("layers", array(any()))
+          .required()
+          .describe("The file's layers; index 0 is the default layer"),
+        field("groups", array(any()))
+          .required()
+          .describe("Groups {name, layer, bounds, contents, materials}; at most 500"),
+        field("classnames", array(any())).required().describe("Entity classnames"),
+        field("materials", array(string()))
+          .required()
+          .describe("Materials the file uses"),
+        field("missingMaterials", array(string()))
+          .required()
+          .describe("Materials the document's collections do not provide"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -1454,7 +1475,12 @@ void registerClipboardTools(ToolRegistry& registry)
 
   auto importInput = std::vector<Field>{
     field("path", string().nonEmpty()).required().describe("Absolute path of the map"),
-    field("layer", oneOf({string().nonEmpty(), integer().min(0)}))
+    field(
+      "layer",
+      oneOf({
+        string().nonEmpty().describe("Layer name"),
+        integer().min(0).describe("Layer index (0 = default layer)"),
+      }))
       .describe(
         "Only objects in this layer of the file: name or index (0 = default layer)"),
     field("group", string().nonEmpty())
@@ -1463,18 +1489,25 @@ void registerClipboardTools(ToolRegistry& registry)
       .describe(
         "Only entities with this classname glob, with their brushes ('worldspawn': "
         "world brushes); inside groups too, without the groups"),
-    field("region", box()).describe("Only objects whose bounds meet this box"),
+    field("region", box())
+      .describe("Only objects whose bounds meet this box (map units, see regionMode)"),
     field("regionMode", enumOf({"intersects", "inside"}).defaultsTo("intersects"))
       .describe("'intersects' (overlap) or 'inside' (bounds within the region)"),
   };
   addPlacementFields(importInput);
   auto importOutput = pasteOutputFields();
   importOutput.push_back(field("path", string()).required());
-  importOutput.push_back(field("sourceFormat", string()).required());
   importOutput.push_back(
-    field("formatSource", enumOf({"header", "detected"})).required());
+    field("sourceFormat", string()).required().describe("The file's map format"));
+  importOutput.push_back(field("formatSource", enumOf({"header", "detected"}))
+                           .required()
+                           .describe("Whether the format comes from the header comment "
+                                     "or was detected"));
   importOutput.push_back(field("documentFormat", string()).required());
-  importOutput.push_back(field("converted", boolean()).required());
+  importOutput.push_back(
+    field("converted", boolean())
+      .required()
+      .describe("Whether the objects were converted to the document's format"));
   importOutput.push_back(
     field("sourceObjects", integer()).required().describe("Objects taken from the file"));
 
@@ -1489,11 +1522,14 @@ void registerClipboardTools(ToolRegistry& registry)
         "document's format while reading (e.g. Valve 220 to Standard); patches are "
         "dropped for formats without patches. Layers are not imported: the objects go "
         "into the current layer or 'targetLayer'. Placement as in clipboard_paste: "
-        "original coordinates, 'position' + 'anchor' or 'offset'. Materials missing "
+        "original coordinates, 'position' + 'anchor' or 'offset' (map units). Materials "
+        "missing "
         "from the document's collections are listed in missingMaterials "
-        "(MISSING_MATERIALS warning). The imported objects are selected. Example: "
+        "(MISSING_MATERIALS warning). The imported objects are selected. Examples: "
         "{\"path\": \"/maps/prefabs/rooms.map\", \"group\": \"Armory\", \"position\": "
-        "[512, 0, 0], \"anchor\": \"min\"}")
+        "[512, 0, 0], \"anchor\": \"min\"}; {\"path\": \"/maps/e1m1.map\", "
+        "\"region\": {\"min\": [0, 0, 0], \"max\": [512, 512, 256]}, \"regionMode\": "
+        "\"inside\"}")
       .input(object(std::move(importInput)))
       .output(object(std::move(importOutput)))
       .mutation(Mutation::Map)

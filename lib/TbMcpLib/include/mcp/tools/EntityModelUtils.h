@@ -226,25 +226,78 @@ struct PlacementCheck
 constexpr double PlacementTolerance = 1.0;
 
 /**
- * Checks world model bounds against the visible brushes and patches of the map that are
- * not triggers, with vertical rays cast down from the top of the bounds at their center
- * and inset corners. A surface hit within PlacementTolerance of the bottom of the bounds
- * supports the model (also below a higher surface, e.g. the floor under a chair seat).
- * Without support, the surface below is the highest first hit (as for dropToFloor): if
- * the bottom is more than PlacementTolerance below it, the model reaches into the floor
- * (MODEL_BELOW_FLOOR), if it is more than PlacementTolerance above it, the model floats
- * (MODEL_FLOATING); without any surface, MODEL_NO_FLOOR. Brushes other than the surface
- * whose interior intersects the bounds shrunk by PlacementTolerance (so touching and
- * overlaps up to the tolerance are fine) are reported as MODEL_PENETRATES_BRUSHES. The
- * findings name the entity `entityId` first; `subject` starts each message, e.g. "The
- * model of entity:5 (animation 'sit')".
+ * Model bounds may reach this far below the floor without MODEL_BELOW_FLOOR. The bounds
+ * of a studio model sequence or a Quake frame enclose every vertex of the animation, so
+ * soles, toes and idle sway routinely dip a unit or two below the origin plane (1.1 units
+ * for the Half-Life alien grunt's idle1). The games drop monsters and items by their
+ * hull, not by their model, so such sinkage is only a sliver of the feet and cannot be
+ * seen; a model 2 units or more below the floor shows visibly cut-off feet. Boxes that
+ * collide (definition bounds, hulls) use PlacementTolerance instead.
+ */
+constexpr double ModelBelowFloorTolerance = 2.0;
+
+/**
+ * Checks world model bounds against the brushes and patches of the map that are not
+ * triggers and not in a layer omitted from export (hidden objects count: the compiler
+ * builds them), with vertical rays cast down from the top of the bounds at their center
+ * and inset corners. A surface hit from PlacementTolerance above to `belowFloorTolerance`
+ * below the bottom of the bounds supports the model (also below a higher surface, e.g.
+ * the floor under a chair seat). Without support, the surface below is the highest first
+ * hit (as for dropToFloor): if the bottom is more than `belowFloorTolerance` below it,
+ * the model reaches into the floor (MODEL_BELOW_FLOOR), if it is more than
+ * PlacementTolerance above it, the model floats (MODEL_FLOATING); without any surface,
+ * MODEL_NO_FLOOR. Brushes other than the surface whose interior intersects the bounds
+ * shrunk by PlacementTolerance (so touching and overlaps up to the tolerance are fine)
+ * are reported as MODEL_PENETRATES_BRUSHES. The findings name the entity `entityId`
+ * first; `subject` starts each message, e.g. "The model of entity:5 (animation 'sit')".
  */
 PlacementCheck checkModelPlacement(
   const vm::bbox3d& modelBounds,
   mdl::Map& map,
   const IdRegistry& ids,
   const std::string& entityId,
-  const std::string& subject);
+  const std::string& subject,
+  double belowFloorTolerance = ModelBelowFloorTolerance);
+
+/**
+ * How the placement checks treat a point entity. One rule for the model placement checks
+ * (issues_list, issuesIntroduced, the placement warnings of the entity tools) and
+ * map_check, so that they agree.
+ */
+struct PlacementRule
+{
+  /**
+   * Its position does not matter (info_null, info_notnull, info_target, info_landmark,
+   * info_compile_parameters, info_texlights, light_environment): not checked at all.
+   */
+  bool positionIndependent = false;
+  /**
+   * It should stand on a floor: player starts, monsters, items, weapons, ammo, and other
+   * classes with a model that are not usually hung on walls, ceilings or in the air
+   * (light*, env_*, ambient_*, path_*, target_*, trigger_*, misc_*, func_*, info_*,
+   * speaker*, scripted_*, aiscripted_*). Only standing entities get the model placement
+   * checks; for the others only their origin matters (a light's sprite or a sound's
+   * icon is no body).
+   */
+  bool standing = false;
+  /**
+   * It may float: a flying or swimming monster, or its origin lies in a liquid brush.
+   * MODEL_FLOATING and MODEL_NO_FLOOR are not reported for it.
+   */
+  bool mayFloat = false;
+};
+
+PlacementRule placementRule(const mdl::Map& map, const mdl::Entity& entity);
+
+/**
+ * Whether the model placement checks apply to the entity with the given model: it is a
+ * standing entity (PlacementRule) and the model is no sprite (.spr, .sp2: billboards
+ * whose bounds are no body).
+ */
+bool checksModelPlacement(const PlacementRule& rule, const EntityModelState& state);
+
+/** Removes the findings the rule exempts (MODEL_FLOATING, MODEL_NO_FLOOR if mayFloat). */
+void applyPlacementRule(PlacementCheck& check, const PlacementRule& rule);
 
 /** "The model of <id> (animation '<name>')" or "... (frame <n>)". */
 std::string placementSubject(const std::string& entityId, const EntityModelState& state);
@@ -258,8 +311,9 @@ Json placementSurfaceJson(
 
 /**
  * Checks the placement of the point entities among the given nodes and their
- * descendants whose models can be loaded (other entities are skipped) and adds a warning
- * for each finding. At most 20 warnings are added; the rest are summarized in a
+ * descendants whose models can be loaded and that the placement rule checks
+ * (checksModelPlacement; other entities are skipped) and adds a warning for each finding
+ * the rule does not exempt. At most 20 warnings are added; the rest are summarized in a
  * MORE_PLACEMENT_FINDINGS warning that points to entity_placement_check.
  */
 void warnModelPlacement(

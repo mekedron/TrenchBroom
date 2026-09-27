@@ -227,7 +227,11 @@ ToolResult selectionSet(CallContext& context, const Args& args)
     const auto ref = parseObjectRef(id);
     if (!ref)
     {
-      return makeError(ErrorCode::InvalidArgument, "'" + id + "' is not a valid id.");
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "'" + id + "' is not a valid id.",
+        "Pass object ids such as 'brush:12' or face ids such as 'brush:12/face:3' "
+        "(objects_find lists ids).");
     }
 
     auto resolved = ids.resolve(*ref);
@@ -421,7 +425,7 @@ ToolResult selectByLinkedGroups(CallContext& context, const Json& value)
       return makeError(
         ErrorCode::InvalidArgument,
         "Group " + id + " is not linked to any other group.",
-        "Pass a group that has linked duplicates (see group_list or object details).",
+        "Pass a group that has linked copies (object_get shows linkedCopies).",
         {id});
     }
     if (!map.editorContext().selectable(*node))
@@ -691,23 +695,26 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"selection_get"}
       .title("Get Selection")
       .description(
-        "Returns the current selection: mode ('none', 'objects' or 'faces'), count, "
-        "counts per kind, bounds and a page of the selected objects (id, kind, label, "
-        "bounds, layer, ...) or faces (id, normal, center, material). detail 'full' adds "
-        "each object's state or each face's UV attributes and vertices. TrenchBroom "
-        "selects either objects or faces, never both. "
+        "Returns the current selection (read-only): mode ('none', 'objects' or "
+        "'faces'), count, counts per kind, bounds (map units) and a page of the "
+        "selected objects (id, kind, label, bounds, layer, ...) or faces (id, normal, "
+        "center, material). detail 'full' adds each object's state or each face's UV "
+        "attributes and vertices. TrenchBroom selects either objects or faces, never "
+        "both. "
         "Example: {\"limit\": 20, \"fields\": [\"id\", \"label\"]}")
       .input(object({}))
       .output(object({
         field("mode", enumOf({"none", "objects", "faces"})).required(),
-        field("count", integer()).required(),
+        field("count", integer())
+          .required()
+          .describe("Number of selected objects or faces"),
         field("countsByKind", object({}).allowAdditionalProperties())
           .required()
           .describe(
             "e.g. {\"brush\": 3, \"entity\": 1}; for faces {\"face\", \"brush\"}"),
         field("bounds", any()).describe("Bounds of the selection, or null"),
-        field("items", array(any())).required(),
-        field("total", integer()).required(),
+        field("items", array(any())).required().describe("Selected objects or faces"),
+        field("total", integer()).required().describe("Number of selected items"),
         field("nextCursor", any()).describe("Cursor of the next page, or null"),
       }))
       .mutation(Mutation::None)
@@ -720,16 +727,18 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"selection_set"}
       .title("Set Selection")
       .description(
-        "Replaces, extends or reduces the selection with object ids or face ids (like "
-        "'brush:12/face:3'); objects and faces cannot be mixed. As in the editor, a "
-        "brush entity id selects its brushes and patches. Selecting is undoable. "
-        "Hidden, locked objects and objects inside closed groups cannot be selected. To "
-        "deselect everything use selection_clear. "
+        "Replaces, extends or reduces the selection with object ids or face ids "
+        "('brush:12/face:3'); objects and faces cannot be mixed, and 'add' cannot mix "
+        "them with the current selection. As in the editor, a brush entity id selects "
+        "its brushes and patches, and a layer id is refused (use select_by 'layers'). "
+        "One undo step. Hidden or locked objects and objects inside closed groups fail "
+        "with OBJECT_NOT_EDITABLE (group_open, layer_set_state). selection_clear "
+        "deselects everything. "
         "Example: {\"ids\": [\"brush:12\", \"entity:40\"], \"mode\": \"add\"}")
       .input(object({
         field("ids", array(objectId()).nonEmpty())
           .required()
-          .describe("Object ids or face ids"),
+          .describe("Object ids or face ids ('brush:12/face:3')"),
         field("mode", enumOf({"replace", "add", "remove"}).defaultsTo("replace"))
           .describe("'replace' the selection, 'add' to it or 'remove' from it"),
       }))
@@ -739,7 +748,8 @@ void registerSelectionTools(ToolRegistry& registry)
 
   registry.add(ToolDef{"selection_clear"}
                  .title("Clear Selection")
-                 .description("Deselects all objects and faces. Example: {}")
+                 .description("Deselects all objects and faces (one undo step) and "
+                              "returns how many were selected. Example: {}")
                  .input(object({}))
                  .output(object({
                    field("cleared", integer())
@@ -753,8 +763,9 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"select_all"}
       .title("Select All")
       .description(
-        "Selects all visible, unlocked objects, like Edit > Select All. Inside an open "
-        "group, only that group's contents are selected. Example: {}")
+        "Replaces the selection with all visible, unlocked objects, like Edit > Select "
+        "All (one undo step). Inside an open group, only that group's contents are "
+        "selected. Returns the selection mode and count. Example: {}")
       .input(object({}))
       .output(selectionResultSchema())
       .mutation(Mutation::Map)
@@ -765,7 +776,8 @@ void registerSelectionTools(ToolRegistry& registry)
       .title("Invert Selection")
       .description(
         "Selects all visible, unlocked objects that are not selected and deselects the "
-        "selected ones, like Edit > Select Inverse. Example: {}")
+        "selected ones, like Edit > Select Inverse (one undo step). Returns the "
+        "selection mode and count. Example: {}")
       .input(object({}))
       .output(selectionResultSchema())
       .mutation(Mutation::Map)
@@ -775,17 +787,18 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"select_by"}
       .title("Select By")
       .description(
-        "Replaces the selection with everything matching exactly one criterion: "
-        "'classname' (entities, case-insensitive), 'material' (brushes using it, or its "
-        "faces with target 'faces'), 'layers' (all selectable objects in these layers) "
-        "or "
-        "'linkedGroup' (all groups linked with the given groups). Only visible, unlocked "
-        "objects are selected. No match gives count 0 and a NO_MATCH warning. "
-        "Example: {\"classname\": \"monster_ogre\"} or {\"material\": \"wall_metal\", "
-        "\"target\": \"faces\"}")
+        "Replaces the selection (one undo step) with everything matching exactly one "
+        "criterion: 'classname' (entities, case-insensitive), 'material' (brushes using "
+        "it, or its faces with target 'faces'), 'layers' (all selectable objects in "
+        "these layers) or 'linkedGroup' (all groups linked with the given groups). Only "
+        "visible, unlocked objects are selected. No match gives count 0 and a NO_MATCH "
+        "warning. For other filters use objects_find, then selection_set. Examples: "
+        "{\"classname\": \"monster_ogre\"}; {\"material\": \"wall_metal\", "
+        "\"target\": \"faces\"}; {\"layers\": [\"layer:7\"]}")
       .input(object({
-        field("classname", string().nonEmpty()).describe("Entity classname"),
-        field("material", string().nonEmpty()).describe("Material name"),
+        field("classname", string().nonEmpty())
+          .describe("Entity classname, exact (case-insensitive)"),
+        field("material", string().nonEmpty()).describe("Material name, exact"),
         field("target", enumOf({"brushes", "faces"}))
           .describe("With 'material': select brushes (default) or faces"),
         field("layers", array(objectId({ObjectKind::Layer})).nonEmpty())
@@ -806,15 +819,17 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"select_spatial"}
       .title("Select Spatially")
       .description(
-        "Uses brushes as selectors and selects the objects that touch them ('touching'), "
-        "lie completely inside them ('inside') or lie inside them when the selectors are "
-        "extended infinitely along an axis ('tall'), like Edit > Select Touching / "
-        "Inside "
-        "/ Tall. The selectors themselves are not selected; deleteSelectors removes them "
-        "in the same undo step. "
+        "Uses brushes as selectors and replaces the selection with the objects that "
+        "touch them ('touching'), lie completely inside them ('inside') or lie inside "
+        "them when the selectors are extended infinitely along an axis ('tall'), like "
+        "Edit > Select Touching / Inside / Tall (one undo step). The selectors "
+        "themselves are not selected; deleteSelectors removes them in the same undo "
+        "step. "
         "Example: {\"mode\": \"inside\", \"ids\": [\"brush:12\"]}")
       .input(object({
-        field("mode", enumOf({"touching", "inside", "tall"})).required(),
+        field("mode", enumOf({"touching", "inside", "tall"}))
+          .required()
+          .describe("'touching', 'inside' or 'tall' (inside along 'axis')"),
         idsField({ObjectKind::Brush}, "Selector brushes. Default: the selected brushes"),
         field("axis", enumOf({"x", "y", "z"}).defaultsTo("z"))
           .describe("For 'tall': the axis along which the selectors are extended"),
@@ -823,16 +838,17 @@ void registerSelectionTools(ToolRegistry& registry)
       }))
       .output(selectionResultSchema({
         field("selectors", array(string())).describe("The selector brushes"),
-        field("selectorsDeleted", boolean()),
+        field("selectorsDeleted", boolean())
+          .describe("Whether the selector brushes were deleted"),
       }))
       .mutation(Mutation::Map)
       .handler(selectSpatial));
 
   registry.add(ToolDef{"select_siblings"}
                  .title("Select Siblings")
-                 .description("Selects all selectable objects that share a parent "
-                              "(entity, group or layer) with "
-                              "the given objects, like Edit > Select Siblings. "
+                 .description("Replaces the selection with all selectable objects that "
+                              "share a parent (entity, group or layer) with the given "
+                              "objects, like Edit > Select Siblings (one undo step). "
                               "Example: {\"ids\": [\"brush:12\"]}")
                  .input(object({idsField()}))
                  .output(selectionResultSchema())
@@ -843,9 +859,10 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"select_by_line"}
       .title("Select by Line Number")
       .description(
-        "Selects the objects defined at the given lines (1-based) of the map file, e.g. "
-        "lines reported by a compiler. Line numbers refer to the file as last loaded or "
-        "saved; objects created since then have no line. "
+        "Replaces the selection with the objects defined at the given lines (1-based) "
+        "of the map file, e.g. lines reported by a compiler (one undo step). Line "
+        "numbers refer to the file as last loaded or saved; objects created since then "
+        "have no line (save first with document_save). "
         "Example: {\"lines\": [231, 1042]}")
       .input(object({
         field("lines", array(integer().min(1)).nonEmpty())
@@ -860,15 +877,16 @@ void registerSelectionTools(ToolRegistry& registry)
     ToolDef{"select_faces_of"}
       .title("Select Faces Of")
       .description(
-        "Selects faces: all faces of the given brushes ('ids', default: the selected "
-        "brushes), or, with 'face', all faces that are coplanar with it and connected to "
-        "it through shared edges (like shift+double-click in the editor; coplanar: false "
-        "selects just that face). "
-        "Example: {\"face\": \"brush:12/face:4\"} or {\"ids\": [\"brush:12\"]}")
+        "Replaces the selection with faces (one undo step): all faces of the given "
+        "brushes ('ids', default: the selected brushes), or, with 'face', all faces "
+        "that are coplanar with it and connected to it through shared edges (like "
+        "shift+double-click in the editor; coplanar: false selects just that face). "
+        "'ids' and 'face' cannot be combined. Examples: {\"face\": \"brush:12/face:4\"}; "
+        "{\"ids\": [\"brush:12\"]}")
       .input(object({
         idsField({ObjectKind::Brush}, "Brush ids. Default: the selected brushes"),
         field("face", objectId({ObjectKind::Brush}))
-          .describe("A face id, e.g. 'brush:12/face:4'"),
+          .describe("A face id, e.g. 'brush:12/face:4'; not with 'ids'"),
         field("coplanar", boolean())
           .describe("With 'face': select connected coplanar faces (default true)"),
       }))

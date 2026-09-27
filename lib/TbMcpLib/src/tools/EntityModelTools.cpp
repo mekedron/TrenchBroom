@@ -334,9 +334,20 @@ Json placementItem(
     return result;
   }
 
+  // the same rule as issues_list and map_check: lights, sounds, sprites etc. are skipped
+  const auto rule = placementRule(map, entity);
+  if (!checksModelPlacement(rule, state.value()))
+  {
+    result["reason"] =
+      "Its model is not checked: the class does not stand on a floor, or the model is "
+      "a sprite.";
+    return result;
+  }
+
   const auto bounds = state.value().worldBounds(*frame);
-  const auto check =
+  auto check =
     checkModelPlacement(bounds, map, ids, id, placementSubject(id, state.value()));
+  applyPlacementRule(check, rule);
   auto findings = Json::array();
   for (const auto& finding : check.findings)
   {
@@ -427,26 +438,28 @@ void registerEntityModelTools(ToolRegistry& registry)
       .title("Set Entity Animation")
       .description(
         "Sets the animation (model frame, e.g. a Half-Life sequence or a Quake frame) "
-        "of point entities by setting the property their model definition takes the "
-        "frame from (e.g. \"sequence\"; entity_model_info reports it as frameProperty "
-        "and lists the animations with their bounds). 'animation' is a name (ignoring "
-        "case) or an index. Fails with INVALID_ARGUMENT for unknown animations (the hint "
-        "lists valid names), for classes whose model shows a fixed frame, and for "
-        "entities without model; with OPERATION_FAILED if a model cannot be loaded. "
-        "Each result lists the property, its new and previous value, the animation and "
-        "the resulting world model bounds. Placement problems of the new model bounds "
-        "are warnings: MODEL_BELOW_FLOOR, MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, "
-        "MODEL_NO_FLOOR (see entity_placement_check). Example: {\"ids\": "
-        "[\"entity:40\"], \"animation\": \"sitting2\"} -> {\"entities\": [{\"id\": "
-        "\"entity:40\", \"classname\": \"monster_scientist\", \"property\": "
-        "\"sequence\", \"value\": \"52\", \"previousValue\": \"13\", \"animation\": "
-        "{\"index\": 52, \"name\": \"sitting2\"}, \"modelBounds\": {\"min\": [...], "
-        "\"max\": [...]}}]}")
+        "of point entities in one undo step, by setting the property their model "
+        "definition takes the frame from (e.g. \"sequence\"; entity_model_info reports "
+        "it as frameProperty and lists the animations with their bounds). Fails with "
+        "INVALID_ARGUMENT for unknown animations (the hint lists valid names), for "
+        "classes whose model shows a fixed frame, and for entities without model; with "
+        "OPERATION_FAILED if a model cannot be loaded. Returns per entity the property, "
+        "its new and previous value, the animation {index, name} and the resulting "
+        "world model bounds. Placement problems of the new bounds are warnings "
+        "(MODEL_BELOW_FLOOR, MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, MODEL_NO_FLOOR; "
+        "see entity_placement_check). "
+        "Examples: {\"ids\": [\"entity:40\"], \"animation\": \"sitting2\"}; "
+        "{\"ids\": [\"entity:40\"], \"animation\": 13}")
       .input(object({
         idsField(
           {ObjectKind::Entity},
           "Point entity ids. Default: the entities of the current selection"),
-        field("animation", oneOf({string().nonEmpty(), integer().min(0)}))
+        field(
+          "animation",
+          oneOf({
+            string().nonEmpty().describe("Animation name, ignoring case"),
+            integer().min(0).describe("Animation index (0-based)"),
+          }))
           .required()
           .describe("Animation name (ignoring case) or index, e.g. \"idle\" or 3"),
       }))
@@ -464,27 +477,22 @@ void registerEntityModelTools(ToolRegistry& registry)
       .title("Check Model Placement")
       .description(
         "Checks whether point entities stand correctly with the real bounds of their "
-        "model in its current animation (not the class size): the surface below is "
-        "found with vertical rays from the top of the model (visible brushes and "
-        "patches, triggers ignored). Findings: MODEL_BELOW_FLOOR (the model reaches "
-        "more than 1 unit below the floor; distance = depth, suggestedMove moves it up), "
-        "MODEL_FLOATING (more than 1 unit above the floor; distance = gap), "
+        "model in its current animation (not the class size); read-only. The surface "
+        "below is found with vertical rays from the top of the model (brushes and "
+        "patches, hidden ones included, triggers and layers omitted from export "
+        "ignored). Findings: MODEL_BELOW_FLOOR (the model reaches more than 2 units "
+        "below the floor; distance = depth, suggestedMove moves it up), MODEL_FLOATING "
+        "(more than 1 unit above the floor; distance = gap), "
         "MODEL_PENETRATES_BRUSHES (the model intersects other solid or brush entity "
         "brushes such as furniture or walls), MODEL_NO_FLOOR. Targets: ids, the "
         "selected entities, or scope \"map\" for all point entities with models. "
         "Entities whose model cannot be loaded are listed with checked false and a "
-        "reason. onlyProblems lists only entities with findings; summary counts all. "
-        "Example: {\"ids\": [\"entity:40\"]} -> {\"items\": [{\"id\": \"entity:40\", "
-        "\"classname\": \"monster_scientist\", \"model\": \"models/scientist.mdl\", "
-        "\"checked\": true, \"animation\": {\"index\": 52, \"name\": \"sitting2\"}, "
-        "\"modelBounds\": {...}, \"surface\": {\"z\": 0, \"object\": \"brush:12\", "
-        "\"face\": \"brush:12/face:5\"}, \"findings\": [{\"code\": "
-        "\"MODEL_BELOW_FLOOR\", \"message\": \"The model of entity:40 (animation "
-        "'sitting2') reaches 35 units below the floor at z=0 (brush:12). ...\", "
-        "\"objectIds\": [\"entity:40\", \"brush:12\"], \"distance\": 35, "
-        "\"suggestedMove\": [0, 0, 35]}]}], \"total\": 1, \"nextCursor\": null, "
-        "\"summary\": {\"entities\": 1, \"checked\": 1, \"notChecked\": 0, "
-        "\"withFindings\": 1}}")
+        "reason. Each item has the model, animation, modelBounds, surface {z, object, "
+        "face} and findings [{code, message, objectIds, distance, suggestedMove}]; "
+        "summary counts all entities. Fix findings with objects_move (suggestedMove) or "
+        "entity_animation_set. "
+        "Examples: {\"ids\": [\"entity:40\"]}; {\"scope\": \"map\", "
+        "\"onlyProblems\": true}")
       .input(object({
         idsField(
           {ObjectKind::Entity},
@@ -492,7 +500,7 @@ void registerEntityModelTools(ToolRegistry& registry)
         field("scope", enumOf({"map"}))
           .describe("\"map\": check all point entities with models instead of ids"),
         field("onlyProblems", boolean().defaultsTo(false))
-          .describe("List only entities with findings"),
+          .describe("List only entities with findings; summary still counts all"),
       }))
       .output(object({
         field("items", array(any()))
@@ -501,7 +509,9 @@ void registerEntityModelTools(ToolRegistry& registry)
                     "surface, findings: [{code, message, objectIds, distance?, "
                     "suggestedMove?}]}]"),
         field("total", integer()).required(),
-        field("nextCursor", any()).required(),
+        field("nextCursor", any())
+          .required()
+          .describe("Cursor of the next page, or null"),
         field("summary", any())
           .required()
           .describe("{entities, checked, notChecked, withFindings}"),

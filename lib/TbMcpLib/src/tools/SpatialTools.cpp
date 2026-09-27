@@ -812,7 +812,13 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
       }
       if (wantImage)
       {
-        markers.push_back(SnapshotMarker{origin, markerColor(c), std::string(1, c)});
+        // clamped into the camera's depth range (from the slice height down to
+        // floorDepth), so that entities above or far below the slice are marked too
+        const auto margin = std::min(1.0, floorDepth / 2.0);
+        const auto markerZ =
+          std::clamp(origin.z(), height - floorDepth + margin, height - margin);
+        markers.push_back(SnapshotMarker{
+          {origin.x(), origin.y(), markerZ}, markerColor(c), std::string(1, c)});
       }
 
       ++entityCount;
@@ -874,6 +880,8 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
     }
   }
 
+  // before `entities` is moved into the result
+  const auto entitiesTruncated = entityCount > entities.size();
   auto result = Json{
     {"text", std::move(text)},
     {"legend", std::move(legend)},
@@ -884,11 +892,8 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
     {"rows", rows},
     {"height", roundForOutput(height)},
     {"region", toJson(*region)},
+    {"entitiesTruncated", entitiesTruncated},
   };
-  if (entityCount > entities.size())
-  {
-    result["entitiesTruncated"] = true;
-  }
   if (!wantText)
   {
     result.erase("text");
@@ -916,9 +921,9 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
     {
       return errorOf(image);
     }
-    result["image"] = std::move(image.value()["image"]);
-    result["camera"] = std::move(image.value()["camera"]);
-    result["snapshotId"] = std::move(image.value()["snapshotId"]);
+    result["image"] = image.value()["image"];
+    result["camera"] = image.value()["camera"];
+    result["snapshotId"] = image.value()["snapshotId"];
   }
   return result;
 }
@@ -967,12 +972,14 @@ void registerSpatialTools(ToolRegistry& registry)
     ToolDef{"objects_at_point"}
       .title("Objects at Point")
       .description(
-        "Lists the objects at a point: brushes whose convex volume contains it (exact), "
-        "point entities and patches whose bounds contain it, each with relation "
-        "'inside' or 'touching' (the point lies within tolerance of the surface), plus "
-        "the brush entities and groups that own them. insideSolid tells whether the "
-        "point is inside a non-trigger brush. Only visible objects count unless "
-        "includeHidden is set. Example: {\"point\": [208, 208, 64]}")
+        "Lists the objects at a point (read-only): brushes whose convex volume "
+        "contains it (exact), point entities and patches whose bounds contain it, "
+        "each with relation 'inside' or 'touching' (within tolerance map units of "
+        "the surface), plus the brush entities and groups that own them. "
+        "insideSolid tells whether the point is inside a non-trigger brush. Only "
+        "visible objects count unless includeHidden. Use space_check for a box and "
+        "surroundings for what is around a point. Example: {\"point\": [208, 208, "
+        "64]}")
       .input(object({
         field("point", vec3()).required().describe("The point to test"),
         field("tolerance", number().min(0).max(64).defaultsTo(0.001))
@@ -982,15 +989,16 @@ void registerSpatialTools(ToolRegistry& registry)
         includeHiddenField,
       }))
       .output(object({
-        field("point", vec3()),
+        field("point", vec3()).describe("The point tested"),
         field("containing", array(any()))
           .describe(
             "Object summaries with relation 'inside' or 'touching', inside first"),
         field("owners", array(any()))
           .describe("Brush entities and groups owning the objects: {id, kind, label}"),
-        field("insideSolid", boolean()),
+        field("insideSolid", boolean())
+          .describe("Whether the point is inside a non-trigger brush"),
         field("count", integer()).describe("Total number of objects found"),
-        field("truncated", boolean()),
+        field("truncated", boolean()).describe("More objects than limit were found"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -1001,16 +1009,18 @@ void registerSpatialTools(ToolRegistry& registry)
     ToolDef{"ray_pick"}
       .title("Ray Pick")
       .description(
-        "Casts a ray and reports what it hits, like clicking in the 3D view. Give origin "
-        "+ direction (normalized for you, default straight down), or from: an object id "
-        "whose bounds center is the origin; that object and its members are ignored, so "
-        "{\"from\": \"entity:12\"} answers 'what is under this entity?'. Brush faces are "
-        "only hit from the front: a ray starting inside a brush passes through it, and a "
-        "ray starting inside a point entity's bounds does not hit that entity. Hidden "
-        "objects are not hit unless includeHidden. Returns hit: null when nothing is "
-        "hit. "
-        "Example: {\"origin\": [256, 256, 128], \"direction\": [1, 0, 0], \"kinds\": "
-        "[\"brush\"]}")
+        "Casts a ray and returns what it hits, like clicking in the 3D view "
+        "(read-only). Give origin and direction (need not be normalized; default "
+        "straight down), or 'from': an object id whose bounds center is the "
+        "origin; that object and its members are ignored, so {\"from\": "
+        "\"entity:12\"} answers 'what is under this entity?'. Brush faces are only "
+        "hit from the front: a ray starting inside a brush passes through it, and "
+        "one starting inside a point entity's bounds does not hit that entity. "
+        "Hidden objects are not hit unless includeHidden. Returns hit (object, "
+        "face id, material, normal, point, distance) or null; all: true also "
+        "returns 'hits', nearest first. To pick what an image pixel shows use "
+        "view_pick. Examples: {\"origin\": [256, 256, 128], \"direction\": [1, 0, "
+        "0], \"kinds\": [\"brush\"]}; {\"from\": \"entity:12\"}")
       .input(object({
         field("origin", vec3()).describe("Ray origin; alternative to from"),
         field("direction", vec3().defaultsTo(Json::array({0, 0, -1})))
@@ -1023,10 +1033,11 @@ void registerSpatialTools(ToolRegistry& registry)
              ObjectKind::Patch,
              ObjectKind::Group}))
           .describe("Start at the center of this object's bounds and ignore it"),
-        field("maxDistance", number().min(0)).describe("Ignore hits farther away"),
+        field("maxDistance", number().min(0))
+          .describe("Ignore hits farther away (map units)"),
         ignoreField,
         field("kinds", array(enumOf(nodeKindNames())))
-          .describe("Only hit these kinds of objects"),
+          .describe("Only hit these kinds of objects (entity: point entities)"),
         includeHiddenField,
         field("all", boolean().defaultsTo(false))
           .describe("Also return all hits up to limit, nearest first"),
@@ -1034,15 +1045,15 @@ void registerSpatialTools(ToolRegistry& registry)
           .describe("Maximum number of hits returned with all"),
       }))
       .output(object({
-        field("origin", vec3()),
-        field("direction", vec3()),
+        field("origin", vec3()).describe("The ray origin used"),
+        field("direction", vec3()).describe("The normalized ray direction"),
         field("hit", any())
           .describe(
             "{object, kind, label, face, material, normal, point, distance, entity, "
             "classname, group} (face, material and normal for brushes; entity and "
             "classname for brushes of brush entities) or null"),
         field("hits", array(any())).describe("With all: every hit, nearest first"),
-        field("truncated", boolean()),
+        field("truncated", boolean()).describe("With all: more hits than limit"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -1053,17 +1064,17 @@ void registerSpatialTools(ToolRegistry& registry)
     ToolDef{"space_check"}
       .title("Check Space")
       .description(
-        "Checks whether a box is free, e.g. before placing an entity or a brush. Lists "
-        "the objects whose interior overlaps the box (brushes exactly; point entities "
-        "and "
-        "patches by bounds; surfaces that only touch the box do not count), and finds "
-        "the "
-        "floor and ceiling by casting rays down from the box's bottom and up from its "
-        "top "
-        "(at the center and the four corners): the highest surface below and the lowest "
-        "above, with supportedCorners = corners with a surface within 1 unit. With "
-        "solidOnly, brushes of trigger_* entities are ignored. Example: {\"box\": "
-        "{\"min\": [48, 48, 0], \"max\": [80, 80, 56]}}")
+        "Checks whether a box is free, e.g. before placing an entity or a brush "
+        "(read-only). Lists the objects whose interior overlaps the box (brushes "
+        "exactly; point entities and patches by bounds; surfaces that only touch "
+        "the box do not count), and finds the floor and ceiling by casting rays "
+        "down from the box's bottom and up from its top at the center and the four "
+        "corners: the highest surface below and the lowest above, with "
+        "supportedCorners = corners with a surface within 1 unit. With solidOnly, "
+        "brushes of trigger_* entities are ignored. Returns free, overlaps, floor, "
+        "ceiling, clearance and insideWorldBounds. Use free_spots to search for a "
+        "free place. Example: {\"box\": {\"min\": [48, 48, 0], \"max\": [80, 80, "
+        "56]}}")
       .input(object({
         field("box", box()).required().describe("The space to check"),
         ignoreField,
@@ -1076,18 +1087,19 @@ void registerSpatialTools(ToolRegistry& registry)
           .describe("Maximum number of overlaps listed"),
       }))
       .output(object({
-        field("box", box()),
+        field("box", box()).describe("The box checked"),
         field("free", boolean()).describe("Whether nothing overlaps the box"),
         field("overlaps", array(any()))
           .describe("Object summaries plus overlap: the overlapping part of the bounds"),
-        field("overlapCount", integer()),
+        field("overlapCount", integer()).describe("Number of overlapping objects"),
         field("floor", any())
           .describe("{z, distance, object, kind, label, face, material, point, entity, "
                     "supportedCorners} or null"),
         field("ceiling", any()).describe("Like floor, above the box, or null"),
         field("clearance", any()).describe("ceiling z - floor z, or null"),
-        field("insideWorldBounds", boolean()),
-        field("truncated", boolean()),
+        field("insideWorldBounds", boolean())
+          .describe("Whether the box lies inside the world bounds"),
+        field("truncated", boolean()).describe("More overlaps than limit"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -1098,29 +1110,30 @@ void registerSpatialTools(ToolRegistry& registry)
     ToolDef{"map_plan_view"}
       .title("Map Plan View")
       .description(
-        "Draws a top-down text map of a horizontal slice at the given height. Each cell "
-        "shows '#' if a solid brush overlaps the cell at that height, '+' for a brush "
-        "entity (door, platform), 't' for a trigger, '.' for open space with a floor "
-        "below (a brush or patch surface within floorDepth under the cell center), and ' "
-        "' "
-        "for open space with nothing below. Point entities are drawn at their origin: "
-        "'P' "
-        "player start, 'M' monster, 'L' light, 'I' item/weapon, 'E' other. North (+y) is "
-        "up, x grows to the right; the header shows the min x of every 8th column, each "
-        "row starts with its min y. The grid is aligned to multiples of cellSize. "
-        "Defaults: region = bounds of all visible objects (only x and y are used), "
-        "height "
-        "= region min z + 48, cellSize = the smallest power of two >= 8 that fits 80 x "
-        "60 "
-        "cells. Example: {\"height\": 64, \"cellSize\": 32}")
+        "Returns a top-down plan of a horizontal slice at a height (read-only), as "
+        "text, image or both. Text cells: '#' a solid brush overlaps the cell at "
+        "that height, '+' a brush entity (door, platform), 't' a trigger, '.' open "
+        "space with a floor below (a brush or patch surface within floorDepth "
+        "under the cell center), ' ' open space with nothing below; point entities "
+        "at their origin: 'P' player start, 'M' monster, 'L' light, 'I' "
+        "item/weapon, 'E' other. North (+y) is up, x grows to the right; the "
+        "header shows the min x of every 8th column, each row starts with its min "
+        "y; cells are aligned to multiples of cellSize. Defaults: region = bounds "
+        "of all visible objects (only x and y used), height = region min z + 48, "
+        "cellSize = the smallest power of two >= 8 that fits 80 x 60 cells. The "
+        "image formats return a snapshotId for view_pick. Examples: {\"height\": "
+        "64, \"cellSize\": 32}; {\"region\": {\"min\": [0, 0, 0], \"max\": [1024, "
+        "512, 256]}, \"height\": 40, \"format\": \"both\"}")
       .input(object({
-        field("region", box()).describe("Area to draw; only x and y are used"),
-        field("height", number()).describe("Height (z) of the slice"),
+        field("region", box())
+          .describe("Area to draw; only x and y are used. Default: all visible objects"),
+        field("height", number())
+          .describe("Height (z) of the slice. Default: region min z + 48"),
         field("cellSize", number().min(1))
-          .describe("Cell size in units; at most 200 x 200 cells"),
+          .describe("Cell size in map units; at most 200 x 200 cells"),
         field("showEntities", boolean().defaultsTo(true)).describe("Draw point entities"),
         field("floorDepth", number().min(1).defaultsTo(1024))
-          .describe("How far below the slice a floor may be"),
+          .describe("How far below the slice a floor may be (map units)"),
         field("maxEntities", integer().min(0).max(1000).defaultsTo(100))
           .describe("Maximum number of entities listed"),
         includeHiddenField,
@@ -1128,8 +1141,9 @@ void registerSpatialTools(ToolRegistry& registry)
           .describe(
             "text: the character grid; image: a top-down orthographic render of the "
             "slice (geometry above the height is cut away, floors down to floorDepth "
-            "are visible, point entities are marked with their plan character in "
-            "the legend's colors: P green, M red, I cyan, L yellow, E white); both"),
+            "are visible, every point entity in the region is marked, also those above "
+            "the slice, with its plan character in the legend's colors: P green, M "
+            "red, I cyan, L yellow, E white); both"),
         field("imageWidth", integer().min(16).max(2048))
           .describe("Image width in pixels (default: up to 16 pixels per cell)"),
         field("imageHeight", integer().min(16).max(2048))
@@ -1140,13 +1154,14 @@ void registerSpatialTools(ToolRegistry& registry)
         field("legend", any()).describe("{char: meaning} for the characters used"),
         field("entities", array(any()))
           .describe("{char, id, classname, cell: [column, row], origin}"),
-        field("entitiesTruncated", boolean()),
+        field("entitiesTruncated", boolean())
+          .describe("Whether entities were left out of the list (more than maxEntities)"),
         field("origin", vec2()).describe("x, y of the first cell's min corner"),
-        field("cellSize", number()),
+        field("cellSize", number()).describe("Cell size used, in map units"),
         field("columns", integer()),
         field("rows", integer()),
-        field("height", number()),
-        field("region", box()),
+        field("height", number()).describe("Height (z) of the slice used"),
+        field("region", box()).describe("The region drawn"),
         field("image", any())
           .describe("Image formats: {width, height, format, bytes, savedTo}"),
         field("camera", any()).describe("Image formats: the orthographic camera used"),

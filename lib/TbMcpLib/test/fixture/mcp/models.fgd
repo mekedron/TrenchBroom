@@ -27,6 +27,8 @@
 
 @PointClass size(-8 -8 -8, 8 8 8) = info_marker : "A class without model" []
 
+@PointClass size(-8 -8 -8, 8 8 8) model({ "path": "progs/person.mdl" }) = light_lamp : "A light shown with a model; lights may hang anywhere" []
+
 @SolidClass = func_wall : "Wall" []
 
 @SolidClass = trigger_multiple : "Trigger" []

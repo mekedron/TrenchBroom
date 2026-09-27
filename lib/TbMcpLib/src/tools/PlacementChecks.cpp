@@ -42,6 +42,7 @@
 #include "kd/string_compare.h"
 
 #include "vm/bbox.h"
+#include "vm/scalar.h"
 #include "vm/vec.h"
 
 #include <fmt/format.h>
@@ -657,6 +658,7 @@ std::vector<McpIssue> zFightingIssues(
     issue.signature =
       fmt::format("{}|{}|{}|{}", ZFightingCode, a, b, planeKey(pair.plane));
     issue.objectIds = {firstId, secondId, firstBrush, secondBrush};
+    issue.plane = pair.plane;
     result.push_back(std::move(issue));
   }
   return result;
@@ -732,8 +734,13 @@ std::vector<McpIssue> modelPlacementIssues(
   auto result = std::vector<McpIssue>{};
   for (const auto* entityNode : entities)
   {
+    const auto rule = placementRule(map, entityNode->entity());
+    if (!rule.standing)
+    {
+      continue;
+    }
     const auto state = resolveEntityModel(entityNode->entity(), loader);
-    if (state.is_error())
+    if (state.is_error() || !checksModelPlacement(rule, state.value()))
     {
       continue;
     }
@@ -744,8 +751,9 @@ std::vector<McpIssue> modelPlacementIssues(
     }
 
     const auto id = ids.format(*entityNode);
-    const auto check =
+    auto check =
       checkModelPlacement(*bounds, map, ids, id, placementSubject(id, state.value()));
+    applyPlacementRule(check, rule);
     for (const auto& finding : check.findings)
     {
       auto related = std::vector<std::string>{};
@@ -844,9 +852,45 @@ std::vector<McpIssue> uvDistortionIssues(
     issue.signature =
       fmt::format("{}|{}|{}", UvDistortionCode, brushId, planeKey(finding.face.face()));
     issue.objectIds = {faceId, brushId};
+    issue.plane = finding.face.face().boundary();
     result.push_back(std::move(issue));
   }
   return result;
+}
+
+bool sameIssue(const McpIssue& before, const McpIssue& after)
+{
+  if (before.signature == after.signature)
+  {
+    return true;
+  }
+  if (before.code != after.code || !before.plane || !after.plane)
+  {
+    return false;
+  }
+  const auto maxCos = std::cos(vm::to_radians(SameIssueMaxAngle));
+  if (vm::dot(before.plane->normal, after.plane->normal) < maxCos)
+  {
+    return false;
+  }
+  if (before.code == ZFightingCode)
+  {
+    const auto brushes = [](const McpIssue& issue) {
+      auto result = issue.details.value("brushes", Json::array());
+      std::sort(result.begin(), result.end());
+      return result;
+    };
+    return brushes(before) == brushes(after)
+           && std::abs(before.plane->distance - after.plane->distance)
+                <= SameIssueMaxDistance;
+  }
+  if (before.code == UvDistortionCode)
+  {
+    return before.details.value("brush", Json{}) == after.details.value("brush", Json{})
+           && before.details.value("material", Json{})
+                == after.details.value("material", Json{});
+  }
+  return false;
 }
 
 // PlacementCache
@@ -1063,7 +1107,7 @@ void PlacementTracker::snapshot(const std::vector<mdl::Node*>& nodes)
   {
     for (const auto& issue : zFightingIssues(findZFighting(m_map, &brushes), m_ids))
     {
-      m_zBefore.insert(issue.signature);
+      m_zBefore.push_back(issue);
     }
   }
   if (!brushes.empty() && enabled(UvDistortionCode))
@@ -1071,7 +1115,7 @@ void PlacementTracker::snapshot(const std::vector<mdl::Node*>& nodes)
     for (const auto& issue :
          uvDistortionIssues(facesOf(uvBrushes), m_map, knowledge(), m_ids))
     {
-      m_uvBefore.insert(issue.signature);
+      m_uvBefore.push_back(issue);
     }
   }
   if (!entities.empty() && enabled(ModelPlacementCheck))
@@ -1134,6 +1178,11 @@ PlacementReport PlacementTracker::finish(
     }
   }
 
+  const auto existedBefore =
+    [](const std::vector<McpIssue>& before, const McpIssue& issue) {
+      return std::ranges::any_of(
+        before, [&](const auto& other) { return sameIssue(other, issue); });
+    };
   const auto involvesCreated = [&](const McpIssue& issue) {
     return std::ranges::any_of(
       issue.objectIds, [&](const auto& id) { return createdIds.contains(id); });
@@ -1144,7 +1193,7 @@ PlacementReport PlacementTracker::finish(
   {
     for (auto& issue : zFightingIssues(findZFighting(m_map, &brushes), m_ids))
     {
-      if (involvesCreated(issue) || !m_zBefore.contains(issue.signature))
+      if (involvesCreated(issue) || !existedBefore(m_zBefore, issue))
       {
         report.issues.push_back(std::move(issue));
       }
@@ -1212,7 +1261,7 @@ PlacementReport PlacementTracker::finish(
   {
     for (auto& issue : uvDistortionIssues(facesOf(uvBrushes), m_map, knowledge(), m_ids))
     {
-      if (involvesCreated(issue) || !m_uvBefore.contains(issue.signature))
+      if (involvesCreated(issue) || !existedBefore(m_uvBefore, issue))
       {
         report.issues.push_back(std::move(issue));
       }

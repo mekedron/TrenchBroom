@@ -70,6 +70,20 @@ using namespace schema;
 constexpr auto Epsilon = 0.01;
 /** A point entity whose bounds are this close above a floor stands on it. */
 constexpr auto SupportTolerance = 1.0;
+/** A dropped origin this close to an integer height is rounded to it. */
+constexpr auto DropRoundingEpsilon = 0.01;
+
+/**
+ * Makes the height of a dropped origin an integer, so that no fractions from model
+ * bounds end up in the map: a height within DropRoundingEpsilon of an integer is
+ * rounded, any other height is rounded up so that the bounds do not sink into the
+ * floor (they float less than 1 unit above it instead).
+ */
+double cleanDropHeight(const double z)
+{
+  const auto rounded = std::round(z);
+  return std::abs(z - rounded) <= DropRoundingEpsilon ? rounded : std::ceil(z);
+}
 
 /** Key-value pairs to set; a missing value removes the key. */
 using PropertyList = std::vector<std::pair<std::string, std::optional<std::string>>>;
@@ -303,14 +317,14 @@ std::vector<std::string> entitiesEmptiedBy(
 
 /**
  * The highest floor below the given bounds: vertical rays downwards from the height of
- * the bounds center at the center and the inset corners, against visible brushes and
- * patches that are not triggers.
+ * the bounds center at the center and the inset corners, against brushes and patches
+ * that are not triggers and not in a layer omitted from export (hidden ones count).
  */
 std::optional<RayHit> findFloor(mdl::Map& map, const vm::bbox3d& bounds)
 {
-  const auto& editorContext = map.editorContext();
   const auto accept = [&](const mdl::Node& node) {
-    if (isPointEntity(node) || !editorContext.visible(node))
+    // hidden brushes are compiled, so they are floors too
+    if (isPointEntity(node) || inOmittedLayer(node))
     {
       return false;
     }
@@ -489,7 +503,7 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
         "Move the position above a floor, or find one with ray_pick (direction [0, 0, "
         "-1]).");
     }
-    const auto z = floor->point.z() - localBounds.min.z();
+    const auto z = cleanDropHeight(floor->point.z() - localBounds.min.z());
     movedDown = position.z() - z;
     position[2] = z;
   }
@@ -639,7 +653,9 @@ ToolResult entityCreateBrush(CallContext& context, const Args& args)
           if (!entityNode)
           {
             return context.operationFailed(
-              "The brush entity could not be created.", "Check the editor messages.");
+              "The brush entity could not be created.",
+              "details.editorMessages holds the editor's reason; check that the brushes "
+              "are editable (object_get).");
           }
           return Json::object();
         },
@@ -750,7 +766,9 @@ ToolResult entityMoveBrushes(CallContext& context, const Args& args)
           if (!success)
           {
             return context.operationFailed(
-              "The brushes could not be moved.", "Check the editor messages.");
+              "The brushes could not be moved.",
+              "details.editorMessages holds the editor's reason; check that the brushes "
+              "and the entity are editable (object_get).");
           }
           return Json::object();
         });
@@ -787,51 +805,53 @@ void registerEntityCreateTools(ToolRegistry& registry)
       .title("Create Point Entity")
       .description(
         "Creates a point entity (monster, light, item, player start, ...) with its "
-        "origin at 'position' in the open group or the current layer, and selects it. "
-        "The position is snapped to the grid (snapToGrid). With dropToFloor, the entity "
-        "is lowered (or raised) so that the bottom of its bounds rests on the highest "
-        "floor below it (visible brushes and patches, triggers ignored; rays start at "
-        "the height of the bounds center); no floor fails with INVALID_ARGUMENT. "
-        "'angle' sets the yaw in degrees. Properties are validated against the entity "
-        "definition (warnings only); applyDefaults sets the definition's defaults of "
-        "all other properties. Games that set default properties on creation (e.g. "
-        "Half-Life) add all defaults of the definition, like the editor, including empty "
-        "ones; a null value removes a key. A brush entity class fails (use "
-        "entity_create_brush); an "
-        "unknown class is created anyway with an UNKNOWN_CLASSNAME warning. Warnings: "
-        "ENTITY_OVERLAPS_BRUSHES if the entity intersects solid brushes, "
-        "OUTSIDE_WORLD_BOUNDS, and for entities whose model can be loaded the model "
-        "placement findings of entity_placement_check (MODEL_BELOW_FLOOR, "
-        "MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, MODEL_NO_FLOOR). dropUsing chooses "
-        "the bounds that rest on the floor: \"model\" (the model bounds of the "
-        "animation the properties select, e.g. a sitting pose), \"definition\" (the "
-        "class size) or \"auto\" (the model if it can be loaded). 'onFloor' tells "
-        "whether the entity stands on a floor (within 1 unit). Example: {\"classname\": "
-        "\"monster_ogre\", \"position\": [256, 128, 64], \"angle\": 90, "
-        "\"dropToFloor\": true, \"properties\": {\"spawnflags\": 256}}")
+        "origin at 'position' (map units) in the open group or the current layer, and "
+        "selects it (one undo step). The position is snapped to the grid (snapToGrid). "
+        "With dropToFloor, the entity is lowered (or raised) so that the bottom of its "
+        "bounds (dropUsing) rests on the highest floor below it (brushes, hidden ones "
+        "too, and "
+        "patches, triggers ignored; rays start at the height of the bounds center); the "
+        "dropped z is kept integral (rounded when within 0.01 of an integer, otherwise "
+        "rounded up, so the bounds float less than 1 unit above the floor); no floor "
+        "fails with INVALID_ARGUMENT. Properties are checked against the entity "
+        "definition (warnings only). Games that set default properties on creation "
+        "(e.g. Half-Life) add all defaults of the definition, like the editor; a null "
+        "value removes one. A brush entity class fails (use entity_create_brush); an "
+        "unknown class is created anyway (UNKNOWN_CLASSNAME warning). Placement "
+        "warnings: ENTITY_OVERLAPS_BRUSHES, OUTSIDE_WORLD_BOUNDS and, for loadable "
+        "models, the findings of entity_placement_check (MODEL_BELOW_FLOOR, "
+        "MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, MODEL_NO_FLOOR). Returns the entity "
+        "id, origin, bounds, floor, onFloor (a floor within 1 unit) and all properties. "
+        "Example: {\"classname\": \"monster_ogre\", \"position\": [256, 128, 64], "
+        "\"angle\": 90, \"dropToFloor\": true, \"properties\": {\"spawnflags\": 256}}")
       .input(object({
         field("classname", string().nonEmpty())
           .required()
           .describe("Entity class, e.g. 'info_player_start' (see entity_classes_list)"),
-        field("position", vec3()).required().describe("Origin [x, y, z] of the entity"),
+        field("position", vec3())
+          .required()
+          .describe("Origin [x, y, z] of the entity in map units"),
         propertiesField(),
         field("angle", angle())
           .describe("Yaw in degrees (0 = east / +x, 90 = north / +y); sets 'angle'"),
         field("dropToFloor", boolean().defaultsTo(false))
-          .describe("Place the entity on the floor below the position"),
+          .describe("Move the entity down (or up) until it stands on the floor below the "
+                    "position"),
         field("dropUsing", enumOf({"auto", "model", "definition"}).defaultsTo("auto"))
           .describe(
-            "Bounds that dropToFloor rests on the floor: the model's bounds in its "
-            "current animation, the class size, or auto (model if loadable)"),
+            "Bounds that dropToFloor rests on the floor: 'model' (the model bounds of "
+            "the animation the properties select, e.g. a sitting pose), 'definition' "
+            "(the class size) or 'auto' (the model if it can be loaded)"),
         field("applyDefaults", boolean().defaultsTo(false))
-          .describe("Set the definition's default values of the missing properties"),
+          .describe("Also set the definition's default values of all properties not "
+                    "given"),
         field("snapToGrid", boolean().defaultsTo(true))
           .describe("Snap the position to the grid (x and y; z too unless dropToFloor)"),
       }))
       .output(object({
         field("entity", objectId()).required().describe("Id of the new entity"),
         field("classname", string()).required(),
-        field("origin", vec3()).required(),
+        field("origin", vec3()).required().describe("Origin after snapping and dropping"),
         field("bounds", box()).required(),
         field("floor", any())
           .required()
@@ -856,7 +876,8 @@ void registerEntityCreateTools(ToolRegistry& registry)
       .title("Create Brush Entity")
       .description(
         "Turns brushes (and patches) into a brush entity (func_door, trigger_once, "
-        "func_detail, ...), like the editor's Create Entity menu, and selects them. "
+        "func_detail, ...), like the editor's Create Entity menu, and selects them (one "
+        "undo step). "
         "Brushes that belong to another brush entity are moved out of it; entities that "
         "become empty are removed (removedEntities). If all brushes belong to one "
         "entity, its properties are kept. A point entity class fails (use "
@@ -865,8 +886,8 @@ void registerEntityCreateTools(ToolRegistry& registry)
         "definition (warnings only). Games that set default properties on creation (e.g. "
         "Half-Life) add all defaults of the definition, like the editor, including empty "
         "ones such as a func_breakable's gibmodel; a null value removes a key. Example: "
-        "{\"classname\": \"func_door\", \"ids\": "
-        "[\"brush:1042\"], \"properties\": {\"angle\": -1, \"speed\": 200}}")
+        "{\"classname\": \"func_door\", \"ids\": [\"brush:1042\"], \"properties\": "
+        "{\"angle\": -1, \"speed\": 200}}")
       .input(object({
         field("classname", string().nonEmpty())
           .required()
@@ -880,7 +901,9 @@ void registerEntityCreateTools(ToolRegistry& registry)
       .output(object({
         field("entity", objectId()).required().describe("Id of the new entity"),
         field("classname", string()).required(),
-        field("brushes", array(objectId())).required(),
+        field("brushes", array(objectId()))
+          .required()
+          .describe("Brushes and patches of the new entity"),
         field("bounds", box()).required(),
         field("removedEntities", array(objectId()))
           .required()
@@ -896,7 +919,8 @@ void registerEntityCreateTools(ToolRegistry& registry)
     ToolDef{"entity_move_brushes"}
       .title("Move Brushes to Entity")
       .description(
-        "Moves brushes (and patches) into an existing brush entity, or with entity "
+        "Moves brushes (and patches) into an existing brush entity (one undo step), or "
+        "with entity "
         "\"world\" back to the world (the editor's Make Structural: the brushes move to "
         "the group or layer of the first moved brush, and smart tags matching them are "
         "turned off, e.g. Quake 2 detail content flags are cleared; materials are kept). "

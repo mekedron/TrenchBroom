@@ -20,6 +20,7 @@
 #include "mcp/RegisterAll.h"
 
 #include "mcp/McpServer.h"
+#include "mcp/Prompts.h"
 #include "mcp/Resources.h"
 #include "mcp/tools/ActionTools.h"
 #include "mcp/tools/BrushEditTools.h"
@@ -101,6 +102,7 @@ void registerAll(McpServer& server)
   registerCompileResources(server.resources());
   registerConsoleResources(server.resources());
   registerKnowledgeResources(server.resources());
+  registerPrompts(server.prompts());
 }
 
 } // namespace tb::mcp

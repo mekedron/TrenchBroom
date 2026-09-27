@@ -131,6 +131,19 @@ void withSpaces(
     }
     context.progress(1.0, totalSteps, "Describing the result");
     auto shared = std::make_shared<SpaceMap>(std::move(spaces).value());
+    if (
+      !shared->spaces.empty()
+      && std::ranges::none_of(
+        shared->spaces, [](const auto& space) { return space.hasCore; }))
+    {
+      context.warn(
+        "OPENING_SIZE_TOO_LARGE",
+        fmt::format(
+          "No room is larger than openingSize {} in every direction (usually the "
+          "ceiling height is the smallest), so the rooms are not separated; use a "
+          "smaller openingSize.",
+          roundForOutput(options.openingSize)));
+    }
     context.defer([&context, completion, then, shared, totalSteps]() {
       if (context.cancelled())
       {
@@ -679,8 +692,9 @@ ToolResult freeSpotsResult(CallContext& context, const Args& args, const SpaceMa
       return makeError(
         ErrorCode::ObjectNotFound,
         "Unknown space: " + *spaceId,
-        "Space ids change when the geometry around a space changes; call spaces_list "
-        "for the current ids.",
+        "Space ids change when the geometry around a space changes, and depend on "
+        "cellSize and openingSize: call spaces_list for the current ids and pass the "
+        "same cellSize and openingSize here.",
         {*spaceId});
     }
   }
@@ -1309,26 +1323,35 @@ void registerSpaceTools(ToolRegistry& registry)
   const auto openingSizeField =
     field("openingSize", number().min(8).defaultsTo(96))
       .describe(
-        "Openings whose smaller side is at most this size (doorways, windows) separate "
-        "spaces; larger openings join them into one space");
+        "Openings whose smaller side (usually the width or the height of a doorway) "
+        "is at most this size separate spaces; larger openings join them into one "
+        "space. Rounded down to a multiple of 2 x cellSize (with cell size 16, 96 and "
+        "100 both separate openings up to 96). Must be smaller than the rooms' "
+        "smallest inner dimension (usually their height), otherwise the rooms merge "
+        "(warning OPENING_SIZE_TOO_LARGE). Space ids depend on the segmentation: pass "
+        "the same cellSize and openingSize to every tool that takes a space id");
 
   registry.add(
     ToolDef{"spaces_list"}
       .title("List Spaces")
       .description(
-        "Lists the enclosed spaces (rooms) of the map, found by a flood fill of the "
-        "empty volume at player-size resolution: world, func_group and func_detail "
-        "brushes are solid (tool-only brushes such as clip, hint and trigger are not; "
-        "doors are openings). Each space has a stable id (space:<hash of its bounds>, "
-        "unchanged until the geometry around it changes), its inner bounds, floor and "
-        "ceiling heights (min, max, typical), floor area, volume, sealed (false if it "
-        "is connected to the void outside the map), openings, neighbours, the layers "
-        "and groups inside and object counts. Openings are doorways (reaching the "
-        "floor), windows or holes (in floors) with size, center, bottom height, the "
-        "two space ids (\"void\" for openings to the outside) and func_door entities "
-        "in them. detail: \"full\" also lists the objects inside each space. May take "
-        "a moment on large maps; reports progress and can be cancelled. Example: "
-        "{\"detail\": \"full\"}")
+        "Lists the enclosed spaces (rooms) of the map (read-only), found by a "
+        "flood fill of the empty volume at player-size resolution: world, "
+        "func_group and func_detail brushes are solid (tool brushes such as clip, "
+        "hint and trigger are not; doors are openings). Each space has an id "
+        "(space:<hash of its bounds>, stable until the geometry around it "
+        "changes), inner bounds, floor and ceiling heights (min, max, typical), "
+        "floor area, volume, sealed (false if connected to the void outside the "
+        "map), openings, neighbours, the layers and groups inside and object "
+        "counts. Openings are doorways (reaching the floor), windows or holes (in "
+        "floors) with size, center, bottom height, the two space ids (\"void\" for "
+        "the outside) and the func_door entities in them; outsideOpenings are "
+        "leaks. detail \"full\" also lists the objects in each space. Space ids "
+        "work in free_spots and map_manifest_set (with the same cellSize and "
+        "openingSize, since they depend on the segmentation). Reports progress and can "
+        "be "
+        "cancelled on large maps. Examples: {}; {\"region\": {\"min\": [0, 0, 0], "
+        "\"max\": [1024, 1024, 256]}, \"detail\": \"full\"}")
       .input(object({
         field("region", box()).describe("Only spaces whose bounds intersect this box"),
         cellSizeField,
@@ -1339,8 +1362,8 @@ void registerSpaceTools(ToolRegistry& registry)
           .describe("Maximum number of spaces listed"),
       }))
       .output(object({
-        field("cellSize", number()),
-        field("openingSize", number()),
+        field("cellSize", number()).describe("Analysis cell size used, in map units"),
+        field("openingSize", number()).describe("Opening size used, in map units"),
         field("count", integer()).describe("Number of spaces in the map"),
         field("spaces", array(any()))
           .describe(
@@ -1355,7 +1378,7 @@ void registerSpaceTools(ToolRegistry& registry)
             "space), doors: [entity ids]}; opening ids are only valid in this result"),
         field("outsideOpenings", array(string()))
           .describe("Ids of the openings to the void (leaks)"),
-        field("truncated", boolean()),
+        field("truncated", boolean()).describe("More spaces than limit"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -1366,29 +1389,30 @@ void registerSpaceTools(ToolRegistry& registry)
     ToolDef{"surroundings"}
       .title("Surroundings")
       .description(
-        "Describes what is around a point, as structured data and as a short text: the "
-        "space it is in, the distance to the walls in the 4 compass directions (and the "
-        "diagonals) with the hit face ids and materials, the floor and ceiling below "
-        "and above, and nearby objects (point entities, brush entities, groups) with "
-        "compass direction (+y is north, +x east) and distance. Example: {\"point\": "
-        "[256, 192, 48], \"radius\": 256}")
+        "Describes what is around a point (read-only), as structured data and as a "
+        "short text: the space it is in, the distance to the walls in the 4 "
+        "compass directions (and the diagonals) with the hit face ids and "
+        "materials, the floor and ceiling below and above, and nearby objects "
+        "(point entities, brush entities, groups) with compass direction (+y is "
+        "north, +x east) and distance. Distances are in map units. Example: "
+        "{\"point\": [256, 192, 48], \"radius\": 256}")
       .input(object({
         field("point", vec3()).required().describe("The point to describe"),
         field("radius", number().min(0).defaultsTo(512))
-          .describe("Objects within this distance are listed"),
+          .describe("Objects within this distance (map units) are listed"),
         field("limit", integer().min(0).max(200).defaultsTo(20))
           .describe("Maximum number of objects listed"),
         field("diagonals", boolean().defaultsTo(true))
           .describe("Also cast rays to NE, SE, SW and NW"),
         field("maxDistance", number().min(1).defaultsTo(4096))
-          .describe("Walls farther away count as open"),
+          .describe("Walls farther away (map units) count as open"),
         field("includeSpace", boolean().defaultsTo(true))
           .describe("Find the space of the point (runs the space analysis)"),
         cellSizeField,
         openingSizeField,
       }))
       .output(object({
-        field("point", vec3()),
+        field("point", vec3()).describe("The point described"),
         field("space", any()).describe("{id, bounds, sealed} or null"),
         field("inside", string())
           .describe("space, solid (inside geometry), void, pocket or unknown"),
@@ -1403,7 +1427,7 @@ void registerSpaceTools(ToolRegistry& registry)
         field("objects", array(any()))
           .describe(
             "{id, kind, label, position, distance, direction, dz}, nearest first"),
-        field("objectsTruncated", boolean()),
+        field("objectsTruncated", boolean()).describe("More objects than limit"),
         field("description", string()).describe("The same as a short text"),
       }))
       .mutation(Mutation::None)
@@ -1415,33 +1439,41 @@ void registerSpaceTools(ToolRegistry& registry)
     ToolDef{"free_spots"}
       .title("Find Free Spots")
       .description(
-        "Finds free positions for a box of the given size in a space (from "
-        "spaces_list), a region or the whole map (only inside spaces unless "
-        "includeOutside). placement: floor (standing on a floor; support = fraction of "
-        "the 5 support rays that must hit), wall (the box's back side lies flat on an "
-        "axis-aligned wall face; with rotate, x and y of the size are swapped for walls "
-        "facing along x so that y is always the depth; returns the wall face id, "
-        "normal and the range of bottom heights that fit), ceiling (hanging from it) "
-        "or any (free volume). Every candidate is checked against the real brushes "
-        "(touching surfaces are fine), point entities (with their model bounds) and "
-        "patches. wallDistance and objectDistance keep distance to walls and to other "
-        "objects (entities, brush entities, groups). Results are spread out, or "
-        "nearest to `near`. Each spot has min/max, center, origin (bottom center, "
-        "where a point entity of that size would go) and the clearance on each side. "
-        "Example: {\"size\": [64, 4, 64], \"placement\": \"wall\", \"space\": "
-        "\"space:1a2b3c4d\", \"heightAboveFloor\": 64}")
+        "Finds free positions for a box of the given size (read-only) in a space "
+        "(a spaces_list id), a region or the whole map (only inside spaces unless "
+        "includeOutside). placement: floor (standing on a floor; support = "
+        "fraction of the 5 support rays that must hit), wall (the box's back side "
+        "lies flat on an axis-aligned wall face; with rotate, x and y of the size "
+        "are swapped for walls facing along x so that y is always the depth; "
+        "returns the wall face id, normal and the range of bottom heights that "
+        "fit), ceiling (hanging from it) or any (free volume). Candidates are "
+        "checked against the real brushes (touching is fine), point entities (with "
+        "their model bounds) and patches; wallDistance and objectDistance keep "
+        "distance to walls and to other objects. Results are spread out, or "
+        "nearest to 'near' with sort \"near\". Each spot has min/max, center, "
+        "origin (bottom center, where a point entity of that size goes) and the "
+        "clearance on each side. Example: {\"size\": [64, 4, 64], \"placement\": "
+        "\"wall\", \"space\": \"space:1a2b3c4d\", \"heightAboveFloor\": 64}")
       .input(object({
-        field("size", vec3()).required().describe("Box size [x, y, z]"),
+        field("size", vec3()).required().describe("Box size [x, y, z] in map units"),
         field(
-          "placement", enumOf({"floor", "wall", "ceiling", "any"}).defaultsTo("floor")),
+          "placement", enumOf({"floor", "wall", "ceiling", "any"}).defaultsTo("floor"))
+          .describe(
+            "floor: stands on a floor; wall: back side on a wall; ceiling: hangs from "
+            "it; any: free volume"),
         field("space", string()).describe("A space id from spaces_list"),
         field("region", box()).describe("Only boxes inside this region"),
         field("includeOutside", boolean().defaultsTo(false))
           .describe("Also spots outside all spaces (e.g. on roofs)"),
         field("wallDistance", number().min(0).defaultsTo(0))
-          .describe("Free distance to walls around the box"),
+          .describe(
+            "Free distance to walls around the box (map units): world and func_group "
+            "brushes, and brushes of a group that encloses the spot (a room built as "
+            "a group); other groups count as objects"),
         field("objectDistance", number().min(0).defaultsTo(0))
-          .describe("Free distance to other objects around the box"),
+          .describe("Free distance to other objects (entities, brush entities, groups) "
+                    "around the "
+                    "box (map units)"),
         field("step", number().min(1))
           .describe("Candidate positions are multiples of this (default 8, coarser for "
                     "large regions)"),
@@ -1451,7 +1483,8 @@ void registerSpaceTools(ToolRegistry& registry)
           .describe("wall: swap x and y of the size for walls facing along x"),
         field("heightAboveFloor", number())
           .describe("wall: preferred height of the box bottom above the floor"),
-        field("limit", integer().min(1).max(100).defaultsTo(10)),
+        field("limit", integer().min(1).max(100).defaultsTo(10))
+          .describe("Maximum number of spots returned"),
         field("sort", enumOf({"spread", "near"}))
           .describe("spread (default) or near (needs near)"),
         field("near", vec3()).describe("Prefer spots near this point"),
@@ -1459,16 +1492,16 @@ void registerSpaceTools(ToolRegistry& registry)
         openingSizeField,
       }))
       .output(object({
-        field("placement", string()),
-        field("size", vec3()),
+        field("placement", string()).describe("The placement used"),
+        field("size", vec3()).describe("The box size"),
         field("spots", array(any()))
           .describe(
             "{min, max, center, origin, size, space, floor, clearance {-x, +x, -y, +y, "
             "down, up} (null: more than 1024), wall {face, brush, normal, material, "
             "heightRange}, rotated}"),
-        field("count", integer()),
+        field("count", integer()).describe("Number of spots returned"),
         field("candidates", integer()).describe("Number of candidate boxes checked"),
-        field("step", number()),
+        field("step", number()).describe("The candidate step used, in map units"),
         field("coarsened", boolean())
           .describe("Whether the step was enlarged because the region is large"),
       }))
@@ -1481,44 +1514,52 @@ void registerSpaceTools(ToolRegistry& registry)
     ToolDef{"walkable_plan"}
       .title("Walkable Plan")
       .description(
-        "Draws a top-down plan of where the player can stand and what can be reached "
-        "from the start (default: info_player_start, then info_player_deathmatch; or "
-        "start / from). A cell is walkable if the player's box (the game's player "
-        "size) fits standing on a floor at the cell center; moves between neighbouring "
-        "cells climb up to stepHeight (18), jump up to jumpHeight (45; use 63 for "
-        "Half-Life crouch jumps) or drop down any height. Doors are passable, clip "
-        "brushes and solid brush entities block, water is ignored (its bottom is "
-        "walkable). Legend: S start, . reachable, v reachable only by dropping (no way "
-        "back), D door, , walkable but unreachable, - floor without room for the "
-        "player, # blocked at the start's height, o walkable outside all spaces (roofs), "
-        "' ' no floor. North (+y) is up. "
-        "Also lists unreachable walkable areas and the spaces reached; format image "
-        "adds a PNG of the plan. Example: {\"format\": \"both\"}")
+        "Returns a top-down plan of where the player can stand and what can be "
+        "reached from the start (read-only). Start: 'start' (a point), 'from' (an "
+        "object) or by default info_player_start, then info_player_deathmatch. A "
+        "cell is walkable if the player's box (the game's player size) fits "
+        "standing on a floor at the cell center; moves between neighbouring cells "
+        "climb up to stepHeight, jump up to jumpHeight (use 63 for Half-Life "
+        "crouch jumps) or drop any height. Doors are passable, clip brushes and "
+        "solid brush entities block, water is ignored (its bottom is walkable). "
+        "Legend: S start, . reachable, v reachable only by dropping (no way back), "
+        "D door, , walkable but unreachable, - floor without room for the player, "
+        "# blocked at the start's height, o walkable outside all spaces (roofs), ' "
+        "' no floor. North (+y) is up. Also lists unreachable walkable areas and "
+        "the spaces reached; format \"image\" or \"both\" adds a PNG of the plan. "
+        "Examples: {\"format\": \"both\"}; {\"from\": \"entity:7\", "
+        "\"heightRange\": [0, 256]}")
       .input(object({
         field("start", vec3()).describe("Start point (default: the player start)"),
         field(
           "from", objectId({ObjectKind::Entity, ObjectKind::Brush, ObjectKind::Group}))
           .describe("Start at this object (an entity's origin, else its bounds center)"),
-        field("region", box()).describe("Area to analyze"),
+        field("region", box()).describe("Area to analyze (default: the whole map)"),
         field("cellSize", number().min(2).max(1024))
-          .describe("Plan cell size (default: half the player width, larger for big "
-                    "maps so that the text fits 200 x 200 cells)"),
+          .describe(
+            "Plan cell size in map units (default: half the player width, larger for big "
+            "maps so that the text fits 200 x 200 cells)"),
         field("heightRange", vec2())
           .describe("[min, max] floor heights to show, e.g. one level"),
-        field("stepHeight", number().min(0).defaultsTo(18)),
-        field("jumpHeight", number().min(0).defaultsTo(45)),
-        field("playerWidth", number().min(1)).describe("Default: the game's player size"),
-        field("playerHeight", number().min(1)),
-        field("format", enumOf({"text", "image", "both"}).defaultsTo("text")),
+        field("stepHeight", number().min(0).defaultsTo(18))
+          .describe("Highest step the player walks up (map units)"),
+        field("jumpHeight", number().min(0).defaultsTo(45))
+          .describe("Highest ledge the player jumps up to (map units)"),
+        field("playerWidth", number().min(1))
+          .describe("Player box width in map units. Default: the game's player size"),
+        field("playerHeight", number().min(1))
+          .describe("Player box height in map units. Default: the game's player size"),
+        field("format", enumOf({"text", "image", "both"}).defaultsTo("text"))
+          .describe("text: the character plan; image: a PNG of it; both"),
         field("maxAreas", integer().min(0).max(200).defaultsTo(20))
           .describe("Maximum number of unreachable areas listed"),
         openingSizeField,
       }))
       .output(object({
-        field("text", string()),
-        field("legend", any()),
+        field("text", string()).describe("The plan, rows separated by newlines"),
+        field("legend", any()).describe("{char: meaning} for the characters used"),
         field("origin", vec2()).describe("x, y of the first cell's min corner"),
-        field("cellSize", number()),
+        field("cellSize", number()).describe("Cell size used, in map units"),
         field("columns", integer()),
         field("rows", integer()),
         field("player", any()).describe("{width, height, stepHeight, jumpHeight}"),
@@ -1527,12 +1568,13 @@ void registerSpaceTools(ToolRegistry& registry)
           .describe("Cells where the player can stand inside spaces (or reached)"),
         field("outsideCells", integer())
           .describe("Unreachable cells where the player could stand outside all spaces"),
-        field("reachableCells", integer()),
-        field("oneWayCells", integer()),
+        field("reachableCells", integer()).describe("Cells reachable from the start"),
+        field("oneWayCells", integer())
+          .describe("Cells reachable only by dropping down (no way back)"),
         field("reachableArea", number()).describe("Area of the reachable cells"),
         field("unreachableAreas", array(any()))
           .describe("{cells, area, bounds, position, space}, largest first"),
-        field("spacesReached", array(string())),
+        field("spacesReached", array(string())).describe("Ids of the spaces reached"),
         field("image", any()).describe("{width, height, format, pixelsPerCell}"),
       }))
       .mutation(Mutation::None)

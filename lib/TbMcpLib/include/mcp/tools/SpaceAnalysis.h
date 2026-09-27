@@ -218,7 +218,10 @@ struct SpaceOptions
   double cellSize = 0.0;
   /**
    * Openings (doorways, windows) whose smaller side is at most this size separate
-   * spaces; wider openings join them.
+   * spaces; wider openings join them. The size is rounded down to a multiple of twice
+   * the cell size (the erosion distance is openingSize / cellSize / 2 cells, rounded
+   * down). Rooms whose smallest inner dimension (usually the height) is not larger
+   * than that have no core and merge with their neighbours.
    */
   double openingSize = 96.0;
   size_t maxCells = 4'000'000;
@@ -254,6 +257,11 @@ struct SpaceGeometry
   double volume = 0.0;
   /** False if the space is connected to the void outside the map. */
   bool sealed = true;
+  /**
+   * Whether the space grew from a room core; false for passages and pockets, which
+   * are narrower than openingSize in every direction.
+   */
+  bool hasCore = true;
   /** Indices into SpaceMap::openings. */
   std::vector<size_t> openings;
   /** Indices of neighbouring spaces. */
@@ -378,7 +386,11 @@ struct FreeSpotOptions
   std::optional<vm::bbox3d> region = std::nullopt;
   /** Also spots outside all spaces (in the void). */
   bool includeOutside = false;
-  /** Free distance to walls (space-solid brushes that are not in groups). */
+  /**
+   * Free distance to walls: space-solid world and func_group brushes; brushes in a group
+   * only if the group's bounds contain the candidate's center (a room built as a group),
+   * otherwise they are objects.
+   */
   double wallDistance = 0.0;
   /** Free distance to other objects (point entities, brush entities, groups). */
   double objectDistance = 0.0;

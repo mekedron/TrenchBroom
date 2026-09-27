@@ -25,18 +25,21 @@
 #include "mcp/JsonRpc.h"
 #include "mcp/McpToolFixture.h"
 #include "mdl/BrushNode.h"
+#include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameManager.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_NodeVisibility.h"
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
 #include <algorithm>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -46,6 +49,9 @@ namespace tb::mcp
 {
 namespace
 {
+
+const auto ModelCodes = Json::array(
+  {"MODEL_BELOW_FLOOR", "MODEL_FLOATING", "MODEL_PENETRATES_BRUSHES", "MODEL_NO_FLOOR"});
 
 mdl::Node* findNode(
   mdl::Node& node, const std::function<bool(const mdl::Node&)>& predicate)
@@ -242,6 +248,17 @@ TEST_CASE("MapCheckTools")
 
       // an info_null in a wall and standing entities are fine
       CHECK(!findingFor(result, "ENTITY_IN_SOLID", infoNull));
+
+      // logic entities work anywhere, also inside a wall
+      const auto buried =
+        fixture
+          .call(
+            "entity_create_point",
+            {{"classname", "trigger_relay"},
+             {"position", {384, 300, 96}},
+             {"properties", {{"targetname", "buried"}}}})["result"]["entity"]
+          .get<std::string>();
+      CHECK(findingsAbout(check(fixture, {"placement"}), buried).empty());
       CHECK(!findingFor(result, "ENTITY_IN_SOLID", dog));
       CHECK(!findingFor(result, "ENTITY_IN_SOLID", roomLight));
 
@@ -275,6 +292,21 @@ TEST_CASE("MapCheckTools")
       CHECK(findingsAbout(check(fixture, {"placement"}), soldier).empty());
     }
 
+    SECTION("hidden floors count")
+    {
+      // the compiler builds hidden objects, so the dog still stands on the floor
+      auto* floor = findNode(map.worldNode(), [](const mdl::Node& node) {
+        const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(&node);
+        return brushNode && brushNode->logicalBounds().max.z() == 0.0;
+      });
+      REQUIRE(floor);
+      mdl::hideNodes(map, {floor});
+      REQUIRE_FALSE(map.editorContext().visible(*floor));
+      const auto hidden = check(fixture, {"placement"});
+      CHECK(findingsAbout(hidden, dog).empty());
+      CHECK(findingFor(hidden, "ENTITY_FLOATING", soldier));
+    }
+
     SECTION("model placement")
     {
       fixture.call(
@@ -295,9 +327,26 @@ TEST_CASE("MapCheckTools")
       const auto below = createPerson({200, 100, 10});
       const auto penetrating = createPerson({310, 300, 24});
       const auto noFloor = createPerson({-200, 300, 24});
+      // a light with a model that floats and reaches into the ceiling
+      const auto lamp = fixture
+                          .call(
+                            "entity_create_point",
+                            {{"classname", "light_lamp"},
+                             {"position", {200, 200, 170}},
+                             {"snapToGrid", false}})["result"]["entity"]
+                          .get<std::string>();
 
       const auto models = check(fixture, {"placement"});
       CHECK(findingsAbout(models, standing).empty());
+
+      // lights get no model checks, in map_check and issues_list alike
+      CHECK(findingsAbout(models, lamp).empty());
+      CHECK(
+        fixture.call("issues_list", {{"codes", ModelCodes}, {"ids", {lamp}}})["total"]
+        == 0);
+      CHECK(
+        fixture.call("issues_list", {{"codes", ModelCodes}, {"ids", {floating}}})["total"]
+        == 1);
 
       const auto* floats = findingFor(models, "MODEL_FLOATING", floating);
       REQUIRE(floats);
@@ -418,6 +467,9 @@ TEST_CASE("MapCheckTools")
       const auto* broken = findingFor(similar, "LINK_TARGET_MISSING", trigger);
       REQUIRE(broken);
       CHECK((*broken)["details"]["similar"] == "door2");
+      CHECK_THAT(
+        (*broken)["description"].get<std::string>(),
+        Catch::Matchers::EndsWith("did you mean 'door2'?"));
       CHECK((*broken)["suggestedFix"]["tool"] == "entity_properties_set");
       applyFix(fixture, *broken);
       CHECK(!findingFor(check(fixture, {"links"}), "LINK_TARGET_MISSING", trigger));
@@ -541,10 +593,46 @@ TEST_CASE("MapCheckTools")
       const auto* outside = findingFor(leaking, "ENTITY_OUTSIDE_HULL", dog);
       REQUIRE(outside);
       CHECK((*outside)["details"]["gap"].is_object());
-      CHECK((*outside)["suggestedFix"]["tool"].is_null());
+      // a missing wall is no hole that one box seals
+      CHECK((*outside)["suggestedFix"].is_null());
       CHECK_THAT(
-        (*outside)["suggestedFix"]["description"].get<std::string>(),
-        Catch::Matchers::StartsWith("Seal the gap from ("));
+        (*outside)["description"].get<std::string>(),
+        Catch::Matchers::ContainsSubstring("no suggested fix"));
+
+      SECTION("a hole in the wall")
+      {
+        // the west wall (x -16..0) again, with a 64 x 64 hole
+        for (const auto& [min, max] : std::vector<std::pair<Json, Json>>{
+               {{-16, 0, 0}, {0, 160, 192}},
+               {{-16, 224, 0}, {0, 384, 192}},
+               {{-16, 160, 0}, {0, 224, 64}},
+               {{-16, 160, 128}, {0, 224, 192}},
+             })
+        {
+          fixture.call("brush_create_box", {{"min", min}, {"max", max}});
+        }
+        const auto holed = check(fixture, {"rooms"});
+        const auto* hole = findingFor(holed, "ENTITY_OUTSIDE_HULL", dog);
+        REQUIRE(hole);
+        const auto& fix = (*hole)["suggestedFix"];
+        REQUIRE(fix.is_object());
+        CHECK(fix["tool"] == "brush_create_box");
+        // the hole plus a cell of rim, recessed by a unit into the wall
+        CHECK(fix["args"]["min"][0] == -15);
+        CHECK(fix["args"]["max"][0] == -1);
+        CHECK(fix["args"]["min"][1].get<double>() <= 160);
+        CHECK(fix["args"]["max"][1].get<double>() >= 224);
+        CHECK(fix["args"]["min"][2].get<double>() <= 64);
+        CHECK(fix["args"]["max"][2].get<double>() >= 128);
+        CHECK(
+          fix["args"]["max"][1].get<double>() - fix["args"]["min"][1].get<double>()
+          <= 96);
+        CHECK(fix["args"].contains("material"));
+
+        applyFix(fixture, *hole);
+        CHECK(findings(check(fixture, {"rooms"}), "ENTITY_OUTSIDE_HULL").size() == 1);
+        CHECK(!findingFor(check(fixture, {"rooms"}), "ENTITY_OUTSIDE_HULL", dog));
+      }
     }
 
     SECTION("ENTITY_OUTSIDE_SPACES")

@@ -1028,18 +1028,19 @@ Schema itemSchema()
     field("path", string()).required(),
     field("type", string()),
     field("value", any()),
-    field("modified", boolean()),
+    field("modified", boolean()).describe("Whether the value differs from the default"),
     field("category", string()),
     field("description", string()),
     field("allowedValues", array(any())),
     field("minimum", number()),
     field("maximum", number()),
-    field("secret", boolean()),
+    field("secret", boolean()).describe("The value is hidden (e.g. the access token)"),
     field("default", any()),
-    field("persistence", string()),
-    field("source", string()),
-    field("note", string()),
-    field("lockedReason", string()),
+    field("persistence", string()).describe("full: persistent, transient or readOnly"),
+    field("source", string())
+      .describe("full: editor, game (game configuration) or host (editor-only settings)"),
+    field("note", string()).describe("E.g. that a change needs a restart"),
+    field("lockedReason", string()).describe("Why agents cannot change it, if so"),
   });
 }
 
@@ -1060,7 +1061,9 @@ void registerPreferenceTools(ToolRegistry& registry)
         "value forms: bool, int, float, string, path (string), color (\"#RRGGBB\" or "
         "\"#RRGGBBAA\"), shortcuts (array of portable key sequences such as "
         "\"Ctrl+Shift+K\"). detail 'full' adds the default, persistence, source and "
-        "notes. Example: {\"category\": \"view\"} or {\"query\": \"grid\"}")
+        "notes. Read-only; change values with preferences_set. Examples: "
+        "{\"category\": \"view\"}; {\"query\": \"grid\"}; {\"prefix\": "
+        "\"Games/Quake/\", \"modifiedOnly\": true, \"detail\": \"full\"}")
       .input(object({
         field("paths", array(string()))
           .describe("Exact preference paths, e.g. [\"Map view/Show edges\"]"),
@@ -1082,7 +1085,8 @@ void registerPreferenceTools(ToolRegistry& registry)
         field("items", array(itemSchema())).required(),
         field("total", integer()).required(),
         field("nextCursor", any()),
-        field("stale", boolean()),
+        field("stale", boolean())
+          .describe("Whether the list may have changed since the cursor was issued"),
         field("categories", any())
           .describe("Number of preferences per category (unfiltered)"),
       }))
@@ -1109,8 +1113,11 @@ void registerPreferenceTools(ToolRegistry& registry)
         "View\": [\"Ctrl+M\"]}, \"reset\": [\"Controls/Camera/Field of vision\"]}")
       .input(object({
         field("values", object({}).allowAdditionalProperties())
-          .describe("Preference path -> new value"),
-        field("reset", array(string())).describe("Preference paths to reset to defaults"),
+          .describe(
+            "Preference path (as preferences_get lists it) -> new value in the forms of "
+            "preferences_get"),
+        field("reset", array(string()))
+          .describe("Preference paths to restore to their defaults"),
       }))
       .output(object({
         field(
@@ -1119,10 +1126,11 @@ void registerPreferenceTools(ToolRegistry& registry)
             field("path", string()).required(),
             field("type", string()),
             field("value", any()),
-            field("previous", any()),
+            field("previous", any()).describe("The value before the call"),
             field("changed", boolean()),
-            field("note", string()),
-            field("conflicts", array(any())),
+            field("note", string()).describe("E.g. that the change needs a restart"),
+            field("conflicts", array(any()))
+              .describe("Other actions that use the same shortcut"),
           })))
           .required(),
         field("wouldDo", string().describe("Dry run only: what the call would do")),

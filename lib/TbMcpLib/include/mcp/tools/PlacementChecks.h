@@ -107,7 +107,27 @@ struct McpIssue
   std::string signature = {};
   /** All objects involved (the objectId first). */
   std::vector<std::string> objectIds = {};
+  /**
+   * The plane of the face the issue is about (Z_FIGHTING, UV_ASPECT_DISTORTION), for
+   * sameIssue.
+   */
+  std::optional<vm::plane3d> plane = std::nullopt;
 };
+
+/** Face planes whose normals differ by at most this angle (degrees) match. */
+constexpr auto SameIssueMaxAngle = 10.0;
+/** Z-fighting planes whose distances differ by at most this (units) match. */
+constexpr auto SameIssueMaxDistance = 1.0;
+
+/**
+ * Whether an issue found after a change is one found before it. The signatures contain
+ * the face plane, which changes slightly when a call snaps vertices or splits a face,
+ * although the problem stays. So issues about a face match if they have the same code
+ * and objects (Z_FIGHTING: both brushes; UV_ASPECT_DISTORTION: the brush and the
+ * material) and their plane normals differ by at most SameIssueMaxAngle (Z_FIGHTING: and
+ * the distances by at most SameIssueMaxDistance); other issues match by signature.
+ */
+bool sameIssue(const McpIssue& before, const McpIssue& after);
 
 // Z-fighting
 
@@ -170,8 +190,10 @@ std::vector<McpIssue> leakIssues(const LeakReport& report, const IdRegistry& ids
 
 /**
  * The model placement findings (checkModelPlacement) of the given point entities whose
- * models can be loaded, as issues with the finding code; details: {modelBounds,
- * distance?, suggestedMove?, surface, relatedIds}.
+ * models can be loaded and that the placement rule checks (checksModelPlacement: standing
+ * classes, no sprites; MODEL_FLOATING and MODEL_NO_FLOOR not for entities that may
+ * float), as issues with the finding code; details: {modelBounds, distance?,
+ * suggestedMove?, surface, relatedIds}. map_check uses the same rule.
  */
 std::vector<McpIssue> modelPlacementIssues(
   mdl::Map& map,
@@ -259,7 +281,7 @@ struct PlacementReport
 /**
  * Tracks the placement problems a call introduces, like ChangeCollector tracks editor
  * issues: the findings of objects are snapshotted before they change or are removed, and
- * the findings after the call that were not there before are introduced.
+ * the findings after the call that were not there before (sameIssue) are introduced.
  *
  * - Z-fighting: pairs involving created or modified brushes; before = the pairs of the
  *   brushes that changed or were removed, snapshotted before the change.
@@ -288,11 +310,11 @@ private:
   /** The canonical ids of the nodes added during the call. */
   std::unordered_set<std::string> m_added;
   std::unordered_set<std::string> m_zSnapshotted;
-  std::unordered_set<std::string> m_zBefore;
+  std::vector<McpIssue> m_zBefore;
   std::unordered_set<std::string> m_entitiesSnapshotted;
   std::unordered_set<std::string> m_placementBefore;
   std::unordered_set<std::string> m_uvSnapshotted;
-  std::unordered_set<std::string> m_uvBefore;
+  std::vector<McpIssue> m_uvBefore;
   /** The leak signatures before the call; nullopt if unknown. */
   std::optional<std::unordered_set<std::string>> m_leaksBefore;
   bool m_leaksBeforeEnclosed = false;

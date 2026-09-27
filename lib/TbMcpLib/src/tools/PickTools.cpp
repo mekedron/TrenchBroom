@@ -325,25 +325,35 @@ void registerPickTools(ToolRegistry& registry)
     ToolDef{"view_pick"}
       .title("Pick in Snapshot")
       .description(
-        "Tells what a pixel of a snapshot shows: the object, the face (brush:12/face:3 "
-        "and its index), the hit point, the surface normal, the distance from the "
-        "camera, "
-        "and the object's classname or group name, group, layer and bounds. Uses the "
-        "snapshot's camera and picks only objects the snapshot drew (its hidden objects, "
-        "hideTags, hideClassnames and isolate apply) in the current map; includeHidden "
-        "picks any object. snapshot is the snapshotId of view_snapshot, "
-        "view_snapshots_around, map_plan_view (image), view_snapshot_compare (after "
-        "image) or view_snapshot_user, or a keepAs name; the last 32 snapshot ids are "
-        "remembered per session. Pixel (0, 0) is the top left corner. Returns hit: null "
-        "where the image shows only the background. Example: {\"snapshot\": \"snap:3\", "
-        "\"pixel\": {\"x\": 512, \"y\": 400}}")
+        "Returns what pixels of a snapshot show (read-only): the object, face id "
+        "('brush:12/face:3') and index, hit point, surface normal, distance and depth "
+        "from the camera, classname or group name, group, layer and bounds. Arguments: "
+        "'snapshot' is the snapshotId string returned by view_snapshot, "
+        "view_snapshots_around, map_plan_view (image), view_snapshot_compare or "
+        "view_snapshot_user (the last 32 per session), or a keepAs name; pass either "
+        "'pixel' as one {x, y} object or 'pixels' as a list of {x, y} objects (at most "
+        "256; not [x, y] pairs). Pixels count from (0, 0) at the top left corner. Picks "
+        "only what the snapshot drew (its hidden objects, hideTags, hideClassnames and "
+        "isolate apply; includeHidden picks anything) in the current map, so objects "
+        "changed since the snapshot are picked as they are now. hit is null where the "
+        "image shows only the background. Examples: {\"snapshot\": \"snap:3\", "
+        "\"pixel\": {\"x\": 512, \"y\": 400}}; {\"snapshot\": \"snap:3\", \"pixels\": "
+        "[{\"x\": 100, \"y\": 200}, {\"x\": 640, \"y\": 380}], \"kinds\": [\"brush\"]}")
       .input(object({
         field("snapshot", string().nonEmpty())
           .required()
-          .describe("A snapshotId (e.g. \"snap:3\") or a keepAs name"),
-        field("pixel", pixelSchema).describe("One pixel"),
-        field("pixels", array(pixelSchema).nonEmpty().maxSize(MaxPixels))
-          .describe(fmt::format("Several pixels (at most {})", MaxPixels)),
+          .describe(
+            "The snapshotId of a snapshot (e.g. \"snap:3\") or a view_snapshot keepAs "
+            "name"),
+        field("pixel", pixelSchema)
+          .describe("One pixel as {x, y}; excludes pixels. The result has hit"),
+        field(
+          "pixels",
+          array(pixelSchema.describe("A pixel as {x, y}")).nonEmpty().maxSize(MaxPixels))
+          .describe(fmt::format(
+            "Several pixels as [{{x, y}}, ...] (at most {}); excludes pixel. The result "
+            "has picks",
+            MaxPixels)),
         field("includeHidden", boolean().defaultsTo(false))
           .describe("Also pick objects that the snapshot did not draw"),
         field("ignoreTriggers", boolean().defaultsTo(false))
@@ -351,22 +361,24 @@ void registerPickTools(ToolRegistry& registry)
         field("ignorePointEntities", boolean().defaultsTo(false))
           .describe("Look through point entities"),
         field("kinds", array(enumOf({"brush", "entity", "patch"})))
-          .describe("Only pick these kinds of objects"),
-        field("ignore", array(objectId())).describe("Look through these objects"),
+          .describe("Only pick these kinds of objects (entity: point entities)"),
+        field("ignore", array(objectId()))
+          .describe(
+            "Look through these objects (and the members of entities and groups)"),
         field("maxDistance", number().min(0))
-          .describe("Ignore hits farther from the camera"),
+          .describe("Ignore hits farther from the camera (map units)"),
       }))
       .output(object({
-        field("snapshot", string()),
-        field("width", integer()),
-        field("height", integer()),
+        field("snapshot", string()).describe("The snapshot argument"),
+        field("width", integer()).describe("Image width in pixels"),
+        field("height", integer()).describe("Image height in pixels"),
         field("camera", any()).describe("The snapshot's camera"),
         field("hit", any()).describe("With pixel: the hit of that pixel, or null"),
         field("picks", array(any()))
           .describe(
-            "{pixel: {x, y}, ray: {origin, direction}, hit: {object, kind, label, face, "
-            "faceIndex, material, normal, point, distance, depth, entity, classname, "
-            "group, layer, bounds} | null} per pixel"),
+            "One per pixel, in order: {pixel: {x, y}, ray: {origin, direction}, hit: "
+            "{object, kind, label, face, faceIndex, material, normal, point, distance, "
+            "depth, entity, classname, group, layer, bounds} | null}"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)

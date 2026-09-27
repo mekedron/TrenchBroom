@@ -129,10 +129,10 @@ Json scopeJson(const KnowledgeScope& scope, const std::string& level)
 Schema scopeSchema()
 {
   return object({
-    field("game", string()).required(),
+    field("game", string()).required().describe("The document's game"),
     field("mod", any()).required().describe("The document's most specific mod or null"),
     field("path", string()).required().describe("The knowledge folder"),
-    field("level", enumOf({"game", "mod"})),
+    field("level", enumOf({"game", "mod"})).describe("The level read or written"),
   });
 }
 
@@ -383,7 +383,9 @@ Result<std::vector<std::filesystem::path>, ToolError> listMapFiles(
   if (error)
   {
     return makeError(
-      ErrorCode::IoError, fmt::format("Could not list {}: {}", folder, error.message()));
+      ErrorCode::IoError,
+      fmt::format("Could not list {}: {}", folder, error.message()),
+      "Check that the folder exists and is readable, or pass another folder.");
   }
   if (files.empty())
   {
@@ -998,12 +1000,12 @@ Schema noteSchema()
 {
   return object({
     field("material", string()).required(),
-    field("kind", string()),
+    field("kind", string()).describe("panel, tile, trim, decal, sky, liquid or tool"),
     field("scale", array(number())).describe("[u, v]"),
-    field("faceSize", array(number())).describe("[width, height] in world units"),
-    field("text", string()),
+    field("faceSize", array(number())).describe("[width, height] in map units"),
+    field("text", string()).describe("Free advice"),
     field("updated", string()).describe("ISO time of the last change"),
-    field("scope", enumOf({"game", "mod"})),
+    field("scope", enumOf({"game", "mod"})).describe("The level the note is stored at"),
   });
 }
 
@@ -1017,24 +1019,21 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
     ToolDef{"material_corpus_scan"}
       .title("Scan Material Corpus")
       .description(
-        "Learns how the game's materials are meant to lie from reference maps (e.g. the "
-        "original game's map sources): reads every map file in 'folder' (subfolders "
-        "too unless recursive is false; pattern default \"*.map\") without opening it, "
-        "and collects per material: scales, face sizes, texel extents, repeat counts, "
-        "rotations and how often the texture is aligned to the face edges. Texture "
-        "sizes come from the document's loaded materials (load the game's WADs / "
-        "texture collections first; without a size, repeats and alignment are not "
-        "recorded). The statistics are stored for the document's game and mod "
-        "(scope.path/corpus.json) and used by material_usage, uv_check and the fit "
-        "tools. mode \"replace\" (default) replaces the stored corpus, \"merge\" adds "
-        "to it. Files that cannot be parsed are listed in files.failed. Reports "
-        "progress per file and can be cancelled (nothing is written then). Example: "
-        "{\"folder\": \"/home/me/hl/mapsrc\"} -> {\"scope\": {\"game\": \"Half-Life\", "
-        "\"mod\": \"valve\", \"path\": \"...\"}, \"files\": {\"total\": 132, "
-        "\"scanned\": 131, \"failed\": [{\"path\": \"...\", \"message\": \"...\"}]}, "
-        "\"faces\": 250000, \"materials\": 1800, \"topMaterials\": [{\"name\": "
-        "\"LAB1_W4GRAY\", \"samples\": 4100, \"kind\": \"tile\", \"typicalScale\": [1, "
-        "1], ...}], \"written\": true}")
+        "Learns how the game's materials are meant to be applied from reference "
+        "maps (e.g. the original game's map sources). Not undoable: writes "
+        "corpus.json in the knowledge folder of the document's game and mod "
+        "(scope.path). Reads every map file in 'folder' matching 'pattern' "
+        "(subfolders too unless recursive is false) without opening it, and "
+        "collects per material: scales, face sizes, texel extents, repeat counts, "
+        "rotations and how often the texture is aligned to face edges. Texture "
+        "sizes come from the document's loaded materials, so load the game's WADs "
+        "/ texture collections first (without a size, repeats and alignment are "
+        "not recorded). mode \"replace\" replaces the stored corpus, \"merge\" "
+        "adds to it. material_usage, uv_check, uv_align \"typical\" and "
+        "material_fit_geometry use the result. Returns file counts (files.failed "
+        "lists unparsable files), faces, materials and the 20 topMaterials. "
+        "Reports progress per file; cancelling writes nothing. Example: "
+        "{\"folder\": \"/home/me/hl/mapsrc\", \"mode\": \"merge\"}")
       .input(object({
         field("folder", string().nonEmpty())
           .required()
@@ -1049,7 +1048,7 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
       }))
       .output(object({
         field("scope", scopeSchema()).required(),
-        field("mode", string()).required(),
+        field("mode", string()).required().describe("replace or merge"),
         field("files", any())
           .required()
           .describe("{total, scanned, failed: [{path, message}]}"),
@@ -1067,7 +1066,9 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
         field("corpus", any())
           .required()
           .describe("The stored corpus after the scan: {path, files, faces, materials}"),
-        field("written", boolean()).required(),
+        field("written", boolean())
+          .required()
+          .describe("Whether corpus.json was written"),
         field("wouldDo", string()).describe("Dry run only: what the call would do"),
       }))
       .mutation(Mutation::External)
@@ -1078,24 +1079,22 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
     ToolDef{"material_notes_get"}
       .title("Get Material Notes")
       .description(
-        "Lists the stored notes about materials of the document's game and mod: kind, "
-        "scale, faceSize and text, written with material_notes_set. scope "
-        "\"effective\" (default) merges game-level notes with the mod's notes (a mod "
-        "note replaces the game note of the same material); \"game\" or \"mod\" list "
-        "one level. 'filter' is a case-insensitive substring or a glob ('*', '?'). "
-        "Example: {\"filter\": \"lab1_*\"} -> {\"items\": [{\"material\": "
-        "\"LAB1_GAD2\", \"kind\": \"panel\", \"scale\": [0.5, 0.5], \"text\": \"a "
-        "wall panel\", \"updated\": \"2026-09-27T10:15:00Z\", \"scope\": \"game\"}], "
-        "\"total\": 1, \"nextCursor\": null, \"scope\": {\"game\": \"Half-Life\", "
-        "\"mod\": null, \"path\": \"...\", \"level\": \"game\"}}")
+        "Lists the stored notes about materials of the document's game and mod "
+        "(read-only): kind, scale, faceSize and text, as written with "
+        "material_notes_set. scope \"effective\" merges game-level notes with the "
+        "mod's notes (a mod note replaces the game note of the same material); "
+        "\"game\" or \"mod\" list one level. 'filter' is a case-insensitive "
+        "substring or glob ('*', '?'). Returns items, total and the knowledge "
+        "folder (scope). Example: {\"filter\": \"lab1_*\"}")
       .input(object({
         field("filter", string().nonEmpty()).describe("Material name substring or glob"),
         field("scope", enumOf({"effective", "game", "mod"}))
           .defaultsTo("effective")
-          .describe("Which notes to list"),
+          .describe(
+            "effective: game notes merged with the mod's notes; game or mod: one level"),
       }))
       .output(object({
-        field("items", array(noteSchema())).required(),
+        field("items", array(noteSchema())).required().describe("The notes"),
         field("total", integer()).required(),
         field("nextCursor", any()).required(),
         field("scope", scopeSchema()).required(),
@@ -1110,56 +1109,59 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
     ToolDef{"material_notes_set"}
       .title("Set Material Notes")
       .description(
-        "Stores explicit facts about materials for the document's game or mod; they "
-        "override all statistics in material_usage, uv_check and the fit tools. Per "
-        "note: kind ("
-        + kdl::str_join(kinds, ", ")
-        + "), scale (a number or [u, v]), faceSize ([width, height] in world units "
-          "that the material is made for), text (free advice); omitted values stay "
-          "as they are, 'clear' removes values, remove: true deletes the note. scope "
-          "\"game\" applies to all mods, \"mod\" only to the document's most specific "
-          "mod (default: the mod if the document has one, else the game); a mod note "
-          "replaces the game note of the same material. Not undoable. Example: "
-          "{\"notes\": [{\"material\": \"LAB1_GAD2\", \"kind\": \"panel\", \"scale\": "
-          "0.5, \"text\": \"wall panel, fit 1x1\"}], \"scope\": \"game\"} -> "
-          "{\"scope\": {...}, \"set\": [{\"material\": \"LAB1_GAD2\", \"kind\": "
-          "\"panel\", \"scale\": [0.5, 0.5], ...}], \"removed\": [], \"total\": 1}")
+        "Stores explicit facts about materials for the document's game or mod; "
+        "they override all statistics in material_usage, uv_check and the fit "
+        "tools. Not undoable: writes a notes file in the knowledge folder. Per "
+        "note: kind, scale (a number or [u, v]), faceSize ([width, height] in map "
+        "units the material is made for), text (free advice); omitted values stay, "
+        "'clear' removes values, remove: true deletes the note. scope \"game\" "
+        "applies to all mods, \"mod\" only to the document's most specific mod "
+        "(default: the mod if the document has one, else the game); a mod note "
+        "replaces the game note of the same material. Returns the notes as stored. "
+        "Example: {\"notes\": [{\"material\": \"LAB1_GAD2\", \"kind\": \"panel\", "
+        "\"scale\": 0.5, \"text\": \"wall panel, fit 1x1\"}], \"scope\": \"game\"}")
       .input(object({
         field(
           "notes",
-          array(object({
-                  field("material", string().nonEmpty())
-                    .required()
-                    .describe("Material name (case-insensitive)"),
-                  field("kind", enumOf(kinds)),
-                  field(
-                    "scale",
-                    oneOf({
-                      number().withCheck([](const Json& value) {
-                        return value.get<double>() > 0.0
-                                 ? std::nullopt
-                                 : std::optional<std::string>{"must be greater than 0"};
-                      }),
-                      positiveVec2(),
-                    }))
-                    .describe("The scale to use: a number for both axes or [u, v]"),
-                  field("faceSize", positiveVec2())
-                    .describe("[width, height] in world units the material is made for"),
-                  field("text", string()).describe("Free advice for this material"),
-                  field("clear", array(enumOf({"kind", "scale", "faceSize", "text"})))
-                    .describe("Values to remove from the note"),
-                  field("remove", boolean()).describe("Delete the whole note"),
+          array(
+            object({
+              field("material", string().nonEmpty())
+                .required()
+                .describe("Material name (case-insensitive)"),
+              field("kind", enumOf(kinds))
+                .describe("panel: fit to its face; tile: seamless, repeats freely; trim: "
+                          "fitted across, repeated along; decal, sky, liquid, tool"),
+              field(
+                "scale",
+                oneOf({
+                  number().withCheck([](const Json& value) {
+                    return value.get<double>() > 0.0
+                             ? std::nullopt
+                             : std::optional<std::string>{"must be greater than 0"};
+                  }),
+                  positiveVec2(),
                 }))
+                .describe("The scale to use: a number for both axes or [u, v]"),
+              field("faceSize", positiveVec2())
+                .describe("[width, height] in world units the material is made for"),
+              field("text", string()).describe("Free advice for this material"),
+              field("clear", array(enumOf({"kind", "scale", "faceSize", "text"})))
+                .describe("Values to remove from the note"),
+              field("remove", boolean()).describe("Delete the whole note"),
+            }))
             .nonEmpty()
             .maxSize(500))
-          .required(),
+          .required()
+          .describe("The notes to store, one per material (at most 500)"),
         field("scope", enumOf({"game", "mod"}))
           .describe("Default: \"mod\" if the document has a mod, else \"game\""),
       }))
       .output(object({
         field("scope", scopeSchema()).required(),
         field("set", array(noteSchema())).required().describe("The notes as stored"),
-        field("removed", array(string())).required(),
+        field("removed", array(string()))
+          .required()
+          .describe("Materials whose note was deleted"),
         field("total", integer()).required().describe("Notes stored at this level"),
         field("wouldDo", string()).describe("Dry run only: what the call would do"),
       }))
@@ -1172,31 +1174,25 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
     ToolDef{"material_usage"}
       .title("Material Usage Profile")
       .description(
-        "How materials should be applied: for each material its kind (panel: fit to "
-        "its face, do not repeat; tile: seamless, repeats freely; trim: fitted across, "
-        "repeated along; decal, sky, liquid, tool), typical scale per axis, scale "
-        "range (10th-90th percentile and extremes), texel density (world units per "
-        "texel), typical face size, typical repeats, whole-repeat and aligned "
-        "fractions, the texture size and an image analysis (seamless per axis, "
-        "transparency). Each value has its source and sample count; sources by "
-        "priority: \"notes\" (material_notes_set) > \"config\" (the game's smart tags; "
-        "sky, liquid and tool kinds) > \"corpus\" (material_corpus_scan) > \"map\" "
-        "(the current map) > \"name\" (sky/liquid names) > \"image\"; a scale without "
-        "data is the game's default (\"config\"). 'materials' are names or globs "
-        "('*', '?'; matched against loaded and used materials, an exact name first, a "
-        "pattern that matches nothing is looked up as a name; at most 50 results); "
-        "default: the materials of the selected faces or brushes, else the 20 most "
-        "used materials of the map (without the empty material). Example: "
-        "{\"materials\": [\"LAB1_GAD2\"]} -> "
-        "{\"profiles\": [{\"name\": \"LAB1_GAD2\", \"loaded\": true, \"textureSize\": "
-        "[64, 64], \"mapUsage\": 3, \"kind\": {\"value\": \"panel\", \"source\": "
-        "\"corpus\", \"samples\": 58}, \"typicalScale\": {\"value\": [0.5, 0.5], "
-        "\"source\": \"corpus\", \"samples\": 58}, \"typicalFaceSize\": {\"value\": "
-        "[32, 32], ...}, ...}], \"materialsFrom\": \"arguments\", \"matched\": 1, "
-        "\"truncated\": false, \"scope\": {...}}")
+        "Returns how materials should be applied (read-only): per material its "
+        "kind (panel: fit to its face, do not repeat; tile: seamless, repeats "
+        "freely; trim: fitted across, repeated along; decal, sky, liquid, tool), "
+        "typical scale per axis, scale range (10th-90th percentile and extremes), "
+        "texel density (map units per texel), typical face size and repeats, "
+        "whole-repeat and aligned fractions, texture size and an image analysis "
+        "(seamless per axis, transparency). Each value has its source and sample "
+        "count; priority: \"notes\" (material_notes_set) > \"config\" (the game's "
+        "smart tags) > \"corpus\" (material_corpus_scan) > \"map\" > \"name\" > "
+        "\"image\"; a scale without data is the game's default (\"config\"). "
+        "'materials' are names or globs matched against loaded and used materials "
+        "(at most 50 results); default: the materials of the selected faces or "
+        "brushes, else the 20 most used in the map. Apply the typical scale with "
+        "uv_align operation \"typical\". Example: {\"materials\": [\"LAB1_GAD2\", "
+        "\"lab1_w*\"]}")
       .input(object({
         field("materials", array(string().nonEmpty()).nonEmpty().maxSize(MaxProfiles))
-          .describe("Material names or globs; default: selection, else most used"),
+          .describe("Material names or globs ('*', '?'); default: the materials of the "
+                    "selection, else the 20 most used"),
         field("includeImage", boolean())
           .defaultsTo(true)
           .describe("Analyze the texture images (otherwise only when needed)"),
@@ -1211,8 +1207,12 @@ void registerMaterialKnowledgeTools(ToolRegistry& registry)
             "[{name, loaded, textureSize, mapUsage, kind, typicalScale, scaleRange, "
             "texelDensity, typicalFaceSize, typicalRepeats, wholeRepeatFraction, "
             "alignedFraction, image, note, configTag, imageError?, statistics?}]"),
-        field("materialsFrom", enumOf({"arguments", "selection", "map"})).required(),
-        field("matched", integer()).required(),
+        field("materialsFrom", enumOf({"arguments", "selection", "map"}))
+          .required()
+          .describe("Where the materials came from"),
+        field("matched", integer())
+          .required()
+          .describe("Number of materials that matched"),
         field("truncated", boolean())
           .required()
           .describe("More than 50 materials matched; only the first 50 are listed"),

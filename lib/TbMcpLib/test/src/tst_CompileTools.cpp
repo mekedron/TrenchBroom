@@ -34,6 +34,8 @@
 #include "kd/invoke.h"
 #include "kd/overload.h"
 
+#include "vm/vec.h"
+
 #include <filesystem>
 #include <string>
 #include <variant>
@@ -705,6 +707,23 @@ TEST_CASE("CompileTools")
       REQUIRE(compile.started.size() == 1);
       CHECK(compile.started[0].profile.tasks.size() > 4);
     }
+
+    SECTION("relative WAD paths")
+    {
+      createSavedDocument(fixture, env, "Half-Life");
+      configureTools(fixture, env, "Half-Life");
+      const auto clean =
+        fixture.call("compile_run", Json{{"preset", "normal"}, {"dryRun", true}});
+      CHECK(!contains(warningCodes(clean), "RELATIVE_WAD_PATH"));
+
+      // not found, so stored as passed
+      fixture.call(
+        "materials_collections_set", Json{{"wads", Json{"valve/halflife.wad"}}});
+      const auto result =
+        fixture.call("compile_run", Json{{"preset", "normal"}, {"dryRun", true}});
+      REQUIRE(contains(warningCodes(result), "RELATIVE_WAD_PATH"));
+      CHECK(dumpJson(result["warnings"]).find("valve/halflife.wad") != std::string::npos);
+    }
   }
 
   SECTION("compile_status")
@@ -900,6 +919,46 @@ TEST_CASE("CompileTools")
         fixture.callExpectingError("pointfile_load", Json{{"path", "bad.pts"}}).code
         == ErrorCode::InvalidArgument);
     }
+  }
+
+  SECTION("pointfile_load between rooms")
+  {
+    createSavedDocument(fixture, env);
+    const auto box = [&](const vm::vec3d& min, const vm::vec3d& max) {
+      fixture.call(
+        "brush_create_box",
+        Json{{"min", {min.x(), min.y(), min.z()}}, {"max", {max.x(), max.y(), max.z()}}});
+    };
+    // two rooms side by side; the void between them lies inside the brush bounds
+    const auto room = [&](const double x0, const double x1, const bool holeInEastWall) {
+      box({x0 - 16, -144, -16}, {x1 + 16, 144, 0});   // floor
+      box({x0 - 16, -144, 128}, {x1 + 16, 144, 144}); // ceiling
+      box({x0 - 16, -144, 0}, {x1 + 16, -128, 128});  // south
+      box({x0 - 16, 128, 0}, {x1 + 16, 144, 128});    // north
+      box({x0 - 16, -128, 0}, {x0, 128, 128});        // west
+      if (holeInEastWall)
+      {
+        box({x1, -128, 0}, {x1 + 16, -32, 128});
+        box({x1, 32, 0}, {x1 + 16, 128, 128});
+        box({x1, -32, 0}, {x1 + 16, 32, 32});
+        box({x1, -32, 96}, {x1 + 16, 32, 128});
+      }
+      else
+      {
+        box({x1, -128, 0}, {x1 + 16, 128, 128});
+      }
+    };
+    room(-256, 0, true);
+    room(256, 512, false);
+
+    env.createFile("maps/compile/test.pts", "-128 0 64\n128 0 64\n128 0 32\n");
+    const auto result = fixture.call("pointfile_load")["result"];
+    REQUIRE(result["leavesMapAt"].is_array());
+    const auto x = result["leavesMapAt"][0].get<double>();
+    CHECK(x >= 0.0);
+    CHECK(x <= 48.0);
+    CHECK(result["leavesMapAt"][1] == 0.0);
+    CHECK(result["leavesMapAt"][2] == 64.0);
   }
 
   SECTION("portalfile_load")

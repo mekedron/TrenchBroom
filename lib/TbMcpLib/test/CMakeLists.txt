@@ -8,6 +8,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AgentCamera.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Annotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BridgeSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
@@ -53,6 +54,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Pagination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PreferenceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PromptRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Prompts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PickTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PlacementChecks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ResourceRegistry.cpp
@@ -70,6 +72,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TagTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Targets.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ToolCatalog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TransformTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamCommandProcessor.cpp

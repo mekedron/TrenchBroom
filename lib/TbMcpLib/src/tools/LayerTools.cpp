@@ -138,7 +138,7 @@ Json layerJson(
 Schema layerSchema()
 {
   return object({
-    field("id", objectId({ObjectKind::Layer})).required(),
+    field("id", objectId({ObjectKind::Layer})).required().describe("Layer id"),
     field("name", string()).required(),
     field("default", boolean()).required().describe("Whether this is the default layer"),
     field("position", integer())
@@ -150,7 +150,9 @@ Schema layerSchema()
       .describe("Whether new objects are added to this layer"),
     field("hidden", boolean()).required(),
     field("locked", boolean()).required(),
-    field("omitFromExport", boolean()).required(),
+    field("omitFromExport", boolean())
+      .required()
+      .describe("Whether the layer is left out when compiling or exporting"),
     field("color", any()).describe("[r, g, b] (0-255), or null"),
     field("counts", object({}).allowAdditionalProperties())
       .required()
@@ -584,7 +586,8 @@ std::optional<ToolError> groupedObjectError(
         "Object " + id + " is inside group " + groupId
           + "; objects inside groups belong to the group's layer.",
         "Move the group " + groupId
-          + " instead, or take the object out of the group first.",
+          + " instead, or take the object out of the group first "
+            "(group_remove_objects).",
         {id, groupId});
     }
   }
@@ -770,7 +773,8 @@ ToolResult visibilitySet(CallContext& context, const Args& args)
     return makeError(
       ErrorCode::InvalidArgument,
       "Mode 'show' needs ids; hidden objects cannot be selected.",
-      "Pass the ids of the hidden objects (objects_find), or use mode 'show_all'.");
+      "Pass the ids of the hidden objects (objects_find {\"visible\": false}), or use "
+      "mode 'show_all'.");
   }
 
   auto nodes = std::vector<mdl::Node*>{};
@@ -823,7 +827,9 @@ Schema layerResultSchema()
 Schema visibilityResultSchema()
 {
   return object({
-    field("mode", enumOf({"hide", "show", "isolate", "show_all"})).required(),
+    field("mode", enumOf({"hide", "show", "isolate", "show_all"}))
+      .required()
+      .describe("The mode that was applied"),
     field("ids", array(objectId())).required().describe("The objects acted on"),
     field("hiddenObjects", integer())
       .required()
@@ -839,13 +845,11 @@ void registerLayerTools(ToolRegistry& registry)
     ToolDef{"layers_list"}
       .title("List Layers")
       .description(
-        "Lists all layers in the order of the layer list (the default layer first): id, "
-        "name, position, sortIndex, whether it is the default or current layer (where "
-        "new objects go), hidden, locked, omitFromExport, color and object counts by "
-        "kind. Example: {} -> {\"layers\": [{\"id\": \"layer:default\", \"name\": "
-        "\"Default Layer\", \"position\": 0, \"current\": true, \"hidden\": false, ...}, "
-        "{\"id\": \"layer:12\", \"name\": \"Arena\", \"position\": 1, ...}], "
-        "\"current\": \"layer:default\"}")
+        "Lists all layers (read-only) in the order of the layer list, the default layer "
+        "('layer:default', position 0) first: id, name, position, sortIndex, whether it "
+        "is the default or current layer (where new objects go), hidden, locked, "
+        "omitFromExport, color and object counts by kind, plus the current layer's id. "
+        "objects_find with 'layer' lists a layer's objects. Example: {}")
       .input(object({}))
       .output(object({
         field("layers", array(layerSchema())).required(),
@@ -860,16 +864,18 @@ void registerLayerTools(ToolRegistry& registry)
     ToolDef{"layer_create"}
       .title("Create Layer")
       .description(
-        "Creates an empty layer, by default at the end of the layer list, and makes it "
-        "the current layer (new objects are added to it) like the editor's Add Layer "
-        "button; makeCurrent: false keeps the current layer. 'position' (1 = first after "
-        "the default layer) or 'after' (a layer id) place it elsewhere. "
-        "Example: {\"name\": \"Lighting\", \"after\": \"layer:default\"}")
+        "Creates an empty layer (one undo step), by default at the end of the layer "
+        "list, and makes it the current layer (new objects are added to it) like the "
+        "editor's Add Layer button; makeCurrent: false keeps the current layer. "
+        "'position' (1 = first after the default layer) or 'after' (a layer id) place "
+        "it elsewhere; pass at most one. A duplicate name only warns. Returns the new "
+        "layer. Example: {\"name\": \"Lighting\", \"after\": \"layer:default\"}")
       .input(object({
         field("name", string().nonEmpty()).required().describe("Layer name"),
         field("position", integer().min(1))
           .describe("Position in the layer list (1 = first after the default layer)"),
-        field("after", objectId({ObjectKind::Layer})).describe("Insert after this layer"),
+        field("after", objectId({ObjectKind::Layer}))
+          .describe("Insert after this layer; not with 'position'"),
         field("makeCurrent", boolean().defaultsTo(true))
           .describe("Make the new layer the current layer"),
       }))
@@ -880,10 +886,13 @@ void registerLayerTools(ToolRegistry& registry)
   registry.add(
     ToolDef{"layer_rename"}
       .title("Rename Layer")
-      .description("Renames a layer. The default layer cannot be renamed. "
+      .description("Renames a layer (one undo step) and returns it. The default layer "
+                   "cannot be renamed. "
                    "Example: {\"layer\": \"layer:12\", \"name\": \"Upper Floor\"}")
       .input(object({
-        field("layer", objectId({ObjectKind::Layer})).required(),
+        field("layer", objectId({ObjectKind::Layer}))
+          .required()
+          .describe("Layer id from layers_list"),
         field("name", string().nonEmpty()).required().describe("New name"),
       }))
       .output(layerResultSchema())
@@ -896,16 +905,19 @@ void registerLayerTools(ToolRegistry& registry)
       .title("Remove Layer")
       .description(
         "Removes a layer and moves its objects to the default layer, like the editor's "
-        "Remove Layer button. Clears the selection. If the layer was current, the "
-        "default "
-        "layer becomes current. The default layer cannot be removed, and like in the "
-        "editor another layer must be visible and unlocked. "
+        "Remove Layer button (one undo step). Clears the selection. If the layer was "
+        "current, the default layer becomes current. The default layer cannot be "
+        "removed, and like in the editor another layer must be visible and unlocked. "
         "Example: {\"layer\": \"layer:12\"}")
       .input(object({
-        field("layer", objectId({ObjectKind::Layer})).required(),
+        field("layer", objectId({ObjectKind::Layer}))
+          .required()
+          .describe("Layer id from layers_list"),
       }))
       .output(object({
-        field("removed", objectId({ObjectKind::Layer})).required(),
+        field("removed", objectId({ObjectKind::Layer}))
+          .required()
+          .describe("Id of the removed layer"),
         field("movedToDefaultLayer", array(objectId()))
           .required()
           .describe("The objects that were moved to the default layer"),
@@ -919,11 +931,15 @@ void registerLayerTools(ToolRegistry& registry)
     ToolDef{"layer_reorder"}
       .title("Reorder Layer")
       .description(
-        "Moves a layer in the layer list, either to 'position' (1 = first after the "
-        "default layer) or by 'offset' (negative moves up, positive down). The default "
-        "layer always stays first. Example: {\"layer\": \"layer:12\", \"offset\": -1}")
+        "Moves a layer in the layer list (one undo step), either to 'position' (1 = "
+        "first after the default layer) or by 'offset' (negative moves up, positive "
+        "down); pass exactly one. The default layer always stays first. Returns the "
+        "layer with its new position. Example: {\"layer\": \"layer:12\", \"offset\": "
+        "-1}")
       .input(object({
-        field("layer", objectId({ObjectKind::Layer})).required(),
+        field("layer", objectId({ObjectKind::Layer}))
+          .required()
+          .describe("Custom layer id from layers_list"),
         field("position", integer().min(1))
           .describe("Target position (1 = first after the default layer)"),
         field("offset", integer()).describe("Positions to move; negative moves up"),
@@ -936,19 +952,25 @@ void registerLayerTools(ToolRegistry& registry)
     ToolDef{"layer_set_state"}
       .title("Set Layer State")
       .description(
-        "Sets any of: current (new objects are added to the current layer; it can only "
-        "be set to true), hidden, locked, omitFromExport (the layer is left out when "
-        "compiling or exporting) and isolate (true: show this layer and hide all "
-        "others). Hiding or locking a layer deselects its objects. Hiding or locking the "
-        "current layer is allowed, like in the editor, but warns. "
-        "Example: {\"layer\": \"layer:12\", \"hidden\": false, \"locked\": true}")
+        "Sets any of a layer's states in one undo step: current (new objects are added "
+        "to the current layer; it can only be set to true), hidden, locked, "
+        "omitFromExport and isolate (true: show this layer and hide all others). Pass "
+        "at least one. Hiding or locking a layer deselects its objects. Hiding or "
+        "locking the current layer is allowed, like in the editor, but warns. Returns "
+        "the layer. Example: {\"layer\": \"layer:12\", \"hidden\": false, "
+        "\"locked\": true}")
       .input(object({
-        field("layer", objectId({ObjectKind::Layer})).required(),
-        field("current", boolean()).describe("Make this the current layer"),
-        field("hidden", boolean()),
-        field("locked", boolean()),
-        field("omitFromExport", boolean()),
-        field("isolate", boolean()).describe("Show only this layer (true only)"),
+        field("layer", objectId({ObjectKind::Layer}))
+          .required()
+          .describe("Layer id from layers_list"),
+        field("current", boolean())
+          .describe("true: make this the current layer (false is refused)"),
+        field("hidden", boolean()).describe("Hide (true) or show (false) the layer"),
+        field("locked", boolean()).describe("Lock (true) or unlock (false) the layer"),
+        field("omitFromExport", boolean())
+          .describe("Leave the layer out when compiling or exporting"),
+        field("isolate", boolean())
+          .describe("true: show only this layer (false is refused)"),
       }))
       .output(layerResultSchema())
       .mutation(Mutation::Map)
@@ -959,17 +981,18 @@ void registerLayerTools(ToolRegistry& registry)
     ToolDef{"objects_move_to_layer"}
       .title("Move Objects to Layer")
       .description(
-        "Moves groups, entities, brushes and patches (ids, default: the selection) to a "
-        "layer, like the editor's Move Selection to Layer. A brush of a brush entity "
-        "moves the whole entity; objects inside groups cannot be moved on their own. The "
-        "moved objects are left selected unless the layer is hidden or locked. "
+        "Moves groups, entities, brushes and patches (ids, default: the current "
+        "selection) to a layer, like the editor's Move Selection to Layer (one undo "
+        "step). A brush of a brush entity moves the whole entity; objects inside groups "
+        "cannot be moved on their own (move the group). The moved objects are left "
+        "selected unless the layer is hidden or locked. "
         "Example: {\"ids\": [\"brush:12\", \"entity:40\"], \"layer\": \"layer:7\"}")
       .input(object({
         idsField(ObjectKinds),
         field("layer", objectId({ObjectKind::Layer})).required().describe("Target layer"),
       }))
       .output(object({
-        field("layer", objectId({ObjectKind::Layer})).required(),
+        field("layer", objectId({ObjectKind::Layer})).required().describe("Target layer"),
         field("moved", array(objectId()))
           .required()
           .describe("The objects that were moved (brush entities for their brushes)"),
@@ -981,14 +1004,18 @@ void registerLayerTools(ToolRegistry& registry)
     ToolDef{"visibility_set"}
       .title("Set Visibility")
       .description(
-        "Hides or shows objects. 'hide' hides the objects (ids, default: the selection) "
-        "and deselects them. 'show' shows hidden objects (ids required), even inside a "
-        "hidden layer or group. 'isolate' hides all other objects (ids, default: the "
-        "selection; they stay selected), like View > Isolate. 'show_all' takes no ids "
-        "and shows all objects, like View > Show All; hidden layers stay hidden (use "
-        "layer_set_state). Example: {\"mode\": \"hide\", \"ids\": [\"brush:12\"]}")
+        "Hides or shows objects (one undo step). 'hide' hides the objects (ids, "
+        "default: the current selection) and deselects them. 'show' shows hidden "
+        "objects (ids required), even inside a hidden layer or group. 'isolate' hides "
+        "all other objects (ids, default: the current selection; they stay selected), "
+        "like View > Isolate. 'show_all' takes no ids and shows all objects, like View "
+        "> Show All; hidden layers stay hidden (use layer_set_state). Returns the number "
+        "of hidden objects. Examples: {\"mode\": \"hide\", \"ids\": [\"brush:12\"]}; "
+        "{\"mode\": \"show_all\"}")
       .input(object({
-        field("mode", enumOf({"hide", "show", "isolate", "show_all"})).required(),
+        field("mode", enumOf({"hide", "show", "isolate", "show_all"}))
+          .required()
+          .describe("'hide', 'show', 'isolate' (hide all others) or 'show_all'"),
         idsField(
           ObjectKinds, "Object ids. Default: the current selection (not for show)"),
       }))

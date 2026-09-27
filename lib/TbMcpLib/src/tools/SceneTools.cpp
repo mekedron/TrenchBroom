@@ -640,6 +640,7 @@ ToolResult objectGet(CallContext& context, const Args& args)
   auto missing = std::vector<std::string>{};
   auto firstError = std::optional<ToolError>{};
   auto objects = Json::array();
+  auto fullObjects = std::vector<Json>{};
   const auto linkCounts = groupLinkCounts(map);
 
   for (const auto& id : idStrings)
@@ -670,6 +671,7 @@ ToolResult objectGet(CallContext& context, const Args& args)
       object = objectJson(map, *node, ids, detail, linkCounts);
     }
     objects.push_back(selectFields(object, fields));
+    fullObjects.push_back(std::move(object));
   }
 
   if (!missing.empty())
@@ -682,6 +684,21 @@ ToolResult objectGet(CallContext& context, const Args& args)
     }
     error.objectIds = missing;
     return error;
+  }
+
+  if (const auto unknown = unknownFields(fullObjects, fields); !unknown.empty())
+  {
+    auto names = std::string{};
+    for (const auto& path : unknown)
+    {
+      names += (names.empty() ? "'" : ", '") + path + "'";
+    }
+    context.warn(
+      "UNKNOWN_FIELD",
+      "None of the objects has the field" + std::string{unknown.size() > 1 ? "s " : " "}
+        + names + "; " + (unknown.size() > 1 ? "they were" : "it was")
+        + " ignored. Nested keys need dotted paths (e.g. 'faces.vertices'); detail "
+          "'summary' omits most keys.");
   }
 
   return Json{{"objects", std::move(objects)}};
@@ -1102,23 +1119,19 @@ void registerSceneTools(ToolRegistry& registry)
     ToolDef{"map_summary"}
       .title("Map Summary")
       .description(
-        "A high-level overview of the map: game, format, grid size, object counts, "
-        "entities by class (the 30 most frequent; otherClasses counts the rest), layers, "
-        "the 20 most used materials (by face count), the bounds of all objects (null if "
-        "the map is empty), the number of visible validation issues and selected "
-        "worldspawn properties. Start here to orient yourself. Example: {} -> "
-        "{\"game\":\"Quake\",\"format\":\"Standard\",\"gridSize\":16,\"counts\":{"
-        "\"layers\":2,\"groups\":1,\"entities\":8,\"brushes\":24,...},"
-        "\"entitiesByClass\":{\"light\":2,...},\"layers\":[{\"id\":\"layer:default\","
-        "\"name\":\"Default Layer\",\"objects\":16,\"hidden\":false,\"locked\":false,"
-        "\"current\":true}],\"materials\":{\"distinct\":12,\"top\":[{\"name\":"
-        "\"wall_brick\",\"faces\":36}]},\"bounds\":{\"min\":[...],\"max\":[...]},"
-        "\"issues\":0}")
+        "Returns a high-level overview of the map (read-only): game, format, grid size, "
+        "object counts, entities by class (the 30 most frequent, e.g. {\"light\": 12}; "
+        "otherClasses counts the rest), layers {id, name, objects, hidden, locked, "
+        "current}, the 20 most used materials by face count, the bounds of all objects "
+        "in map units (null if the map is empty), the number of visible validation "
+        "issues (issues_list) and the worldspawn message, wad and _tb_mod. Start here "
+        "to orient yourself; map_stats has full counts, map_tree the hierarchy. "
+        "Example: {}")
       .input(object({}))
       .output(object({
         field("game", string()).required(),
         field("format", string()).required(),
-        field("gridSize", number()).required(),
+        field("gridSize", number()).required().describe("Grid size in map units"),
         field("counts", any())
           .required()
           .describe(
@@ -1134,7 +1147,7 @@ void registerSceneTools(ToolRegistry& registry)
           .required()
           .describe("[{id, name, objects, hidden, locked, current}]"),
         field("materials", any()).required().describe("{distinct, top: [{name, faces}]}"),
-        field("bounds", any()).required().describe("{min, max} or null"),
+        field("bounds", any()).required().describe("{min, max} in map units, or null"),
         field("issues", integer()).required().describe("Visible validation issues"),
         field("worldspawn", any()).describe("message, wad and _tb_mod if set"),
       }))
@@ -1147,19 +1160,14 @@ void registerSceneTools(ToolRegistry& registry)
     ToolDef{"map_tree"}
       .title("Map Tree")
       .description(
-        "The object hierarchy world -> layers -> groups -> entities -> brushes/patches "
-        "as "
-        "a flat depth-first list. Each item has id, kind, label (classname or name), "
-        "depth (root = 0), parent and childCount; items at the depth limit that have "
-        "children also report descendants by kind. detail \"full\" adds bounds, "
-        "materials, layer, entity, classname/name and state. kinds filters the listed "
-        "items; containers are traversed anyway. visibleOnly skips hidden objects and "
-        "their contents. Example: {\"root\":\"layer:default\",\"depth\":1} -> "
-        "{\"items\":[{\"id\":\"layer:default\",\"kind\":\"layer\",\"label\":\"Default "
-        "Layer\",\"depth\":0,\"parent\":\"world\",\"childCount\":16},{\"id\":"
-        "\"group:12\",\"kind\":\"group\",\"label\":\"Pillars\",\"depth\":1,\"parent\":"
-        "\"layer:default\",\"childCount\":2,\"descendants\":{\"brush\":2}}],"
-        "\"total\":17,\"nextCursor\":null}")
+        "Lists the object hierarchy world -> layers -> groups -> entities -> "
+        "brushes/patches as a flat depth-first list (read-only). Each item has id, "
+        "kind, label (classname or name), depth (root = 0), parent and childCount; items "
+        "at the depth limit that have children also report descendants by kind, e.g. "
+        "{\"brush\": 2}. detail 'full' adds bounds, materials, layer, entity, "
+        "classname/name and state. kinds filters the listed items; containers are "
+        "traversed anyway. Use objects_find to search by criteria. Example: "
+        "{\"root\": \"layer:default\", \"depth\": 1}")
       .input(object({
         field("root", objectId()).describe("The object to start from. Default: world"),
         field("depth", integer().min(1).max(16).defaultsTo(2))
@@ -1169,9 +1177,11 @@ void registerSceneTools(ToolRegistry& registry)
           .describe("Skip hidden objects and their contents"),
       }))
       .output(object({
-        field("items", array(any())).required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()).required(),
+        field("items", array(any())).required().describe("Tree items, depth-first"),
+        field("total", integer()).required().describe("Number of listed items"),
+        field("nextCursor", any())
+          .required()
+          .describe("Cursor of the next page, or null"),
       }))
       .paginated()
       .mutation(Mutation::None)
@@ -1183,29 +1193,31 @@ void registerSceneTools(ToolRegistry& registry)
     ToolDef{"object_get"}
       .title("Get Objects")
       .description(
-        "Details of up to 50 objects or faces. All: id, kind, label, parent, layer, "
-        "bounds, state {visible, hidden, locked, selected, selectable}; detail \"full\" "
-        "(default) adds group, childCount, tags, linkId, lineNumber/lineCount (position "
-        "in the file when loaded or saved), and per kind: entities (and world) "
-        "classname, "
-        "properties (in file order), definition {name, type} or null, origin and angle "
-        "(point entities) or brushes/patches counts (brush entities); brushes entity "
-        "(owner or null), materials, faces with alignment (offset, scale, rotation), "
-        "normal, center, area, tags and vertices; patches material, rows, columns; "
-        "groups name, persistentId, linked, linkedCopies, open; layers name, default, "
-        "persistentId, sortIndex, omitFromExport, current. A face id "
-        "('brush:12/face:3') returns that face with kind \"face\" and its brush. Fails "
-        "with OBJECT_NOT_FOUND listing the unknown ids. Use fields to trim the output. "
-        "Example: {\"ids\":[\"entity:40\",\"brush:12/face:3\"],\"fields\":[\"id\","
-        "\"classname\",\"properties\",\"material\"]}")
+        "Returns details of up to 50 objects or faces (read-only), in the order of ids. "
+        "All: id, kind, label, parent, layer, bounds (map units), state {visible, "
+        "hidden, locked, selected, selectable}; detail 'full' (default) adds group, "
+        "childCount, tags, linkId, lineNumber/lineCount (position in the file when "
+        "loaded or saved), and per kind: entities (and world) classname, properties (in "
+        "file order), definition {name, type} or null, origin and angle (point "
+        "entities) or brushes/patches counts (brush entities); brushes entity (owner or "
+        "null), materials, faces with alignment (offset, scale, rotation), normal, "
+        "center, area, tags and vertices; patches material, rows, columns; groups name, "
+        "persistentId, linked, linkedCopies, open; layers name, default, persistentId, "
+        "sortIndex, omitFromExport, current. A face id ('brush:12/face:3') returns that "
+        "face with kind 'face' and its brush. Fails with OBJECT_NOT_FOUND listing the "
+        "unknown ids. Use fields to trim the output; fields that no object has are "
+        "ignored with an UNKNOWN_FIELD warning. Example: {\"ids\": [\"entity:40\", "
+        "\"brush:12/face:3\"], \"fields\": [\"id\", \"classname\", \"properties\", "
+        "\"material\"]}")
       .input(object({
         field("ids", array(objectId()).minSize(1).maxSize(50))
           .required()
-          .describe("Object or face ids"),
+          .describe("Object ids or face ids ('brush:12/face:3'), at most 50"),
         field("fields", array(string()))
           .describe("Top-level keys or dotted paths to return, e.g. \"faces.material\""),
         field("detail", enumOf({"summary", "full"}).defaultsTo("full"))
-          .describe("summary: the list item shape plus parent and state"),
+          .describe("'summary': the list item shape plus parent and state; 'full': "
+                    "everything"),
       }))
       .output(object({
         field("objects", array(any())).required().describe("In the order of ids"),
@@ -1219,29 +1231,26 @@ void registerSceneTools(ToolRegistry& registry)
     ToolDef{"objects_find"}
       .title("Find Objects")
       .description(
-        "Finds objects matching all given filters, in tree order, including objects in "
-        "closed groups and brushes of brush entities. Without kinds, groups, entities, "
-        "brushes and patches are searched (world and layers only when kinds lists "
-        "them). Globs use * and ? and ignore case. classname and property only match "
-        "entities; material matches brushes with any face using it and patches; layer "
-        "and group match their contents; tag matches smart tags of objects or of any "
-        "face of a brush; region matches objects whose bounds intersect (default) or "
-        "lie inside the box. Items are list items {id, kind, label, bounds, layer, "
-        "classname|name|materials, entity}; detail \"full\" adds state, tags, group, "
+        "Finds objects matching all given filters (read-only), in tree order, including "
+        "objects in closed groups and brushes of brush entities. Without kinds, groups, "
+        "entities, brushes and patches are searched (world and layers only when kinds "
+        "lists them). Globs use * and ? and ignore case. classname and property only "
+        "match entities; material matches brushes with any face using it and patches; "
+        "layer and group match their contents; tag matches smart tags of objects or of "
+        "any face of a brush; region matches objects whose bounds intersect (default) "
+        "or lie inside the box. Items are {id, kind, label, bounds, layer, "
+        "classname|name|materials, entity}; detail 'full' adds state, tags, group, "
         "properties (entities) and faceCount (brushes). counts gives the matches by "
-        "kind. Example: {\"material\":\"wall_*\",\"layer\":\"layer:7\"} or "
-        "{\"region\":{\"min\":[0,0,0],\"max\":[512,512,256]},\"regionMode\":\"inside\","
-        "\"kinds\":[\"entity\"]} -> {\"items\":[{\"id\":\"entity:40\",\"kind\":"
-        "\"entity\",\"label\":\"light\",\"classname\":\"light\",\"bounds\":{...},"
-        "\"layer\":\"layer:default\"}],\"total\":1,\"nextCursor\":null,\"counts\":{"
-        "\"entity\":1}}")
+        "kind. Examples: {\"material\": \"wall_*\", \"layer\": \"layer:7\"}; "
+        "{\"region\": {\"min\": [0,0,0], \"max\": [512,512,256]}, \"regionMode\": "
+        "\"inside\", \"kinds\": [\"entity\"]}")
       .input(object({
         field("kinds", kindsSchema("Kinds of objects to find")),
         field("classname", string().nonEmpty()).describe("Entity classname glob"),
         field(
           "property",
           object({
-            field("key", string().nonEmpty()).required(),
+            field("key", string().nonEmpty()).required().describe("Property key"),
             field("value", string()).describe("Value glob; omit to match any value"),
           }))
           .describe("Entities having this property"),
@@ -1251,17 +1260,20 @@ void registerSceneTools(ToolRegistry& registry)
           .describe("Objects inside this group (at any depth)"),
         field("tag", string().nonEmpty())
           .describe("Smart tag name, e.g. \"trigger\" or \"detail\""),
-        field("region", box()).describe("Bounding region"),
-        field("regionMode", enumOf({"intersects", "inside"}).defaultsTo("intersects")),
+        field("region", box()).describe("Box in map units"),
+        field("regionMode", enumOf({"intersects", "inside"}).defaultsTo("intersects"))
+          .describe("Match objects whose bounds intersect the region or lie inside it"),
         field("visible", boolean())
           .describe("true: only visible objects, false: only hidden ones"),
         field("selected", boolean())
           .describe("true: only selected objects, false: only unselected ones"),
       }))
       .output(object({
-        field("items", array(any())).required(),
-        field("total", integer()).required(),
-        field("nextCursor", any()).required(),
+        field("items", array(any())).required().describe("Matching objects"),
+        field("total", integer()).required().describe("Number of matches"),
+        field("nextCursor", any())
+          .required()
+          .describe("Cursor of the next page, or null"),
         field("counts", any()).required().describe("Matches by kind"),
       }))
       .paginated()
@@ -1274,15 +1286,13 @@ void registerSceneTools(ToolRegistry& registry)
     ToolDef{"map_text_get"}
       .title("Get Map Text")
       .description(
-        "The whole map, or the given objects, as map file text in the document's format "
-        "(like copy to the clipboard). Layer ids stand for their contents, world for the "
-        "whole map. The text is returned in pages of lines: pass nextStartLine as "
+        "Returns the whole map, or the given objects, as map file text in the "
+        "document's format (read-only; like copy to the clipboard). Layer ids stand for "
+        "their contents, world for the whole map. The text comes in pages of lines with "
+        "startLine, lineCount, totalLines and truncated: pass nextStartLine as "
         "startLine to continue. Line numbers of the whole map match the file on disk "
-        "only "
-        "right after saving. Example: {\"ids\":[\"entity:40\"],\"maxLines\":100} -> "
-        "{\"text\":\"// entity 0\\n{\\n\\\"classname\\\" \\\"light\\\"\\n...\","
-        "\"startLine\":1,\"lineCount\":6,\"totalLines\":6,\"truncated\":false,"
-        "\"nextStartLine\":null}")
+        "only right after saving. Example: {\"ids\": [\"entity:40\"], \"maxLines\": "
+        "100}")
       .input(object({
         field("ids", array(objectId()).minSize(1).maxSize(1000))
           .describe("Objects to serialize. Default: the whole map"),
@@ -1293,10 +1303,12 @@ void registerSceneTools(ToolRegistry& registry)
       }))
       .output(object({
         field("text", string()).required(),
-        field("startLine", integer()).required(),
+        field("startLine", integer())
+          .required()
+          .describe("First returned line (1-based)"),
         field("lineCount", integer()).required().describe("Lines returned"),
-        field("totalLines", integer()).required(),
-        field("truncated", boolean()).required(),
+        field("totalLines", integer()).required().describe("Lines of the whole text"),
+        field("truncated", boolean()).required().describe("Whether more lines follow"),
         field("nextStartLine", any()).required().describe("Next startLine or null"),
       }))
       .mutation(Mutation::None)
@@ -1308,17 +1320,12 @@ void registerSceneTools(ToolRegistry& registry)
     ToolDef{"map_stats"}
       .title("Map Statistics")
       .description(
-        "Detailed statistics: brush, face and patch counts, brushes per entity class "
-        "(worldspawn included), entities by class, materials by usage (face count, "
-        "patches count once), per layer bounds and counts, and groups (linked = groups "
-        "sharing a link id with another group). Example: {\"limit\":10} -> "
-        "{\"brushes\":24,\"faces\":144,\"patches\":0,\"brushCountByEntity\":{"
-        "\"worldspawn\":22,\"func_door\":1,\"trigger_once\":1},\"entitiesByClass\":{"
-        "\"light\":2,...},\"materials\":[{\"name\":\"wall_brick\",\"faces\":36}],"
-        "\"distinctMaterials\":12,\"materialsTruncated\":true,\"layers\":[{\"id\":"
-        "\"layer:default\",\"name\":\"Default Layer\",\"bounds\":{...},\"brushes\":14,"
-        "\"patches\":0,\"entities\":3,\"groups\":1}],\"groups\":{\"count\":1,"
-        "\"linked\":0}}")
+        "Returns detailed map statistics (read-only): brush, face and patch counts, "
+        "brushes per entity class (e.g. {\"worldspawn\": 22, \"func_door\": 1}), "
+        "entities by class, materials by usage (face count, a patch counts once; the "
+        "top 'limit', materialsTruncated if there are more), per layer bounds and "
+        "counts, and groups (linked = groups sharing a link id with another group). "
+        "material_usage finds the faces of one material. Example: {\"limit\": 10}")
       .input(object({
         field("limit", integer().min(1).max(1000).defaultsTo(50))
           .describe("Maximum number of materials to list"),
@@ -1327,8 +1334,8 @@ void registerSceneTools(ToolRegistry& registry)
         field("brushes", integer()).required(),
         field("faces", integer()).required(),
         field("patches", integer()).required(),
-        field("brushCountByEntity", any()).required(),
-        field("entitiesByClass", any()).required(),
+        field("brushCountByEntity", any()).required().describe("classname -> brushes"),
+        field("entitiesByClass", any()).required().describe("classname -> count"),
         field("materials", array(any())).required().describe("[{name, faces}]"),
         field("distinctMaterials", integer()).required(),
         field("materialsTruncated", boolean()).required(),

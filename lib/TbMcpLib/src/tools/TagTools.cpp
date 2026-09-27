@@ -904,7 +904,8 @@ ToolResult tagApply(CallContext& context, const Args& args)
   {
     return context.operationFailed(
       "The tag '" + tag.name() + "' could not be applied.",
-      "Check the editor messages and tags_list.");
+      "details.editorMessages holds the editor's reason; tags_list shows what the tag "
+      "matches and whether it can be applied.");
   }
   if (!state.untagged.empty())
   {
@@ -1060,7 +1061,8 @@ void registerTagTools(ToolRegistry& registry)
     ToolDef{"tags_list"}
       .title("List Smart Tags")
       .description(
-        "Lists the smart tags of the document's game (GameConfig.cfg): object tags "
+        "Lists the smart tags of the document's game (GameConfig.cfg); read-only. "
+        "Object tags "
         "(kind 'object', e.g. Trigger or Detail, matching brushes by the classname of "
         "their entity) and face tags (kind 'face', e.g. Clip, Skip, Hint, matching "
         "faces by material name, material surface parameter, or content / surface "
@@ -1069,14 +1071,14 @@ void registerTagTools(ToolRegistry& registry)
         "'transparent'), whether tag_apply / tag_remove can apply or remove it, the "
         "'options' tag_apply chooses from (brush entity classes, loaded materials or "
         "flags; at most 50, optionCount is the total), and how many objects (object "
-        "tags) or faces and brushes (face tags) in the map carry it. Example: {\"kind\": "
-        "\"face\"}")
+        "tags) or faces and brushes (face tags) in the map carry it. Use tag_apply and "
+        "tag_remove to change them. Examples: {}; {\"kind\": \"face\"}")
       .input(object({
         field("kind", enumOf({"object", "face"}))
           .describe("Only object tags or only face tags. Default: all"),
       }))
       .output(object({
-        field("game", string()).required(),
+        field("game", string()).required().describe("Name of the document's game"),
         field(
           "tags",
           array(object({
@@ -1088,12 +1090,16 @@ void registerTagTools(ToolRegistry& registry)
                         "surfaceflag | invalidflags | unknown, pattern?, material?, "
                         "parameters?, flags?, "
                         "mask?}"),
-            field("description", string()).required(),
-            field("attributes", array(string())).required(),
-            field("canApply", boolean()).required(),
-            field("canRemove", boolean()).required(),
-            field("options", array(string())).required(),
-            field("optionCount", integer()).required(),
+            field("description", string()).required().describe("What the tag matches"),
+            field("attributes", array(string()))
+              .required()
+              .describe("Tag attributes, e.g. 'transparent'"),
+            field("canApply", boolean()).required().describe("Whether tag_apply works"),
+            field("canRemove", boolean()).required().describe("Whether tag_remove works"),
+            field("options", array(string()))
+              .required()
+              .describe("Choices for tag_apply's 'option' (at most 50)"),
+            field("optionCount", integer()).required().describe("Number of all options"),
             field("count", integer())
               .required()
               .describe("Objects (object tags) or faces (face tags) carrying the tag"),
@@ -1123,9 +1129,10 @@ void registerTagTools(ToolRegistry& registry)
         "INVALID_ARGUMENT listing the tags. The result lists the targets that carry "
         "the tag afterwards ('tagged'), those that do not ('untagged', with a "
         "TAG_NOT_APPLIED warning), and the brush entities that own the targets; new "
-        "entities also appear in the change report. The selection is restored. "
-        "Example: {\"tag\": \"Trigger\", \"ids\": [\"brush:1042\"], \"option\": "
-        "\"trigger_once\"}")
+        "entities also appear in the change report. One undo step; the selection is "
+        "restored. "
+        "Examples: {\"tag\": \"Trigger\", \"ids\": [\"brush:1042\"], \"option\": "
+        "\"trigger_once\"}; {\"tag\": \"Clip\", \"ids\": [\"brush:12/face:3\"]}")
       .input(object({
         tagField(),
         tagTargetsField(),
@@ -1163,7 +1170,7 @@ void registerTagTools(ToolRegistry& registry)
         "tag clears the tag's flags. Tags given by materials cannot be removed "
         "(UNSUPPORTED; apply another material with material_apply). Only targets that "
         "carry the tag are changed; if none does, the call succeeds with a "
-        "TAG_NOT_PRESENT warning. Example: {\"tag\": \"Detail\", \"ids\": "
+        "TAG_NOT_PRESENT warning. One undo step. Example: {\"tag\": \"Detail\", \"ids\": "
         "[\"brush:1042/face:0\", \"brush:1043\"]}")
       .input(object({
         tagField(),

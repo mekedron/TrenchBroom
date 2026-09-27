@@ -268,8 +268,10 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
 
   return object(
            {
-             field("ok", boolean()).required(),
-             field("dryRun", boolean()).required(),
+             field("ok", boolean()).required().describe("Whether the call succeeded"),
+             field("dryRun", boolean())
+               .required()
+               .describe("Whether the call was a dry run (the map is unchanged)"),
              field("undoStep", any())
                .describe("Name of the undo step this call created, or null"),
              field("result", m_output.value_or(object({}).allowAdditionalProperties()))
@@ -282,15 +284,22 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
                "issuesIntroduced",
                array(object(
                        {
-                         field("objectId", string()).required(),
-                         field("type", string()).required(),
-                         field("description", string()).required(),
+                         field("objectId", string())
+                           .required()
+                           .describe("The object with the problem"),
+                         field("type", string())
+                           .required()
+                           .describe("Issue type (the validator or check name)"),
+                         field("description", string())
+                           .required()
+                           .describe("What is wrong, in one sentence"),
                          field("code", string())
                            .describe(
                              "Machine code: Z_FIGHTING, ENTITY_OUTSIDE_HULL, MODEL_*, "
                              "UV_ASPECT_DISTORTION, or the editor validator in "
                              "UPPER_SNAKE case"),
-                         field("source", enumOf({"editor", "mcp"})),
+                         field("source", enumOf({"editor", "mcp"}))
+                           .describe("editor: an editor validator; mcp: an MCP check"),
                          field("details", any())
                            .describe("MCP checks: face ids, positions, bounds, measures"),
                        })
@@ -299,7 +308,8 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
                  "Problems the call introduced: editor validator issues of created and "
                  "modified objects, and MCP placement checks (z-fighting, entities "
                  "outside the hull, model placement, texture distortion)"),
-             field("warnings", array(any())),
+             field("warnings", array(any()))
+               .describe("Non-fatal problems: {code, message, objectIds}"),
              field("console", array(any()))
                .describe("Console warnings and errors logged while the call ran"),
              field("grid", number()).describe("Grid size in effect"),

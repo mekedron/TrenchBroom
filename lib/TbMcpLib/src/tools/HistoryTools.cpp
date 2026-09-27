@@ -245,7 +245,8 @@ ToolResult transactionCommit(CallContext& context, const Args&)
   {
     return context.operationFailed(
       "The transaction could not be applied to all linked groups, so it was rolled back.",
-      "Check for conflicts between linked groups.");
+      "Change only one copy of each linked group; the editor updates the other "
+      "copies.");
   }
   if (stored)
   {
@@ -278,7 +279,9 @@ ToolResult transactionRollback(CallContext& context, const Args&)
 Schema historyEntrySchema()
 {
   return object({
-    field("name", string()).required(),
+    field("name", string())
+      .required()
+      .describe("Undo step name, e.g. 'AI: Move Objects'"),
     field("agent", boolean()).required().describe("Whether an agent created the step"),
   });
 }
@@ -291,10 +294,10 @@ void registerHistoryTools(ToolRegistry& registry)
     ToolDef{"history_get"}
       .title("Get History")
       .description(
-        "Lists the undo and redo steps, most recent first. Steps created by agents start "
-        "with 'AI: ' and are marked agent: true. Also reports the open agent "
-        "transaction. "
-        "Example: {\"limit\": 10}")
+        "Lists the document's undo and redo steps (read-only), most recent first, with "
+        "their total counts. Steps created by agents are named 'AI: <tool title>' and "
+        "marked agent: true. Also reports the open agent transaction. Use undo or redo "
+        "with a count to step through them. Example: {\"limit\": 10}")
       .input(object({
         field("limit", integer().min(1).max(1000).defaultsTo(20))
           .describe("Maximum number of steps per list"),
@@ -302,9 +305,10 @@ void registerHistoryTools(ToolRegistry& registry)
       .output(object({
         field("undo", array(historyEntrySchema())).required(),
         field("redo", array(historyEntrySchema())).required(),
-        field("undoCount", integer()).required(),
-        field("redoCount", integer()).required(),
-        field("transaction", any()).describe("{name, owner} or null"),
+        field("undoCount", integer()).required().describe("Total number of undo steps"),
+        field("redoCount", integer()).required().describe("Total number of redo steps"),
+        field("transaction", any())
+          .describe("{name, owner} of the open agent transaction, or null"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -315,9 +319,11 @@ void registerHistoryTools(ToolRegistry& registry)
     ToolDef{"undo"}
       .title("Undo")
       .description(
-        "Undoes the most recent steps (agent or human), like Edit > Undo. Fails while a "
-        "transaction is open. Returns the names of the undone steps. Object ids of "
-        "restored objects become valid again. Example: {\"count\": 2}")
+        "Undoes the most recent undo steps (agent or human), like Edit > Undo; redo "
+        "restores them. Returns the names of the undone steps. Object ids of restored "
+        "objects become valid again. Fails with TRANSACTION_ACTIVE while a transaction "
+        "is open (transaction_rollback discards an agent transaction instead). "
+        "history_get shows what would be undone. Example: {\"count\": 2}")
       .input(object({
         field("count", integer().min(1).max(1000).defaultsTo(1))
           .describe("Number of steps to undo"),
@@ -335,8 +341,9 @@ void registerHistoryTools(ToolRegistry& registry)
     ToolDef{"redo"}
       .title("Redo")
       .description(
-        "Redoes the most recently undone steps, like Edit > Redo. Fails while a "
-        "transaction is open. Example: {\"count\": 1}")
+        "Redoes the most recently undone steps, like Edit > Redo, and returns their "
+        "names. Any new change clears the redo steps. Fails with TRANSACTION_ACTIVE "
+        "while a transaction is open. Example: {\"count\": 1}")
       .input(object({
         field("count", integer().min(1).max(1000).defaultsTo(1))
           .describe("Number of steps to redo"),
@@ -354,17 +361,20 @@ void registerHistoryTools(ToolRegistry& registry)
     ToolDef{"transaction_begin"}
       .title("Begin Transaction")
       .description(
-        "Opens a transaction on the document: all following calls of this session become "
-        "one undo step 'AI: <name>' on transaction_commit, or leave no trace on "
-        "transaction_rollback. Other clients cannot modify the document meanwhile. "
-        "Closing the session rolls it back. Example: {\"name\": \"Build east wing\"}")
+        "Opens a transaction on the document: all following changes of this session "
+        "become one undo step 'AI: <name>' on transaction_commit, or leave no trace on "
+        "transaction_rollback. Other clients cannot modify the document meanwhile, and "
+        "undo/redo fail until it is closed. Calls inside the transaction report undoStep "
+        "null (their changes belong to the transaction's step). Transactions cannot be "
+        "nested. Closing the session rolls it back. Example: {\"name\": \"Build east "
+        "wing\"}")
       .input(object({
         field("name", string().nonEmpty()).required().describe("Name of the undo step"),
       }))
       .output(object({
-        field("transaction", string()),
-        field("document", string()),
-        field("wouldBegin", string()),
+        field("transaction", string()).describe("Name of the opened transaction"),
+        field("document", string()).describe("Handle of the document"),
+        field("wouldBegin", string()).describe("Dry run: name it would open"),
       }))
       .mutation(Mutation::Map)
       .transactional(false)
@@ -374,13 +384,17 @@ void registerHistoryTools(ToolRegistry& registry)
     ToolDef{"transaction_commit"}
       .title("Commit Transaction")
       .description(
-        "Commits this session's open transaction as one undo step. Example: {}")
+        "Closes this session's open transaction (transaction_begin) and stores all its "
+        "changes as one undo step 'AI: <name>' (undoStep); empty: true if nothing "
+        "changed. 'changes' lists the net created, modified and removed objects of all "
+        "calls in the transaction. Fails with NO_TRANSACTION if this session has none "
+        "open. Example: {}")
       .input(object({}))
       .output(object({
-        field("committed", string()),
+        field("committed", string()).describe("Name of the committed transaction"),
         field("empty", boolean())
           .describe("True if the transaction contained no changes"),
-        field("wouldCommit", string()),
+        field("wouldCommit", string()).describe("Dry run: name it would commit"),
       }))
       .mutation(Mutation::Map)
       .transactional(false)
@@ -389,13 +403,13 @@ void registerHistoryTools(ToolRegistry& registry)
   registry.add(
     ToolDef{"transaction_rollback"}
       .title("Roll Back Transaction")
-      .description(
-        "Discards all changes made in this session's open transaction and closes it. "
-        "Example: {}")
+      .description("Discards all changes made in this session's open transaction "
+                   "(transaction_begin) and closes it, leaving no undo step. Fails with "
+                   "NO_TRANSACTION if this session has none open. Example: {}")
       .input(object({}))
       .output(object({
-        field("rolledBack", string()),
-        field("wouldRollBack", string()),
+        field("rolledBack", string()).describe("Name of the discarded transaction"),
+        field("wouldRollBack", string()).describe("Dry run: name it would discard"),
       }))
       .mutation(Mutation::Map)
       .transactional(false)

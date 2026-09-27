@@ -33,6 +33,7 @@
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
+#include <algorithm>
 #include <filesystem>
 
 #include <catch2/catch_test_macros.hpp>
@@ -90,6 +91,22 @@ TEST_CASE("DocumentTools")
       CHECK(document["materials"]["mode"] == "wad");
       CHECK(resultOf(result)["initialMap"].is_null());
       CHECK(resultOf(result)["replaced"].is_null());
+
+      // the objects of the template (or the single default brush) are reported
+      const auto& initialObjects = resultOf(result)["initialObjects"];
+      REQUIRE(initialObjects.is_array());
+      auto topLevelCount = size_t(0);
+      for (const auto* layer :
+           fixture.host().documentList[0].document->map().worldNode().allLayers())
+      {
+        topLevelCount += layer->childCount();
+      }
+      CHECK(initialObjects.size() == topLevelCount);
+      const auto warnings = result.value("warnings", Json::array());
+      CHECK(
+        std::ranges::any_of(
+          warnings, [](const auto& w) { return w["code"] == "INITIAL_OBJECTS"; })
+        == (topLevelCount > 0));
 
       REQUIRE(fixture.host().documentList.size() == 1);
       CHECK(Json(fixture.host().documentList[0].id) == document["id"]);

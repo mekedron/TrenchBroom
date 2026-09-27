@@ -367,6 +367,21 @@ TEST_CASE("SceneTools")
           {{"id", playerStartId}, {"classname", "info_player_start"}},
           {{"id", doorId}, {"classname", "func_door"}},
         });
+      CHECK(!result.contains("warnings"));
+
+      // unknown fields are ignored with a warning; fields that some objects have are not
+      // unknown
+      const auto unknown = fixture.call(
+        "object_get",
+        Json{
+          {"ids", {playerStartId, doorId}},
+          {"fields", {"id", "origin", "vertices", "faces.bogus"}}});
+      CHECK(unknown["objects"][1] == Json{{"id", doorId}});
+      REQUIRE(unknown["warnings"].size() == 1);
+      CHECK(unknown["warnings"][0]["code"] == "UNKNOWN_FIELD");
+      const auto message = unknown["warnings"][0]["message"].get<std::string>();
+      CHECK(message.find("'vertices', 'faces.bogus'") != std::string::npos);
+      CHECK(message.find("origin") == std::string::npos);
 
       const auto summary =
         fixture.call("object_get", Json{{"ids", {playerStartId}}, {"detail", "summary"}});

@@ -59,7 +59,7 @@ TEST_CASE("Schema")
                   "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
           "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5},
           "mode": {"type": "string", "enum": ["a", "b"]},
-          "id": {"type": "string", "description": "Object id (brush), e.g. 'brush:1042'",
+          "id": {"type": "string", "description": "Object id (brush), e.g. 'brush:12'",
                  "format": "object-id"}
         },
         "required": ["min"],

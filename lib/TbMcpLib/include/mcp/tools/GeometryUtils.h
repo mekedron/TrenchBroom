@@ -79,6 +79,12 @@ BrushClass classifyBrush(const mdl::BrushNode& brushNode);
 /** Whether the node is an entity without children (a point entity). */
 bool isPointEntity(const mdl::Node& node);
 
+/**
+ * Whether the node is in a layer omitted from export: the compiler never sees it. Hidden
+ * and locked objects are compiled.
+ */
+bool inOmittedLayer(const mdl::Node& node);
+
 struct RayHit
 {
   double distance;

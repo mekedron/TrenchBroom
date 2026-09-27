@@ -405,6 +405,7 @@ TEST_CASE("McpServer")
 
     SECTION("prompts")
     {
+      const auto registered = server.prompts().prompts().size();
       server.prompts().add(PromptDef{
         "test_prompt",
         "Test",
@@ -415,7 +416,7 @@ TEST_CASE("McpServer")
         },
       });
 
-      CHECK(fixture.rpc("prompts/list")["result"]["prompts"].size() == 1);
+      CHECK(fixture.rpc("prompts/list")["result"]["prompts"].size() == registered + 1);
       CHECK(
         fixture.rpc(
           "prompts/get",
