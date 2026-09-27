@@ -463,60 +463,28 @@ Result<const mdl::SmartTag*, ToolError> tagArgument(
 
 /**
  * The brushes and patches an object tag acts on: the given ids (brush entity ids stand
- * for their brushes and patches) or the selection.
+ * for their brushes and patches, see resolveTargets) or the selection.
  */
 Result<std::vector<mdl::Node*>, ToolError> resolveObjectTargets(
   CallContext& context, const Args& args, const std::string& tagName)
 {
-  auto& ids = context.ids();
-  const auto explicitIds = args.getOptional<std::vector<std::string>>("ids");
-  if (!explicitIds)
+  if (const auto explicitIds = args.getOptional<std::vector<std::string>>("ids"))
   {
-    return resolveTargets(context, args, "ids", {ObjectKind::Brush, ObjectKind::Patch});
-  }
-
-  auto expanded = std::vector<std::string>{};
-  for (const auto& id : *explicitIds)
-  {
-    const auto ref = parseObjectRef(id);
-    if (ref && ref->faceIndex)
+    for (const auto& id : *explicitIds)
     {
-      return makeError(
-        ErrorCode::WrongObjectKind,
-        "'" + tagName + "' is an object tag; it applies to whole brushes, not to the "
-          + "face " + id + ".",
-        "Pass the brush id (e.g. '" + id.substr(0, id.find('/')) + "').",
-        {id});
-    }
-    if (ref && ref->kind == ObjectKind::Entity)
-    {
-      const auto node = ids.resolve(id);
-      if (node.is_error())
-      {
-        return errorOf(node);
-      }
-      if (!node.value()->hasChildren())
+      if (const auto ref = parseObjectRef(id); ref && ref->faceIndex)
       {
         return makeError(
           ErrorCode::WrongObjectKind,
-          "Object " + id + " is a point entity; tags apply to brushes and patches.",
-          "Pass brush ids or the id of a brush entity.",
+          "'" + tagName + "' is an object tag; it applies to whole brushes, not to the "
+            + "face " + id + ".",
+          "Pass the brush id (e.g. '" + id.substr(0, id.find('/')) + "').",
           {id});
       }
-      for (const auto* child : node.value()->children())
-      {
-        expanded.push_back(ids.format(*child));
-      }
-      continue;
     }
-    expanded.push_back(id);
   }
 
-  return resolveTargets(
-    context,
-    Args{Json{{"ids", expanded}}},
-    "ids",
-    {ObjectKind::Brush, ObjectKind::Patch});
+  return resolveTargets(context, args, "ids", {ObjectKind::Brush, ObjectKind::Patch});
 }
 
 /** The faces a face tag acts on (see resolveFaceTargets); patches are rejected. */

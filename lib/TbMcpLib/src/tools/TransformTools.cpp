@@ -79,8 +79,10 @@ schema::Field transformIdsField()
 {
   return idsField(
     TransformableKinds,
-    "Object ids (groups, entities, brushes, patches) to act on. "
-    "Default: the current selection");
+    "Object ids (groups, entities, brushes, patches) to act on. As in the editor, a "
+    "group is transformed as a whole and a brush entity stands for all its brushes and "
+    "patches (results list them, each with its 'entity'). Default: the current "
+    "selection");
 }
 
 schema::Field alignmentLockField()

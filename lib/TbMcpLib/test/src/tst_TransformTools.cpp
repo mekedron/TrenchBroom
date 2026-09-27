@@ -29,6 +29,7 @@
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_NodeVisibility.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
@@ -682,6 +683,100 @@ TEST_CASE("TransformTools")
         call(Json{{"pattern", "line"}, {"count", 3}, {"offset", {8000, 0, 0}}})
         == ErrorCode::OutOfWorldBounds);
       CHECK(brushCount(map) == 2);
+    }
+  }
+
+  SECTION("brush entities stand for their brushes, as in the editor")
+  {
+    const auto door = resultOf(fixture.call(
+      "entity_create_brush",
+      Json{{"classname", "func_door"}, {"ids", {idA, idB}}}))["entity"]
+                        .get<std::string>();
+    auto* doorNode = fixture.node(door);
+    REQUIRE(doorNode);
+    mdl::deselectAll(map);
+
+    SECTION("objects_rotate")
+    {
+      const auto rotated = fixture.call(
+        "objects_rotate", Json{{"ids", {door}}, {"angle", 90}, {"center", {0, 0, 0}}});
+      CHECK(boundsEqual(brushA->logicalBounds(), {{-32, 0, 0}, {0, 64, 16}}));
+      CHECK(boundsEqual(brushB->logicalBounds(), {{-64, 128, 0}, {0, 192, 64}}));
+      CHECK(resultOf(rotated)["objects"].size() == 2);
+      CHECK(resultOf(rotated)["objects"][0]["entity"] == door);
+      CHECK_FALSE(selection.hasAny());
+    }
+
+    SECTION("objects_move, objects_scale, objects_shear and objects_flip")
+    {
+      fixture.call("objects_move", Json{{"ids", {door}}, {"vector", {0, 0, 64}}});
+      CHECK(boundsEqual(brushA->logicalBounds(), boundsA.translate({0, 0, 64})));
+      CHECK(boundsEqual(brushB->logicalBounds(), boundsB.translate({0, 0, 64})));
+
+      fixture.call(
+        "objects_scale",
+        Json{{"ids", {door}}, {"factors", {2, 1, 1}}, {"anchor", "min"}});
+      CHECK(boundsEqual(doorNode->logicalBounds(), {{0, 0, 64}, {384, 64, 128}}));
+
+      fixture.call(
+        "objects_shear", Json{{"ids", {door}}, {"side", "+z"}, {"offset", {64, 0, 0}}});
+      CHECK(boundsEqual(doorNode->logicalBounds(), {{0, 0, 64}, {448, 64, 128}}));
+
+      fixture.call("objects_flip", Json{{"ids", {door}}, {"axis", "x"}});
+      CHECK(boundsEqual(doorNode->logicalBounds(), {{0, 0, 64}, {448, 64, 128}}));
+      CHECK(brushA->parent() == doorNode);
+    }
+
+    SECTION("objects_duplicate and objects_array copy the entity")
+    {
+      const auto duplicated =
+        fixture.call("objects_duplicate", Json{{"ids", {door}}, {"offset", {0, 128, 0}}});
+      const auto& copies = resultOf(duplicated)["copies"];
+      REQUIRE(copies.size() == 2);
+      auto* copy = fixture.node(copies[0]["copy"].get<std::string>());
+      REQUIRE(copy);
+      CHECK(copy->parent() != doorNode);
+      CHECK(
+        copy->parent() == fixture.node(copies[1]["copy"].get<std::string>())->parent());
+      CHECK(boundsEqual(copy->parent()->logicalBounds(), {{0, 128, 0}, {192, 192, 64}}));
+
+      const auto array = fixture.call(
+        "objects_array",
+        Json{
+          {"ids", {door}}, {"pattern", "line"}, {"count", 3}, {"offset", {0, 0, 128}}});
+      CHECK(resultOf(array)["created"].size() == 4);
+      CHECK(brushCount(map) == 8);
+    }
+
+    SECTION("objects_delete removes the entity")
+    {
+      const auto deleted = fixture.call("objects_delete", Json{{"ids", {door}}});
+      CHECK(resultOf(deleted)["count"] == 2);
+      CHECK(brushCount(map) == 0);
+      CHECK(
+        fixture.callExpectingError("object_get", Json{{"ids", {door}}}).code
+        == ErrorCode::ObjectNotFound);
+    }
+
+    SECTION("brush tools and selection_set")
+    {
+      fixture.call("selection_set", Json{{"ids", {door}}});
+      CHECK(std::ranges::is_permutation(
+        selection.nodes, std::vector<mdl::Node*>{brushA, brushB}));
+
+      mdl::deselectAll(map);
+      const auto selected = fixture.call("select_faces_of", Json{{"ids", {door}}});
+      CHECK(selection.brushFaces.size() == 12);
+      CHECK(resultOf(selected).is_object());
+    }
+
+    SECTION("hidden brushes")
+    {
+      mdl::hideNodes(map, {brushB});
+      const auto error = fixture.callExpectingError(
+        "objects_rotate", Json{{"ids", {door}}, {"angle", 90}});
+      CHECK(error.code == ErrorCode::ObjectNotEditable);
+      CHECK(error.objectIds == std::vector{door});
     }
   }
 

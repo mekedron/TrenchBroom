@@ -536,7 +536,7 @@ TEST_CASE("SelectionTools")
           .callExpectingError(
             "select_spatial", Json{{"mode", "inside"}, {"ids", {ogreId}}})
           .code
-        == ErrorCode::InvalidArgument);
+        == ErrorCode::WrongObjectKind);
 
       mdl::selectNodes(map, {ogre});
       CHECK(
@@ -630,7 +630,7 @@ TEST_CASE("SelectionTools")
       == ErrorCode::InvalidArgument);
     CHECK(
       fixture.callExpectingError("select_faces_of", Json{{"ids", {ogreId}}}).code
-      == ErrorCode::InvalidArgument);
+      == ErrorCode::WrongObjectKind);
     CHECK(
       fixture.callExpectingError("select_faces_of", Json{{"coplanar", true}}).code
       == ErrorCode::InvalidArgument);

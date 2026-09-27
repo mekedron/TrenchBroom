@@ -587,9 +587,16 @@ ToolResult withFaces(CallContext&, const std::vector<mdl::BrushFaceHandle>& face
 ```
 
 `resolveTargets` uses the given ids or, without ids, the current selection (`NO_SELECTION` if empty).
-Non-editable targets (hidden, locked, inside a closed group) fail with `OBJECT_NOT_EDITABLE`; the hint names
-the fix (`layer_set_state` unlock/show, or `group_open`). An explicit id of the wrong kind fails schema
-validation (`INVALID_ARGUMENT`); a selection of the wrong kinds gives `WRONG_OBJECT_KIND`.
+Targets resolve to what the editor would select and transform: a group stays a group (it is transformed as a
+whole), and the id of a brush entity stands for its brushes and patches, because the editor never selects a
+brush entity itself (`EditorContext::selectable` is false for entities with children); clicking one selects
+its brushes. Tools that accept brushes or patches but not entities keep only the members of those kinds, and
+`idsField` then accepts entity ids in the schema and says so in the description; a point entity (or a brush
+entity without such members) fails with `WRONG_OBJECT_KIND`. Non-editable targets (hidden, locked, inside a
+closed group) fail with `OBJECT_NOT_EDITABLE`, naming the brush entity if one of its members is not editable;
+the hint names the fix (`layer_set_state` unlock/show, or `group_open`). Other explicit ids of the wrong kind
+fail schema validation (`INVALID_ARGUMENT`); a selection of the wrong kinds gives `WRONG_OBJECT_KIND`.
+`selection_set` expands brush entity ids the same way.
 
 `withTargets` saves the selection, selects exactly the targets, runs `fn`, and restores the saved selection
 (dropping removed nodes), all inside the call transaction. Tools whose editor counterpart leaves results
@@ -985,7 +992,9 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
 
 - Transforms use `withTargets` + `translateSelection` / `rotateSelection` / `scaleSelection` /
   `shearSelection` / `flipSelection`, so texture lock, entity angle updates and repeat semantics match the
-  editor.
+  editor. Brush entity ids stand for their brushes and patches (§6.4), so a door or a button moves, rotates,
+  duplicates (with a copy of the entity) or is deleted (with the entity) as a whole; results list the
+  brushes, each with its `entity`.
 - Rotate and flip default to the exact bounds center (the editor uses its grid reference point).
   `objects_rotate` sets the world's `updateAnglePropertyAfterTransform` for the call (`updateEntityAngles`,
   default true) and restores it.
@@ -1010,6 +1019,12 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   selection's entities, `NO_SELECTION` when nothing is selected. `withEntities` selects exactly the targets
   before calling the `Map_Entities` functions (which act on `selection().allEntities()`); worldspawn runs
   separately because the editor drops it from mixed selections.
+- `entity_create_point` and `entity_create_brush` take `properties` like `entity_properties_set`: a `null`
+  value removes the key. Removals run after the other properties and after `applyDefaults`, so they also
+  remove defaults. Games whose configuration sets default properties (`setDefaultProperties`, e.g. Half-Life)
+  get all defaults of the definition when the editor creates the entity, including empty ones such as a
+  `func_breakable`'s `gibmodel`; the server keeps this editor behavior (the definition asks for these keys)
+  and `null` removes such a key in the same call.
 - `entity_create_point` snaps to the grid. `dropToFloor` casts five vertical rays (bounds center and inset
   corners, from the height of the bounds center) against visible solid and brush-entity brushes and patches
   (not triggers) and places the bounds on the highest hit; it warns `ENTITY_OVERLAPS_BRUSHES` if the bounds
@@ -1100,7 +1115,7 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   (classname, material, surfaceparm, content or surface flags) and tells content from surface flag matchers
   apart by testing a face; flag masks of names the game does not define are reported as `invalidflags`.
   `tag_apply` / `tag_remove` select exactly the targets (`withTargets` for object tags, where brush entity ids
-  stand for their brushes; `withFaces` for face tags) and call `SmartTag::enable` / `disable` with an MCP
+  stand for their brushes as in `resolveTargets`; `withFaces` for face tags) and call `SmartTag::enable` / `disable` with an MCP
   `TagMatcherCallback` that picks `option` or the first choice with a `TAG_OPTION_CHOSEN` warning. Material
   tags cannot be removed (`UNSUPPORTED`, hint: `material_apply`). Results list the targets that carry the tag
   afterwards; created brush entities also appear in the change report.

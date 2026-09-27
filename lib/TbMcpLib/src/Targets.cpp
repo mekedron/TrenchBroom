@@ -109,11 +109,56 @@ ToolResult withSelection(
   return result;
 }
 
+/**
+ * The members that stand for a brush entity when it is passed to a tool accepting the
+ * given kinds: its brushes and patches (those of the accepted kinds unless entities are
+ * accepted). Empty for other nodes, or if the tool accepts neither entities nor any kind
+ * of member.
+ */
+std::vector<mdl::Node*> brushEntityMembers(
+  const mdl::Node& node, const std::vector<ObjectKind>& kinds)
+{
+  if (objectKindOf(node) != ObjectKind::Entity || !node.hasChildren())
+  {
+    return {};
+  }
+
+  const auto accepts = [&](const ObjectKind kind) {
+    return kinds.empty() || std::ranges::find(kinds, kind) != kinds.end();
+  };
+  const auto acceptsAllMembers = accepts(ObjectKind::Entity);
+
+  auto members = std::vector<mdl::Node*>{};
+  for (auto* child : node.children())
+  {
+    if (acceptsAllMembers || accepts(objectKindOf(*child)))
+    {
+      members.push_back(child);
+    }
+  }
+  return members;
+}
+
 } // namespace
 
 schema::Field idsField(std::vector<ObjectKind> kinds, std::string description)
 {
   using namespace schema;
+
+  // brush entity ids stand for their brushes (see resolveTargets)
+  const auto accepts = [&](const ObjectKind kind) {
+    return std::ranges::find(kinds, kind) != kinds.end();
+  };
+  if (
+    (accepts(ObjectKind::Brush) || accepts(ObjectKind::Patch))
+    && !accepts(ObjectKind::Entity))
+  {
+    kinds.push_back(ObjectKind::Entity);
+    description +=
+      ". Brush entity ids stand for their "
+      + std::string{accepts(ObjectKind::Patch) ? "brushes and patches" : "brushes"};
+  }
+
   return field("ids", array(objectId(std::move(kinds))).nonEmpty())
     .describe(std::move(description));
 }
@@ -128,6 +173,13 @@ Result<std::vector<mdl::Node*>, ToolError> resolveTargets(
   auto& ids = context.ids();
 
   auto nodes = std::vector<mdl::Node*>{};
+  const auto addNode = [&](mdl::Node* node) {
+    if (std::ranges::find(nodes, node) == nodes.end())
+    {
+      nodes.push_back(node);
+    }
+  };
+
   if (const auto explicitIds = args.getOptional<std::vector<std::string>>(key))
   {
     for (const auto& id : *explicitIds)
@@ -137,10 +189,28 @@ Result<std::vector<mdl::Node*>, ToolError> resolveTargets(
       {
         return errorOf(node);
       }
-      if (std::ranges::find(nodes, node.value()) == nodes.end())
+
+      // a brush entity is selected through its brushes and patches, as in the editor
+      if (const auto members = brushEntityMembers(*node.value(), kinds); !members.empty())
       {
-        nodes.push_back(node.value());
+        for (auto* member : members)
+        {
+          if (!map.editorContext().selectable(*member))
+          {
+            return makeError(
+              ErrorCode::ObjectNotEditable,
+              "Brush entity " + id + " cannot be edited: its " + ids.format(*member)
+                + " is hidden, locked, or inside a closed group.",
+              "Show or unlock its layer (layer_set_state), or open its group "
+              "(group_open).",
+              {id});
+          }
+          addNode(member);
+        }
+        continue;
       }
+
+      addNode(node.value());
     }
   }
   else

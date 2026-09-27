@@ -22,11 +22,13 @@
 #include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/EntityProperties.h"
 #include "mdl/Grid.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Node.h"
 #include "mdl/Selection.h"
+#include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
 #include <algorithm>
@@ -412,6 +414,49 @@ TEST_CASE("EntityCreateTools")
         CHECK(resultOf(trigger)["removedEntities"] == Json{id});
         CHECK(fixture.node(id) == nullptr);
       }
+    }
+
+    SECTION("null removes keys, including defaults set on creation")
+    {
+      // games like Half-Life set the definition's defaults on new entities
+      map.worldNode().entityPropertyConfig().setDefaultProperties = true;
+
+      const auto created = fixture.call(
+        "entity_create_brush",
+        Json{
+          {"classname", "func_door"},
+          {"ids", {door1, door2}},
+          {"properties",
+           {{"speed", 200}, {"wait", nullptr}, {"lip", nullptr}, {"message", nullptr}}}});
+      const auto& properties = resultOf(created)["properties"];
+      CHECK(properties["speed"] == "200");
+      CHECK(properties["dmg"] == "2");
+      CHECK_FALSE(properties.contains("wait"));
+      CHECK_FALSE(properties.contains("lip"));
+      CHECK_FALSE(properties.contains("message"));
+      const auto& node = entityNode(fixture, resultOf(created)["entity"]);
+      CHECK(node.entity().property("wait") == nullptr);
+
+      const auto point = fixture.call(
+        "entity_create_point",
+        Json{
+          {"classname", "light"},
+          {"position", {256, 128, 128}},
+          {"properties", {{"style", nullptr}, {"wait", nullptr}}}});
+      CHECK_FALSE(resultOf(point)["properties"].contains("style"));
+      CHECK_FALSE(resultOf(point)["properties"].contains("wait"));
+      CHECK(resultOf(point)["properties"]["light"] == "300");
+
+      map.worldNode().entityPropertyConfig().setDefaultProperties = false;
+      const auto withDefaults = fixture.call(
+        "entity_create_point",
+        Json{
+          {"classname", "light"},
+          {"position", {256, 256, 128}},
+          {"properties", {{"style", nullptr}}},
+          {"applyDefaults", true}});
+      CHECK_FALSE(resultOf(withDefaults)["properties"].contains("style"));
+      CHECK(resultOf(withDefaults)["properties"]["wait"] == "1");
     }
 
     SECTION("trigger_once from the selection")

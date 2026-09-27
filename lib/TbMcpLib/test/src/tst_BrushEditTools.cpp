@@ -232,7 +232,7 @@ TEST_CASE("BrushEditTools")
           .callExpectingError(
             "brush_clip", Json{{"ids", {entityId}}, {"points", {{0, 0, 0}, {0, 64, 0}}}})
           .code
-        == ErrorCode::InvalidArgument);
+        == ErrorCode::WrongObjectKind);
       CHECK(
         fixture
           .callExpectingError("brush_clip", Json{{"points", {{0, 0, 0}, {0, 64, 0}}}})
@@ -529,7 +529,7 @@ TEST_CASE("BrushEditTools")
             "vertices_move",
             Json{{"ids", {entityId}}, {"vertices", {{0, 0, 0}}}, {"vector", {0, 0, 8}}})
           .code
-        == ErrorCode::InvalidArgument);
+        == ErrorCode::WrongObjectKind);
     }
   }
 
@@ -668,7 +668,7 @@ TEST_CASE("BrushEditTools")
         == ErrorCode::InvalidArgument);
       CHECK(
         fixture.callExpectingError("csg_merge", Json{{"ids", {aId, entityId}}}).code
-        == ErrorCode::InvalidArgument);
+        == ErrorCode::WrongObjectKind);
       CHECK(fixture.callExpectingError("csg_merge").code == ErrorCode::NoSelection);
 
       // coplanar faces do not span a volume
@@ -718,7 +718,7 @@ TEST_CASE("BrushEditTools")
 
     CHECK(
       fixture.callExpectingError("csg_subtract", Json{{"ids", {entityId}}}).code
-      == ErrorCode::InvalidArgument);
+      == ErrorCode::WrongObjectKind);
   }
 
   SECTION("csg_intersect")
@@ -783,7 +783,7 @@ TEST_CASE("BrushEditTools")
       == ErrorCode::InvalidArgument);
     CHECK(
       fixture.callExpectingError("csg_hollow", Json{{"ids", {entityId}}}).code
-      == ErrorCode::InvalidArgument);
+      == ErrorCode::WrongObjectKind);
 
     // explicit ids of the wrong kind are rejected by the schema, a selection with the
     // wrong kinds by the tool

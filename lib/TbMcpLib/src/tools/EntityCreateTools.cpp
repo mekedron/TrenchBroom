@@ -71,7 +71,8 @@ constexpr auto Epsilon = 0.01;
 /** A point entity whose bounds are this close above a floor stands on it. */
 constexpr auto SupportTolerance = 1.0;
 
-using PropertyList = std::vector<std::pair<std::string, std::string>>;
+/** Key-value pairs to set; a missing value removes the key. */
+using PropertyList = std::vector<std::pair<std::string, std::optional<std::string>>>;
 
 ToolError invalidArgument(std::string message, std::string hint = {})
 {
@@ -143,7 +144,8 @@ Result<std::string, ToolError> classnameArgument(const Args& args)
 }
 
 /**
- * The properties of the argument `properties` as key-value strings. The classname is
+ * The properties of the argument `properties` as key-value strings; null values (no
+ * value in the result) remove the key, like in entity_properties_set. The classname is
  * given by its own argument; `origin` is rejected if `allowOrigin` is false (point
  * entities take `position`).
  */
@@ -180,13 +182,20 @@ Result<PropertyList, ToolError> propertiesArgument(
         "Remove 'origin' from 'properties' and pass 'position': [x, y, z].");
     }
 
+    if (item.value().is_null())
+    {
+      result.emplace_back(key, std::nullopt);
+      continue;
+    }
+
     auto value = propertyValue(item.value());
     if (!value)
     {
       return invalidArgument(
-        "The value of property '" + key + "' must be a string, a number, a boolean or "
-        "an array of numbers.",
-        "Example: {\"light\": 300, \"_color\": [255, 128, 0], \"message\": \"Hello\"}");
+        "The value of property '" + key + "' must be a string, a number, a boolean, "
+        "an array of numbers or null.",
+        "Example: {\"light\": 300, \"_color\": [255, 128, 0], \"message\": \"Hello\", "
+        "\"gibmodel\": null}");
     }
     if (containsQuote(*value))
     {
@@ -213,7 +222,8 @@ Json propertiesJson(const mdl::Entity& entity)
 /**
  * Validates the properties against the definition (X14 warnings only) and sets them on
  * the given entity. With `applyDefaults`, the definition's defaults of the properties
- * that are still missing are set afterwards.
+ * that are still missing are set afterwards. Keys without a value are removed last, so
+ * that they also remove the defaults set here or when the entity was created.
  */
 ToolResult setProperties(
   CallContext& context,
@@ -232,8 +242,12 @@ ToolResult setProperties(
   return withEntities(context, {&entityNode}, [&]() -> ToolResult {
     for (const auto& [key, value] : properties)
     {
-      validateProperty(context, definition, key, value, {id});
-      if (!mdl::setEntityProperty(map, key, value))
+      if (!value)
+      {
+        continue;
+      }
+      validateProperty(context, definition, key, *value, {id});
+      if (!mdl::setEntityProperty(map, key, *value))
       {
         return context.operationFailed("Property '" + key + "' could not be set.");
       }
@@ -241,6 +255,16 @@ ToolResult setProperties(
     if (applyDefaults)
     {
       mdl::setDefaultEntityProperties(map, mdl::SetDefaultPropertyMode::SetMissing);
+    }
+    for (const auto& [key, value] : properties)
+    {
+      if (!value && entityNode.entity().hasProperty(key))
+      {
+        if (!mdl::removeEntityProperty(map, key))
+        {
+          return context.operationFailed("Property '" + key + "' could not be removed.");
+        }
+      }
     }
     return Json::object();
   });
@@ -435,10 +459,19 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
   auto dropBounds = DropBounds{};
   if (dropToFloor)
   {
+    // Keys given as null are removed after creation, so they do not affect the model
+    auto presentProperties = std::vector<std::pair<std::string, std::string>>{};
+    for (const auto& [key, value] : properties)
+    {
+      if (value)
+      {
+        presentProperties.emplace_back(key, *value);
+      }
+    }
     auto bounds = dropToFloorBounds(
       definition,
       classname,
-      properties,
+      presentProperties,
       args.get<bool>("applyDefaults"),
       args.get<std::string>("dropUsing"),
       models);
@@ -738,9 +771,11 @@ Field propertiesField()
   return field("properties", object({}).allowAdditionalProperties())
     .describe(
       "Properties to set, key -> value. Values may be strings, numbers, booleans (1 / "
-      "0) or arrays of numbers (written space separated, e.g. [255, 128, 0] -> \"255 "
-      "128 0\"). Values are checked against the entity definition; problems are "
-      "warnings (UNKNOWN_PROPERTY, INVALID_CHOICE, ...), never errors");
+      "0), arrays of numbers (written space separated, e.g. [255, 128, 0] -> \"255 "
+      "128 0\") or null, which removes the key, including a default value the entity "
+      "got when it was created (like entity_properties_set). Values are checked against "
+      "the entity definition; problems are warnings (UNKNOWN_PROPERTY, INVALID_CHOICE, "
+      "...), never errors");
 }
 
 } // namespace
@@ -759,7 +794,10 @@ void registerEntityCreateTools(ToolRegistry& registry)
         "the height of the bounds center); no floor fails with INVALID_ARGUMENT. "
         "'angle' sets the yaw in degrees. Properties are validated against the entity "
         "definition (warnings only); applyDefaults sets the definition's defaults of "
-        "all other properties. A brush entity class fails (use entity_create_brush); an "
+        "all other properties. Games that set default properties on creation (e.g. "
+        "Half-Life) add all defaults of the definition, like the editor, including empty "
+        "ones; a null value removes a key. A brush entity class fails (use "
+        "entity_create_brush); an "
         "unknown class is created anyway with an UNKNOWN_CLASSNAME warning. Warnings: "
         "ENTITY_OVERLAPS_BRUSHES if the entity intersects solid brushes, "
         "OUTSIDE_WORLD_BOUNDS, and for entities whose model can be loaded the model "
@@ -824,7 +862,10 @@ void registerEntityCreateTools(ToolRegistry& registry)
         "entity, its properties are kept. A point entity class fails (use "
         "entity_create_point); an unknown class is created anyway with an "
         "UNKNOWN_CLASSNAME warning. Properties are validated against the entity "
-        "definition (warnings only). Example: {\"classname\": \"func_door\", \"ids\": "
+        "definition (warnings only). Games that set default properties on creation (e.g. "
+        "Half-Life) add all defaults of the definition, like the editor, including empty "
+        "ones such as a func_breakable's gibmodel; a null value removes a key. Example: "
+        "{\"classname\": \"func_door\", \"ids\": "
         "[\"brush:1042\"], \"properties\": {\"angle\": -1, \"speed\": 200}}")
       .input(object({
         field("classname", string().nonEmpty())

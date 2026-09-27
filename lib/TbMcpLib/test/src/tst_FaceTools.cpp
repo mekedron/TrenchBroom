@@ -17,6 +17,10 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestEnvironment.h"
+#include "gl/ResourceManager.h"
+#include "gl/TestGl.h"
+#include "gl/TestUtils.h"
 #include "mcp/McpToolFixture.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
@@ -673,6 +677,66 @@ TEST_CASE("FaceTools")
       const auto& wall = face(*brush, {1, 0, 0});
       CHECK(wall.uvAttributes().rotation == Catch::Approx(0));
       CHECK(vm::is_equal(wall.uAxis(), vm::vec3d{0, 1, 0}, 0.001));
+    }
+
+    SECTION("fit on copies made by objects_array keeps the Valve rotation")
+    {
+      // a Quake map in Valve 220 format with the materials of materials.wad
+      auto& map = newDocument(fixture, "Quake").map();
+      REQUIRE(map.worldNode().mapFormat() == mdl::MapFormat::Valve);
+      const auto wad = getFixtureRoot() / "test" / "mcp" / "wads" / "materials.wad";
+      fixture.call("materials_collections_set", Json{{"wads", Json{wad.string()}}});
+      auto gl = gl::TestGl{};
+      gl::processResourcesSync(
+        map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+
+      auto* brush = addBrush(map, {{0, 0, 0}, {64, 64, 64}}, "wall_old_a");
+      REQUIRE(brush->brush().faces().front().material());
+
+      const auto faceItems = [&](const std::string& brushId) {
+        return fixture.call("face_attributes_get", Json{{"ids", {brushId}}})["items"];
+      };
+      const auto original = faceItems(fixture.id(*brush));
+
+      const auto array = fixture.call(
+        "objects_array",
+        Json{
+          {"ids", {fixture.id(*brush)}},
+          {"pattern", "line"},
+          {"count", 3},
+          {"offset", {128, 0, 0}},
+          {"alignmentLock", true},
+        });
+      const auto copyId = resultOf(array)["instances"][2][0].get<std::string>();
+      const auto copied = faceItems(copyId);
+      REQUIRE(copied.size() == original.size());
+      for (size_t i = 0; i < copied.size(); ++i)
+      {
+        CHECK(copied[i]["rotation"] == original[i]["rotation"]);
+      }
+
+      const auto fitted =
+        resultOf(fixture.call("uv_align", Json{{"ids", {copyId}}, {"operation", "fit"}}));
+      REQUIRE(fitted["count"] == original.size());
+      const auto after = faceItems(copyId);
+      for (size_t i = 0; i < after.size(); ++i)
+      {
+        CAPTURE(i, original[i], fitted["faces"][i], after[i]);
+        CHECK(fitted["faces"][i]["rotation"] == original[i]["rotation"]);
+        CHECK(after[i]["rotation"] == original[i]["rotation"]);
+        CHECK(after[i]["material"] == "wall_old_a");
+        CHECK(after[i]["uAxis"] == copied[i]["uAxis"]);
+        CHECK(after[i]["vAxis"] == copied[i]["vAxis"]);
+
+        // the texture covers the face exactly once
+        const auto faceHandle = after[i]["id"].get<std::string>();
+        auto* copy = dynamic_cast<mdl::BrushNode*>(fixture.node(copyId));
+        const auto& face = copy->brush().face(
+          std::stoul(faceHandle.substr(faceHandle.find("/face:") + 6)));
+        const auto [min, max] = uvBounds(face);
+        CHECK(max.x() - min.x() == Catch::Approx(face.textureSize().x()));
+        CHECK(max.y() - min.y() == Catch::Approx(face.textureSize().y()));
+      }
     }
 
     SECTION("dry run, ignored and invalid arguments")

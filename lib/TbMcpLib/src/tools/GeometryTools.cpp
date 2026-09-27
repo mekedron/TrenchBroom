@@ -1178,9 +1178,9 @@ void registerGeometryTools(ToolRegistry& registry)
         "INVALID_ARGUMENT. Example: {\"ids\": [\"brush:12\"], \"min\": [240, -16, 0], "
         "\"max\": [304, 0, 112]}")
       .input(object({
-        field("ids", array(objectId({ObjectKind::Brush})).nonEmpty())
-          .describe("Wall brushes to cut. Default: all editable brushes intersecting the "
-                    "opening"),
+        idsField(
+          {ObjectKind::Brush},
+          "Wall brushes to cut. Default: all editable brushes intersecting the opening"),
         field("min", vec3()).required().describe("Minimum corner of the opening"),
         field("max", vec3()).required().describe("Maximum corner of the opening"),
         field("material", string().nonEmpty())

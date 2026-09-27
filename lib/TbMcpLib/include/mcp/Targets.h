@@ -42,7 +42,9 @@ class CallContext;
 
 /**
  * The standard `ids` parameter: explicit object ids; when omitted, the tool acts on the
- * current selection (spec X7).
+ * current selection (spec X7). If brushes or patches are accepted, so are brush entities,
+ * which stand for their brushes and patches (see resolveTargets); the description says
+ * so.
  */
 schema::Field idsField(
   std::vector<ObjectKind> kinds = {},
@@ -50,9 +52,12 @@ schema::Field idsField(
 
 /**
  * Resolves the targets of a call: the objects named by the given argument, or the current
- * selection if the argument is absent. Fails with NO_SELECTION if neither yields any
- * object, with OBJECT_NOT_FOUND / WRONG_OBJECT_KIND for bad ids, and with
- * OBJECT_NOT_EDITABLE for hidden or locked objects or objects in a closed group.
+ * selection if the argument is absent. Like a click in the editor, the id of a brush
+ * entity stands for its brushes and patches (only those of the given kinds unless
+ * entities are accepted), since brush entities are selected through them; groups stay
+ * groups. Fails with NO_SELECTION if neither yields any object, with OBJECT_NOT_FOUND /
+ * WRONG_OBJECT_KIND for bad ids, and with OBJECT_NOT_EDITABLE for hidden or locked
+ * objects or objects in a closed group.
  */
 Result<std::vector<mdl::Node*>, ToolError> resolveTargets(
   CallContext& context,

@@ -264,13 +264,20 @@ ToolResult selectionSet(CallContext& context, const Args& args)
           "To select the contents of layers, use select_by with 'layers'.",
           {id});
       }
-      if (mode != "remove" && !editorContext.selectable(*node))
+      // like a click in the editor, a brush entity selects its brushes and patches
+      const auto members = kind == ObjectKind::Entity && node->hasChildren()
+                             ? node->children()
+                             : std::vector<mdl::Node*>{node};
+      for (auto* member : members)
       {
-        return notSelectableError(id);
-      }
-      if (std::ranges::find(nodes, node) == nodes.end())
-      {
-        nodes.push_back(node);
+        if (mode != "remove" && !editorContext.selectable(*member))
+        {
+          return notSelectableError(id);
+        }
+        if (std::ranges::find(nodes, member) == nodes.end())
+        {
+          nodes.push_back(member);
+        }
       }
     }
   }
@@ -714,7 +721,8 @@ void registerSelectionTools(ToolRegistry& registry)
       .title("Set Selection")
       .description(
         "Replaces, extends or reduces the selection with object ids or face ids (like "
-        "'brush:12/face:3'); objects and faces cannot be mixed. Selecting is undoable. "
+        "'brush:12/face:3'); objects and faces cannot be mixed. As in the editor, a "
+        "brush entity id selects its brushes and patches. Selecting is undoable. "
         "Hidden, locked objects and objects inside closed groups cannot be selected. To "
         "deselect everything use selection_clear. "
         "Example: {\"ids\": [\"brush:12\", \"entity:40\"], \"mode\": \"add\"}")
