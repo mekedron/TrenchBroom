@@ -165,7 +165,9 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 | `entity_move_brushes` | Moves brushes into a brush entity, or back to the world ("make structural") | Brushes, target entity or world | Change report | v1 |
 | `entity_links_get` | Shows link relations (target → targetname) for entities, including broken links | Entities or whole map | Links | v1 |
 | `entity_link` | Links a source entity to a target, generating a unique name when needed | Source, target, link key | Change report | v1 |
-| `entity_model_info` | Which model, skin and frame an entity shows and its bounds | Entity | Model info | v1 |
+| `entity_model_info` | Which model, skin and frame an entity shows; its animations with the real model bounds of each | Entity | Model info | v1 |
+
+Placement uses the real model bounds of the entity's current animation: creating or moving an entity warns when the model penetrates brushes or floats, and dropping to the floor can use the model bounds.
 | `entity_color_set` | Sets a color property in the right range (float or byte) for the class | Entity, key, color | Change report | v1 |
 
 ## 11. Materials, UV alignment and face attributes
@@ -185,6 +187,20 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 | `locks_get` / `locks_set` | Reads or sets texture lock and UV lock | Values | Values | v1 |
 | `tags_list` | Lists smart tags of the game (clip, trigger, detail…) with what they match | — | Tags | v1 |
 | `tag_apply` / `tag_remove` | Turns objects/faces into a tag type or back ("make structural") | Tag, objects/faces | Change report | v1 |
+
+### 11.1. Texturing knowledge
+
+The agent textures surfaces the way an experienced designer of the game would. Knowledge comes from data, for any game: explicit notes, a scanned corpus of reference maps, the current map, and analysis of the texture image.
+
+| Tool | What it does | Key inputs | Returns | Priority |
+|---|---|---|---|---|
+| `material_corpus_scan` | Collects per-material statistics (scales, repeats, face sizes, alignment) from a folder of reference `.map` files; cached per game and mod | Folder | Summary | v1 |
+| `material_notes_get` / `material_notes_set` | Explicit per-material facts for a game or mod (kind, typical scale); override statistics | Materials, notes | Notes | v1 |
+| `material_usage` | Material profile: kind (panel, seamless tile, trim, decal-like, sky, liquid, tool), typical scale, texel density, typical face size and repeats, with the source of each value | Materials | Profiles | v1 |
+| `uv_check` | Texturing problems: aspect distortion above ~10%, fractional repeats on panels, unaligned panels, unusual scale, texel density mismatch with neighbours, seams between coplanar faces; each with a suggested fix | Faces or map | Findings | v1 |
+| `material_fit_geometry` | Face size at which a panel fits exactly at its typical scale, and the resize needed for a given face | Face, material | Sizes | v1 |
+
+`uv_align` fit keeps the aspect ratio when asked: the agent sets repeats on one axis and the other follows. Material and UV tools report `uv_check` findings as warnings.
 
 ## 12. Layers, groups and visibility
 
@@ -208,6 +224,7 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 |---|---|---|---|---|
 | `clipboard_copy` / `clipboard_cut` | Copies or cuts objects or faces as map text; returns the text too | Objects/faces | Text | v1 |
 | `clipboard_paste` | Pastes map text at the original position or at a given point; face text applies attributes to selected faces | Text, position mode | New IDs | v1 |
+| `map_file_inspect` | Lists the format, layers, groups, classnames and materials of another map file, and which materials are missing in the current map | File | Summary | v1 |
 | `map_import` | Imports all or part of another map file (by layer, group, classname or region) into the current map at a position, converting the format | File, filter, position, target layer | New IDs | v1 |
 | `prefab_save` / `prefab_list` / `prefab_insert` | Saves selected objects as a named reusable fragment in a user prefab folder; lists and inserts them | Name, objects / prefab, position, rotation | IDs | v2 |
 

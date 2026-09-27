@@ -326,7 +326,7 @@ class DocumentHost {
   virtual std::vector<std::filesystem::path> recentDocuments() = 0;
 };
 
-class McpHost {  // ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E14)
+class McpHost {  // ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E15)
 public:
   Notifier<ui::MapDocument&> documentWillCloseNotifier;    // before a document is destroyed
   Notifier<> documentsDidChangeNotifier;                   // open, close, focus change
@@ -388,7 +388,7 @@ whose `FakeCompileJob`s the test drives with `append` / `finish` (`onStart` can 
 like a test run, `startError` makes the start fail); `compileHostOverride` substitutes another compile host
 (`TbMcpUiLibTest` uses the real `McpCompileHost`), and `supportsCompile = false` simulates a host without one.
 
-Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost` (E11), the snapshot renderer (E12). A host that does not
+Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost` (E13), the snapshot renderer (E10). A host that does not
 implement a capability maps to `UNSUPPORTED_IN_HOST`.
 
 ### 4.4 Server state
@@ -397,7 +397,7 @@ implement a capability maps to `UNSUPPORTED_IN_HOST`.
 through `McpServer::state()`. It creates a `DocumentState` (`IdRegistry`, open `AgentTransaction`, resource
 change hooks) for every open document whenever the document list changes, so subscriptions work before any
 tool touched a document, and drops it on `documentWillCloseNotifier`. It owns the `CompileRuns` registry
-(§10.10); `ServerState::isCompileRunning(document)` is true while an MCP run or the editor's compilation
+(§10.10) and the server clipboard (`ServerState::clipboard`, §10.11); `ServerState::isCompileRunning(document)` is true while an MCP run or the editor's compilation
 dialog compiles the document.
 
 ---
@@ -428,7 +428,7 @@ dialog compiles the document.
    `brush:1042`. The world is always `world` and the default layer always `layer:default` (canonical, also
    accepted on input). Faces are `brush:1042/face:3`, the index into `BrushNode::brush().faces()`; a face id
    resolves to its brush, and `resolveFace` (`Targets.h`) returns the `BrushFaceHandle`. Other handles:
-   `doc:<n>` (documents), `run:<n>` (compile runs, E7), `issue:<runtimeId>:<issueType>:<k>` (issues, E10).
+   `doc:<n>` (documents), `run:<n>` (compile runs, E7), `issue:<runtimeId>:<issueType>:<k>` (issues, E12).
 3. **`IdRegistry`** (one per `MapDocument`) maps `runtimeId → Node*` for nodes currently in the tree.
    - Built by a full tree walk on attach and on `documentWasLoadedNotifier`; `nodesWereAdded` registers nodes
      and descendants, `nodesWereRemoved` unregisters them, so a pointer is never dereferenced after it could
@@ -499,7 +499,7 @@ call rolls back only itself. `transaction_commit` → `commitTransaction()`, `tr
   transaction stack).
 - Session DELETE, disconnect, **Stop agent**, or closing the document → rollback.
 - The status bar shows "AI transaction open: <name>". Human edits made meanwhile become part of the agent
-  transaction; the manual section (E13.5) documents this.
+  transaction; the manual section (E14.5) documents this.
 
 ### 6.3 Change report (`ChangeCollector`, X5)
 
@@ -609,7 +609,7 @@ the editor's `csgHollow` with the thickness as a parameter; thickness ≤ 0 fail
 - Common argument names: `ids`, `faces`, `document`, `dryRun`, `cursor`, `limit`, `fields`, `detail`.
   Coordinates are `position`/`min`/`max`/`center`/`vector`; angles `angle`/`angles` in degrees; lengths in
   map units. All paths are absolute.
-- Prompt names (E13): `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
+- Prompt names (E14): `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
   `compile_and_debug`, `explain_map`, `explain_entity`, `cleanup_map`.
 
 ### 7.2 `ToolDef` and the schema builder (`ToolRegistry.h`, `Schema.h`)
@@ -718,7 +718,7 @@ through `ServerState::scheduleResourceUpdate` / `scheduleDocumentUpdate`, coales
 `notifications/resources/updated` per resource and scheduler turn. Nothing is recorded while no session has
 subscriptions (the hooks run on every map change, e.g. during drags).
 
-Planned resources: `documents/{doc}/issues` (E10), `manual/{section}` (E11), `console` (E12).
+Planned resources: `documents/{doc}/issues` (E12), `manual/{section}` (E13), `console` (E10).
 
 ---
 
@@ -753,7 +753,7 @@ The raw JSON-RPC trace is logged only at debug level.
 | `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut` | E4 |
 | `BrushEditTools.cpp` | `brush_clip`, `face_extrude`, `face_extrude_new`, `vertices_move/remove/snap`, `vertex_add`, `csg_merge/subtract/intersect/hollow` | E4 |
 | `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/delete/array`, `command_repeat`, `command_repeat_clear` | E4 |
-| `ViewTools.cpp` | `grid_get/set`; E11: `camera_*`, `view_*` | E4, E11 |
+| `ViewTools.cpp` | `grid_get/set`; E13: `camera_*`, `view_*` | E4, E13 |
 | `MaterialTools.cpp` | `materials_list`, `material_apply`, `material_set_current`, `material_replace`, `material_preview`, `locks_get/set` | E4, E6 |
 | `FaceTools.cpp` | `face_attributes_get/set/copy`, `uv_align`, `uv_nudge` | E6 |
 | `TagTools.cpp` | `tags_list`, `tag_apply`, `tag_remove` | E6 |
@@ -761,13 +761,14 @@ The raw JSON-RPC trace is logged only at debug level.
 | `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes` | E5 |
 | `EntityPropertyTools.cpp` | `entity_properties_set`, `entity_property_remove/rename`, `entity_spawnflags_set`, `entity_defaults_apply`, `entity_links_get`, `entity_link`, `entity_color_set` | E5 |
 | `CompileTools.cpp` | `compile_tools_get/set`, `compile_presets_list`, `compile_profiles_list`, `compile_profile_save/delete`, `compile_run`, `compile_status`, `compile_cancel`, `pointfile_load/unload`, `portalfile_load/unload`; the compile log resource | E7 |
+| `LayerTools.cpp` | `layers_list`, `layer_create/rename/remove/reorder`, `layer_set_state`, `objects_move_to_layer`, `visibility_set` | E9 |
+| `GroupTools.cpp` | `group_create/ungroup/rename`, `groups_merge`, `group_add_objects/remove_objects`, `group_open/close`, `linked_group_duplicate/select/separate/extract` | E9 |
+| `ClipboardTools.cpp` | `clipboard_copy/cut/paste`, `map_file_inspect`, `map_import` | E9 |
 
-Planned files: `OrganizationTools.cpp` (`layers_list`, `layer_*`, `objects_move_to_layer`, `group_*`,
-`groups_merge`, `linked_group_*`, `visibility_set`) and `ClipboardTools.cpp` (`clipboard_*`, `map_import`)
-in E9; `ValidationTools.cpp` (`issues_list`,
-`issue_*`, `validators_*`, `map_check`, `engine_*`) in E10; `ActionTools.cpp` (`actions_list`,
+Planned files: `ValidationTools.cpp` (`issues_list`,
+`issue_*`, `validators_*`, `map_check`, `engine_*`) in E12; `ActionTools.cpp` (`actions_list`,
 `action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
-`manual_section`) in E11; snapshot and console tools in E12; `Prompts.cpp` in E13.
+`manual_section`) in E13; snapshot and console tools in E10; `Prompts.cpp` in E14.
 
 `CompileTools.h` also declares `registerCompileResources`. Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
 shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
@@ -853,7 +854,7 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   box shrunk by 0.01, because `Brush::intersects(bbox)` compares bounds only; touching surfaces do not
   overlap. With `solidOnly` (default) `trigger_*` brushes are ignored. Floor and ceiling come from five
   vertical rays (center and inset corners); `supportedCorners` counts corners with a surface within 1 unit.
-- `map_plan_view` (text form; the image form is E12) classifies cells at the given height: `#` solid (world,
+- `map_plan_view` (text form; the image form is E10) classifies cells at the given height: `#` solid (world,
   `func_group`, `func_detail*`), `+` other brush entity, `t` trigger, `.` open with a floor within
   `floorDepth` (1024) below, space for void. The grid is aligned to multiples of `cellSize`; entity chars
   `P M I E L` in that priority. Patches count only as floor.
@@ -985,12 +986,12 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   tags cannot be removed (`UNSUPPORTED`, hint: `material_apply`). Results list the targets that carry the tag
   afterwards; created brush entities also appear in the change report.
 
-### 10.9 Actions (E11)
+### 10.9 Actions (E13)
 
 `ActionHost` enumerates `ActionManager::visitMainMenu`, `visitMapViewActions` and `MapDocumentActionCache`
 tag/entity actions. The path is the action's preference path; `enabled`/`checked` are evaluated with an
 `ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
-`QtMcpHost`, checked by the E11.8 coverage test; each entry points to the matching semantic tool.
+`QtMcpHost`, checked by the E13.8 coverage test; each entry points to the matching semantic tool.
 
 ### 10.10 Compiling (E7)
 
@@ -1044,7 +1045,7 @@ tag/entity actions. The path is the action's preference path; `enabled`/`checked
   k-th task): state per task, exit codes, the current task, `completedTasks`, and the executed commands,
   exported maps and copied files. Tool messages in the formats of VHLT/ZHLT, ericw-tools/tyrutils, q3map2 and
   Quake 2 tools become errors and warnings (runner failure lines count as errors). Leaks are recognized from
-  `=== LEAK in hull 0 ===` / `Entity <class> @ (x, y, z)`, `Reached occupant ... at (x y z)`, `Leak file
+  `=== LEAK in hull 0 ===` / `Entity <class> E (x, y, z)`, `Reached occupant ... at (x y z)`, `Leak file
   written to ...` and the `leaked` banners. The run state is `cancelled` (cancel requested, document closed,
   or `#### Terminated`), `failed` (a task failed or not all tasks completed) or `succeeded`. The compiled file
   is the first copied `.bsp` source (else the exported map's `.bsp` if it exists); `copiedTo` lists the
@@ -1054,6 +1055,71 @@ tag/entity actions. The path is the action's preference path; `enabled`/`checked
   length, the three point entities nearest to each end, and `leavesMapAt`, where the path, walked from the end
   inside the brushes' bounds, leaves them. `portalfile_load` defaults to `compile/<base>.prt`, then
   `<base>.prt`. Both use `MapDocument::loadPointFile` / `loadPortalFile`, so the editor shows them.
+
+### 10.11 Layers, groups, clipboard and import (E9)
+
+**Layers and visibility (`LayerTools.cpp`).** The tools follow `ui::LayerEditor` and use only the `mdl`
+layer, visibility, locking and node functions. Positions count from 0, which is always the default layer.
+`layers_list` reports every layer in list order with `id`, `name`, `default`, `position`, `sortIndex`,
+`current`, `hidden`, `locked`, `omitFromExport`, `color` and object counts by kind. `layer_create` adds the
+layer at the bottom like the editor, then moves it to `position` / `after` with `moveLayer`, and makes it
+current unless `makeCurrent: false`; a duplicate name warns `DUPLICATE_LAYER_NAME`. `layer_remove`
+deselects everything, moves the layer's children to the default layer, makes the default layer current if
+needed and removes the layer; like the editor it needs another visible, unlocked layer and refuses the
+default layer (as do `layer_rename` and `layer_reorder`). `layer_reorder` takes exactly one of `position`
+and `offset`. `layer_set_state` applies isolate, hidden, locked, omitFromExport and then current; hiding uses
+`hideNodes`, showing and unlocking reset the state to inherited, `current` can only be set to true, and a
+hidden or locked current layer warns `CURRENT_LAYER_HIDDEN` / `CURRENT_LAYER_LOCKED`.
+`objects_move_to_layer` refuses objects inside groups (the hint names the group), moves a brush entity
+when one of its brushes is given, leaves the moved objects selected like the editor, and warns
+`LAYER_HIDDEN` / `LAYER_LOCKED` for such a target and `NO_CHANGE` when nothing moves. `visibility_set`:
+`hide` also accepts locked objects and objects in closed groups; `show` needs ids, resets hidden objects to
+inherited and forces the rest visible, even inside hidden layers or groups; `isolate` leaves its targets
+selected; `show_all` resets object visibility only and lists still hidden layers in a `HIDDEN_LAYERS`
+warning. Results report `hiddenObjects`.
+
+**Groups and linked groups (`GroupTools.cpp`).** The tools wrap `Map_Groups` and `reparentNodes`. Creating,
+ungrouping, merging, adding and duplicating leave the result selected; renaming and separating restore the
+selection. `group_create` returns `{group, objects}`; `group_ungroup` unlinks a linked group first and the
+children keep their ids; `groups_merge` moves the other groups' objects into `target` and removes the
+emptied groups. `group_add_objects` / `group_remove_objects` replace brush-entity brushes by their entity
+like the editor; adding skips objects already in the group (all skipped is `INVALID_ARGUMENT`), and linked
+copies receive clones. Removal moves objects to the group's parent (enclosing group or layer), removes
+emptied groups and closes open groups that no longer contain the objects. `group_remove_objects` and
+`linked_group_extract` accept objects in closed groups if they are visible and unlocked, and open or close
+groups as needed. `group_open` opens a group like a double-click (enclosing groups opened, others closed);
+`group_close` closes the current group or, with `all`, every open group (`NO_OPEN_GROUP` warning when none
+is open); both return `{openGroup, openGroups}`. `linked_group_duplicate` creates `count` (1..64) linked
+copies, copy *i* moved by *i*·`offset` (count > 1 needs an offset). `linked_group_select` selects the link
+sets of the given groups or of the linked groups containing the given objects, skipping unselectable members
+with a `NOT_SELECTABLE` warning. `linked_group_separate` unlinks the given groups (given groups of one set
+stay linked to each other; passing a whole set is an error). `linked_group_extract` calls
+`mdl::extractLinkedGroups` and returns the source's new group, the extracted objects and source→extracted
+pairs, then restores the previously open groups. Linked-group propagation runs when the call's transaction
+commits; ids in the other copies survive through `IdRegistry` aliasing (§5.2) and are reported as `modified`.
+
+**Clipboard and import (`ClipboardTools.cpp`).** The server keeps one clipboard, `ServerState::clipboard`,
+shared by all sessions and documents; the operating system's clipboard is never touched (TbMcpLib has no
+Qt). `clipboard_copy` (read-only) writes the objects (`ids` or the selection) or the faces (`faces` or the
+selected faces) with `mdl::NodeWriter` into the clipboard and returns the text (`includeText`);
+`clipboard_cut` copies and deletes in one undo step (a dry run leaves the clipboard unchanged).
+`clipboard_paste` pastes `text` or the clipboard with `mdl::paste`, which accepts the document's format or a
+compatible one. Text whose first significant character is `(` is face text: the last face's attributes are
+applied to the target faces through `withFaces`. Pasted objects are moved with `translateSelection`: with
+`position`, the chosen `anchor` of their bounds (`min` by default, `center`, `max`, `bottomCenter`) lands on
+the point; with `offset`, they move by the vector; `snapToGrid` then rounds the min corner to the grid;
+`targetLayer` moves them with `moveSelectedNodesToLayer`. They stay selected, and materials that are not
+loaded are reported. `map_file_inspect` (read-only) lists another file's format, layers (by index), groups,
+classnames, materials and the materials missing from the current document, so that an agent can choose what
+to import. `map_import` reads the file with `ImportReader`, a `mdl::MapReader` subclass that parses in the
+source format and builds faces in the document's format (the Standard/Valve UV conversion `mdl::paste` uses,
+also for incompatible pairs such as Quake 2 → Standard). The source format comes from the header comment;
+without one the reader tries the formats compatible with the document's format, then the game's formats,
+then all formats. Objects are filtered by `layer`, `group`, `classname` and `region` / `regionMode`; patches
+are dropped when the target format has none (`PATCHES_DROPPED`). The kept objects are written in the
+document's format and pasted through the `clipboard_paste` path with the same placement options, into
+`targetLayer` (default: the current layer; source layers are flattened). The result lists the new ids, the
+missing materials, and selects the imported objects; the call is one undo step, `AI: Import Map`.
 
 ---
 
@@ -1075,7 +1141,7 @@ tag/entity actions. The path is the action's preference path; `enabled`/`checked
 | `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
 | `tst_GeometryUtils`, `tst_CsgUtils` | the pure model helpers over `mdl::MapFixture`: `intersectsInterior`, `owningBrushEntity`, `classifyBrush`, `isPointEntity`, `castRay`, `checkBox`, `geometryError`, `addBrushes`, `ScopedLockOverride`; hollowing with a thickness |
 | `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId` |
-| `tst_Scenarios` | scripted scenarios: S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
+| `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
 (`ui::MapDocumentFixture`), a `FakeHost` and a `FakeScheduler`, with one initialized session:
@@ -1100,7 +1166,9 @@ mdl::Node* node(std::string_view id, ui::MapDocument* = nullptr);
 `mcp/maps/two_rooms.map` (two rooms, a corridor, a door, a trigger, a group and a custom layer; used by scene,
 spatial, selection and resource tests, and by `SceneQuestions`, which answers E3's acceptance questions with
 tool calls only), `mcp/wads/cr8_a_excerpt.wad`, `mcp/wads/materials.wad` (`wall_old_a/b/c`, `wall_new_a/b`, `floor_tile`;
-material and S3 tests), and game paths in `mdl/Game/`.
+material and S3 tests), `mcp/maps/rooms.map` (Valve, several groups including Armory; import and S4),
+`mcp/maps/crate_quake2.map` (Quake 2 import), `mcp/maps/no_header.map` (format detection without a header
+comment), and game paths in `mdl/Game/`.
 
 ### 11.2 `TbMcpUiLibTest` (Qt, `RunAllTests.cpp` QApplication, offscreen)
 
@@ -1152,7 +1220,14 @@ material and S3 tests), and game paths in `mdl/Game/`.
   editor's alt-click does.
 - The Quake 2 game configuration's Clip tag names a flag `clip` that the game does not define, so the tag
   never matches.
-- `object_get` does not report the layer color.
+- `object_get` does not report the layer color. `layer_create` takes no color.
+- `visibility_set` `show` on a group does not show children that were hidden one by one. `isolate` and moving
+  objects to a layer replace the human's selection, as in the editor.
+- A dry run of `linked_group_extract` reports the ids from before the commit, and an extract closes an open
+  group that is unrelated to the source. Linked groups nested in linked groups are not specifically tested.
+- `clipboard_paste` does not convert between incompatible formats (`map_import` does); pasted face text
+  applies only its last face; `clipboard_cut` cuts objects, not faces. `map_import` does not recreate the
+  source layers.
 - The bridge ignores portable mode when locating the discovery file.
 - Compile status is derived from the runner's log text; tool message formats not listed in §10.10 are not
   classified. The editor's compilation dialog does not know about MCP runs, so the user can start a dialog
@@ -1179,21 +1254,27 @@ commit buildable and tested.
 - **E4** GeometryTools, BrushEditTools, TransformTools, grid and locks.
 - **E5** EntityClassTools, EntityCreateTools, EntityPropertyTools, entity-definitions resource.
 - **E6** MaterialTools, FaceTools, TagTools, face targets in `Targets`, image content, materials resource.
-- **E9** OrganizationTools and ClipboardTools. `map_import` parses the file with `mdl::MapReader` into nodes,
-  filters them, converts the format, and adds them through the paste path.
 - **E7** CompileTools (`CompileHost` over `CompilationRunner`; tests use the `CmdTool` stub like
   `tst_CompilationRunner.cpp`), compile presets per game family, compile log resource.
-- **E10** ValidationTools and engine launch; issues resource.
-- **E11** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
-  (`PreferenceHost`), KnowledgeTools, action coverage check.
-- **E12 — agent vision and editor console.** `McpSnapshotRenderer` (TbMcpUiLib) renders `MapRenderer` into a
+- **E8** Minimal upstream footprint: `TbMcpUiLib` for the editor glue, explicit upstream hooks (§15), tests
+  of upstream fixes in `TbMcpLibTest`, `scripts/upstream-footprint.sh`, narrowest-context helpers.
+- **E9** LayerTools, GroupTools and ClipboardTools (§10.11). `map_import` parses the file with an
+  `mdl::MapReader` subclass that converts the format, filters the nodes and adds them through the paste path.
+- **E10 — agent vision and editor console.** `McpSnapshotRenderer` (TbMcpUiLib) renders `MapRenderer` into a
   `QOpenGLFramebufferObject` with the shared GL context and returns PNG bytes, independent of any map window
-  so E14 can reuse it; agent cameras with their own render state; snapshot tools; `map_plan_view` image form;
+  so E15 can reuse it; agent cameras with their own render state; snapshot tools; `map_plan_view` image form;
   `console_read`/`console_clear` and the subscribable `trenchbroom://console` resource.
-- **E13 — agent experience.** Final agent guide text, description review, prompts (`Prompts.cpp`), scenario
+- **E11 — level-design knowledge.** Material profiles merged from knowledge notes, a cached reference-corpus
+  scan of `.map` files, the current map and image analysis (edge matching for seamless tiles); `uv_check` and
+  UV warnings in material tools; aspect-preserving fit; `material_fit_geometry`; model bounds per animation and
+  placement checks against model bounds.
+- **E12** ValidationTools and engine launch; issues resource.
+- **E13** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
+  (`PreferenceHost`), KnowledgeTools, action coverage check.
+- **E14 — agent experience.** Final agent guide text, description review, prompts (`Prompts.cpp`), scenario
   tests, manual section, lazy bridge start (the bridge answers `initialize` and the list methods from the
   registries and connects to the editor only when needed).
-- **E14 — headless (v2, deferred).** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument`s owned by the host)
+- **E15 — headless (v2, deferred).** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument`s owned by the host)
   and a `--headless-mcp` stdio mode in `TrenchBroomMcp` that links the core directly. Tools need no changes.
 
 ---

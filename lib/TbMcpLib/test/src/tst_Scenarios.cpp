@@ -21,6 +21,7 @@
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
+#include "mcp/JsonVm.h"
 #include "mcp/McpToolFixture.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
@@ -29,10 +30,12 @@
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/GroupNode.h"
 #include "mdl/Layer.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Brushes.h"
+#include "mdl/Map_Layers.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
@@ -48,6 +51,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -380,6 +384,127 @@ TEST_CASE("Scenario S1 and S6 entities")
   {
     CHECK(step["name"].get<std::string>().starts_with("AI: "));
   }
+}
+
+TEST_CASE("Scenario S4")
+{
+  // "Insert the 'Armory' group from prefabs/rooms.map next to the east wall of the
+  // selected room."
+  auto fixture = McpToolFixture{};
+  fixture.call("document_new", Json{{"game", "Quake"}, {"format", "Standard"}});
+  auto& map = fixture.host().documentList.back().document->map();
+  mdl::selectAllNodes(map);
+  mdl::removeSelectedNodes(map);
+
+  // the WAD has wall_new_a, but not armory_metal
+  const auto wad = getFixtureRoot() / "test" / "mcp" / "wads" / "materials.wad";
+  fixture.call("materials_collections_set", Json{{"wads", Json{wad.string()}}});
+  auto gl = gl::TestGl{};
+  gl::processResourcesSync(
+    map.resourceManager(), gl::ProcessContext{gl, [](auto, auto) {}});
+
+  // the human works in the "Level" layer
+  auto* level = new mdl::LayerNode{mdl::Layer{"Level"}};
+  mdl::addNodes(map, {{&map.worldNode(), {level}}});
+  mdl::setCurrentLayer(map, level);
+
+  // the selected room, and a pillar outside its east wall at the south end
+  const auto room = resultOf(fixture.call(
+    "room_create",
+    Json{
+      {"min", {0, 0, 0}},
+      {"max", {512, 384, 192}},
+      {"thickness", 16},
+      {"material", "wall_old_a"},
+      {"group", "Room"},
+    }));
+  const auto roomId = room["group"].get<std::string>();
+  auto* pillar = addBox(map, {{528, 0, 0}, {592, 64, 192}});
+  fixture.call("selection_set", Json{{"ids", {roomId}}});
+
+  // the agent reads the bounds of the selected room: its east wall ends at x = 528
+  const auto selection = fixture.call("selection_get");
+  REQUIRE(selection["count"] == 1);
+  const auto roomBounds = *boxFromJson(selection["bounds"]);
+  CHECK(roomBounds.max.x() == 528);
+
+  // the agent lists the groups in the other map
+  const auto path = (getFixtureRoot() / "test" / "mcp" / "maps" / "rooms.map").string();
+  const auto contents = fixture.call("map_file_inspect", Json{{"path", path}});
+  CHECK(contents["format"] == "Valve");
+  CHECK(contents["converted"] == true);
+  const auto& groups = contents["groups"];
+  const auto armory = std::ranges::find_if(
+    groups, [](const auto& group) { return group["name"] == "Armory"; });
+  REQUIRE(armory != groups.end());
+  const auto armoryBounds = *boxFromJson((*armory)["bounds"]);
+  const auto size = armoryBounds.size();
+
+  // it tries places along the east wall, bottom aligned with the room's, until one is
+  // free: the south end is blocked by the pillar
+  auto position = std::optional<vm::vec3d>{};
+  for (const auto y : {roomBounds.min.y(), roomBounds.max.y() - size.y()})
+  {
+    const auto min = vm::vec3d{roomBounds.max.x(), y, roomBounds.min.z()};
+    const auto check =
+      fixture.call("space_check", Json{{"box", toJson(vm::bbox3d{min, min + size})}});
+    if (check["free"] == true)
+    {
+      position = min;
+      break;
+    }
+    CHECK(check["overlaps"][0]["id"] == fixture.id(*pillar));
+  }
+  REQUIRE(position);
+  CHECK(*position == vm::vec3d{528, 208, -16});
+
+  // it imports the group there
+  const auto imported = fixture.call(
+    "map_import",
+    Json{
+      {"path", path},
+      {"group", "Armory"},
+      {"position", toJson(*position)},
+      {"anchor", "min"},
+    });
+  CHECK(imported["undoStep"] == "AI: Import Map");
+  const auto& result = resultOf(imported);
+  CHECK(result["sourceFormat"] == "Valve");
+  CHECK(result["documentFormat"] == "Standard");
+  CHECK(result["converted"] == true);
+  CHECK(result["bounds"] == toJson(vm::bbox3d{*position, *position + size}));
+
+  // the missing material is reported
+  CHECK(result["missingMaterials"] == Json{"armory_metal"});
+  CHECK(hasWarning(imported, "MISSING_MATERIALS"));
+
+  // the imported group is selected and in the current layer
+  REQUIRE(result["ids"].size() == 1);
+  auto* group =
+    dynamic_cast<mdl::GroupNode*>(fixture.node(result["ids"][0].get<std::string>()));
+  REQUIRE(group);
+  CHECK(group->name() == "Armory");
+  CHECK(group->parent() == level);
+  CHECK(result["layer"] == fixture.id(*level));
+  CHECK(map.selection().nodes == std::vector<mdl::Node*>{group});
+
+  // it overlaps no existing brush: whatever overlaps its bounds belongs to it
+  const auto check = fixture.call("space_check", Json{{"box", result["bounds"]}});
+  CHECK(check["overlapCount"].get<size_t>() > 0);
+  for (const auto& overlap : check["overlaps"])
+  {
+    CHECK(fixture.node(overlap["id"].get<std::string>())->isDescendantOf(*group));
+  }
+
+  // the brushes are in the Standard format: no UV axes
+  const auto text = fixture.call("map_text_get", Json{{"ids", result["ids"]}});
+  CHECK(text["text"].get<std::string>().find('[') == std::string::npos);
+
+  // one undo step removes the import
+  fixture.call("undo");
+  CHECK(
+    fixture.callExpectingError("object_get", Json{{"ids", result["ids"]}}).code
+    == ErrorCode::ObjectNotFound);
 }
 
 TEST_CASE("Scenario S3")

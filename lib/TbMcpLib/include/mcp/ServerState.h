@@ -143,6 +143,11 @@ public:
   std::unique_ptr<CallRunner> callRunner;
   /** The compilations started by compile_run. */
   std::unique_ptr<CompileRuns> compileRuns;
+  /**
+   * The server's clipboard: the map text of the last clipboard_copy / clipboard_cut. It
+   * is shared by all sessions and documents, like the editor's clipboard.
+   */
+  std::string clipboard;
 
   ServerActivity activity;
 

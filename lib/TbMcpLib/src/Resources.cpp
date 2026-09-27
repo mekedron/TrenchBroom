@@ -108,6 +108,29 @@ Materials and faces
   (clip, skip, hint) with what they match. tag_apply is "Turn into <tag>", tag_remove
   "Make non-<tag>"; 'option' picks one choice when a tag offers several.
 
+Layers, groups and visibility
+- layers_list shows the layers with their state; layer_set_state sets current, hidden,
+  locked, omitFromExport or isolate. New objects go into the current layer; move
+  existing ones with objects_move_to_layer.
+- group_create / group_ungroup / groups_merge / group_add_objects /
+  group_remove_objects manage groups; group_open enters a group for editing like a
+  double-click, group_close leaves it.
+- linked_group_duplicate makes linked copies (count, offset); editing one copy updates
+  the others when the call commits, and ids in the other copies stay valid.
+  linked_group_select, linked_group_separate and linked_group_extract manage link sets.
+- visibility_set hides, shows or isolates objects; "show_all" shows every object.
+
+Clipboard and import
+- clipboard_copy / clipboard_cut return map text and keep it in the server's own
+  clipboard (not the system clipboard); clipboard_paste pastes it (or given text) at
+  the original position, at a 'position' with an 'anchor', or by an 'offset'. Face
+  text applies its attributes to the target faces.
+- To bring content from another map, call map_file_inspect on the file to see its
+  layers, groups and classnames, then map_import with a filter (layer, group,
+  classname, region), a position and a targetLayer. The format is converted, missing
+  materials are reported and the imported objects are selected. Check the space first
+  with space_check.
+
 Compiling
 - compile_tools_get shows the game's compile tool paths and whether each is an
   executable file; set them with compile_tools_set (Half-Life: csg/bsp/vis/rad from

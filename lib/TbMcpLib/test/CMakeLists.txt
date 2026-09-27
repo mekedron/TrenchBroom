@@ -8,6 +8,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileTools.cpp
@@ -22,12 +23,14 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GroupTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ObjectIds.cpp

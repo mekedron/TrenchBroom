@@ -36,6 +36,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileUtils.cpp
@@ -50,7 +51,9 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GameTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GroupTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.h
@@ -99,6 +102,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ClipboardTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileUtils.h
@@ -111,7 +115,9 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryUtils.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GroupTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/LayerTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
