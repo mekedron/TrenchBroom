@@ -630,7 +630,7 @@ ToolResult manualSection(CallContext& context, const Args& args)
 
 ui::MapDocument* defaultDocument(ServerState& state, Session& session)
 {
-  const auto document = state.defaultDocument(session);
+  const auto document = state.targetDocument(session).document;
   return document ? document->document : nullptr;
 }
 

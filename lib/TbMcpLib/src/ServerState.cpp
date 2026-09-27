@@ -275,7 +275,7 @@ std::optional<DocumentInfo> ServerState::findDocument(
   return std::nullopt;
 }
 
-std::optional<DocumentInfo> ServerState::defaultDocument(const Session& session) const
+DocumentTarget ServerState::targetDocument(const Session& session) const
 {
   const auto documents = host.documents();
   if (session.activeDocumentId)
@@ -283,20 +283,50 @@ std::optional<DocumentInfo> ServerState::defaultDocument(const Session& session)
     const auto it = std::ranges::find_if(documents, [&](const auto& info_) {
       return info_.id == *session.activeDocumentId;
     });
-    if (it != documents.end())
-    {
-      return *it;
-    }
+    return it != documents.end() ? DocumentTarget{DocumentTarget::Source::Active, *it}
+                                 : DocumentTarget{DocumentTarget::Source::ActiveClosed};
+  }
+
+  if (documents.empty())
+  {
+    return DocumentTarget{DocumentTarget::Source::None};
   }
 
   const auto focused =
     std::ranges::find_if(documents, [](const auto& info_) { return info_.focused; });
-  if (focused != documents.end())
+  return DocumentTarget{
+    DocumentTarget::Source::Focused,
+    focused != documents.end() ? *focused : documents.front()};
+}
+
+void ServerState::setActiveDocument(
+  Session& session, std::optional<std::string> documentId)
+{
+  if (session.activeDocumentId == documentId)
   {
-    return *focused;
+    return;
   }
 
-  return !documents.empty() ? std::optional{documents.front()} : std::nullopt;
+  session.activeDocumentId = std::move(documentId);
+  if (session.subscriptions.contains(EditorStatusUri))
+  {
+    session.send(jsonrpc::makeNotification(
+      "notifications/resources/updated", Json{{"uri", EditorStatusUri}}));
+  }
+}
+
+std::vector<std::string> ServerState::sessionsWithActiveDocument(
+  const std::string_view documentId) const
+{
+  auto result = std::vector<std::string>{};
+  for (const auto& [id, session] : sessions)
+  {
+    if (session->activeDocumentId == documentId)
+    {
+      result.push_back(session->clientDisplayName());
+    }
+  }
+  return result;
 }
 
 size_t ServerState::agentDepth(ui::MapDocument& document) const

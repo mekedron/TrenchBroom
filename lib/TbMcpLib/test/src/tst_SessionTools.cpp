@@ -86,7 +86,12 @@ TEST_CASE("SessionTools")
   {
     CHECK(
       fixture.call("document_list")
-      == Json{{"documents", Json::array()}, {"activeDocument", nullptr}});
+      == Json{
+        {"documents", Json::array()},
+        {"activeDocument", nullptr},
+        {"activeDocumentClosed", nullptr},
+        {"targetDocument", nullptr},
+      });
 
     auto& first = fixture.create();
     auto& second = fixture.create();
@@ -102,8 +107,12 @@ TEST_CASE("SessionTools")
     CHECK(summary["modified"] == false);
     CHECK(summary["focused"] == false);
     CHECK(summary["active"] == false);
+    CHECK(summary["activeIn"] == Json::array());
     CHECK(result["documents"][1]["focused"] == true);
+    CHECK(result["documents"][1]["active"] == true);
+    CHECK(result["documents"][1]["activeIn"] == Json::array({"test-client 1.0"}));
     CHECK(result["activeDocument"] == fixture.documentId(second));
+    CHECK(result["targetDocument"] == fixture.documentId(second));
   }
 
   SECTION("document_activate")
@@ -127,10 +136,13 @@ TEST_CASE("SessionTools")
       fixture.callExpectingError("document_activate", Json::object()).code
       == ErrorCode::InvalidArgument);
 
-    SECTION("falls back to the focused document when the activated one is closed")
+    SECTION("reports when the activated document was closed")
     {
       fixture.host().removeDocument(first);
-      CHECK(fixture.call("document_list")["activeDocument"] != firstId);
+      const auto list = fixture.call("document_list");
+      CHECK(list["activeDocument"].is_null());
+      CHECK(list["activeDocumentClosed"] == firstId);
+      CHECK(list["targetDocument"].is_null());
     }
   }
 

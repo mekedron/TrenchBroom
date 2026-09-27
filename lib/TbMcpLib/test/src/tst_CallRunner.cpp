@@ -466,11 +466,11 @@ TEST_CASE("CallRunner")
     const auto firstId = fixture.documentId(document);
     const auto otherId = fixture.documentId(other);
 
-    SECTION("defaults to the focused document")
+    SECTION("defaults to the session's active document, not the focused one")
     {
       CHECK(fixture.call("test_read")["document"] == otherId);
       fixture.host().setFocused(firstId);
-      CHECK(fixture.call("test_read")["document"] == firstId);
+      CHECK(fixture.call("test_read")["document"] == otherId);
     }
 
     SECTION("uses the explicit document argument")
@@ -501,8 +501,22 @@ TEST_CASE("CallRunner")
     {
       fixture.host().removeDocument(document);
       fixture.host().removeDocument(other);
-      CHECK(fixture.callExpectingError("test_add_entity").code == ErrorCode::NoDocument);
-      CHECK(fixture.call("test_read")["document"].is_null());
+      CHECK(
+        fixture.callExpectingError("test_add_entity").code
+        == ErrorCode::ActiveDocumentClosed);
+
+      // a tool that does not need a document runs without one and is warned
+      const auto read = fixture.call("test_read");
+      CHECK(read["document"].is_null());
+      CHECK(std::ranges::any_of(read["warnings"], [](const auto& warning) {
+        return warning["code"] == "ACTIVE_DOCUMENT_CLOSED";
+      }));
+
+      const auto session = fixture.openSession();
+      CHECK(
+        fixture.callExpectingErrorAs(session, "test_add_entity", Json::object()).code
+        == ErrorCode::NoDocument);
+      CHECK(fixture.callAs(session, "test_read", Json::object())["document"].is_null());
     }
   }
 

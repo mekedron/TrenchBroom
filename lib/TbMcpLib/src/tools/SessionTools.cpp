@@ -58,8 +58,49 @@ Schema documentSummarySchema()
     field("modified", boolean()).describe("Whether there are unsaved changes"),
     field("focused", boolean()).describe("Whether its window is the focused window"),
     field("active", boolean())
-      .describe("Whether tools of this session target it by default"),
+      .describe("Whether it is this session's active document, which calls without "
+                "'document' act on"),
+    field("activeIn", array(string()))
+      .describe("The clients (sessions) that have it as their active document"),
   });
+}
+
+Field activeDocumentField()
+{
+  return field("activeDocument", any())
+    .describe(
+      "Handle of this session's active document (set by document_new, document_open, "
+      "document_activate), or null");
+}
+
+Field activeDocumentClosedField()
+{
+  return field("activeDocumentClosed", any())
+    .describe(
+      "Handle of this session's active document if it was closed, else null; calls "
+      "without 'document' then fail with ACTIVE_DOCUMENT_CLOSED until document_activate");
+}
+
+Field targetDocumentField()
+{
+  return field("targetDocument", any())
+    .describe(
+      "Handle of the document that calls without 'document' act on now: the active "
+      "document, or the focused one if this session has none; null if there is none");
+}
+
+/** activeDocument, activeDocumentClosed and targetDocument of the given session. */
+Json activeDocumentJson(ServerState& server, const Session& session)
+{
+  const auto target = server.targetDocument(session);
+  const auto closed = target.source == DocumentTarget::Source::ActiveClosed;
+  return Json{
+    {"activeDocument",
+     target.source == DocumentTarget::Source::Active ? Json(target.document->id)
+                                                     : Json(nullptr)},
+    {"activeDocumentClosed", closed ? Json(*session.activeDocumentId) : Json(nullptr)},
+    {"targetDocument", target.document ? Json(target.document->id) : Json(nullptr)},
+  };
 }
 
 ToolResult editorStatusTool(CallContext& context, const Args&)
@@ -75,11 +116,9 @@ ToolResult documentListTool(CallContext& context, const Args&)
     documents.push_back(documentSummary(context.server(), document, context.session()));
   }
 
-  const auto active = context.server().defaultDocument(context.session());
-  return Json{
-    {"documents", std::move(documents)},
-    {"activeDocument", active ? Json(active->id) : Json(nullptr)},
-  };
+  auto result = Json{{"documents", std::move(documents)}};
+  result.update(activeDocumentJson(context.server(), context.session()));
+  return result;
 }
 
 ToolResult documentActivateTool(CallContext& context, const Args& args)
@@ -94,7 +133,7 @@ ToolResult documentActivateTool(CallContext& context, const Args& args)
       "Use document_list to see the open documents.");
   }
 
-  context.session().activeDocumentId = documentId;
+  context.server().setActiveDocument(context.session(), documentId);
   return Json{
     {"activeDocument", documentId},
     {"document", documentSummary(context.server(), *document, context.session())},
@@ -151,7 +190,6 @@ Json documentSummary(
   ServerState& server, const DocumentInfo& document, const Session& session)
 {
   const auto& map = document.document->map();
-  const auto active = server.defaultDocument(session);
   return Json{
     {"id", document.id},
     {"title", document.windowTitle},
@@ -160,7 +198,8 @@ Json documentSummary(
     {"format", mdl::formatName(map.worldNode().mapFormat())},
     {"modified", map.modified()},
     {"focused", document.focused},
-    {"active", active && active->id == document.id},
+    {"active", session.activeDocumentId == document.id},
+    {"activeIn", server.sessionsWithActiveDocument(document.id)},
   };
 }
 
@@ -172,19 +211,21 @@ Json editorStatus(ServerState& server, const Session& session)
     documents.push_back(documentSummary(server, document, session));
   }
 
-  const auto active = server.defaultDocument(session);
+  const auto active = server.targetDocument(session).document;
   auto status = Json{
     {"version", server.host.applicationVersion()},
     {"protocolVersion", session.protocolVersion},
     {"sessions", server.sessions.size()},
     {"documents", std::move(documents)},
-    {"activeDocument", active ? Json(active->id) : Json(nullptr)},
+  };
+  status.update(activeDocumentJson(server, session));
+  status.update(Json{
     {"locks",
      Json{
        {"alignmentLock", pref(Preferences::AlignmentLock)},
        {"uvLock", pref(Preferences::UvLock)},
      }},
-  };
+  });
 
   if (active)
   {
@@ -279,19 +320,24 @@ void registerSessionTools(ToolRegistry& registry)
     ToolDef{"editor_status"}
       .title("Editor Status")
       .description(
-        "Returns the editor state (read-only): version, open documents, the active "
-        "document (the one tools act on without a 'document' argument), current tool, "
-        "grid, alignment/UV locks, a selection summary, whether a compile is running, "
-        "the open agent transaction and what the agents are doing. Call it first to "
-        "orient yourself; map_summary describes the map's content. Example: {}")
+        "Returns the editor state (read-only): version, open documents and which "
+        "sessions work on them, this session's active document (the one calls without "
+        "a 'document' argument act on; each session has its own), and for the target "
+        "document the current tool, grid, a selection summary, whether a compile is "
+        "running and the open agent transaction; also alignment/UV locks and what the "
+        "agents are doing. Call it first to orient yourself; map_summary describes the "
+        "map's content. Example: {}")
       .input(object({}))
       .output(object({
         field("version", string()).required(),
         field("protocolVersion", string()).describe("Negotiated MCP protocol revision"),
         field("sessions", integer()).describe("Number of connected MCP clients"),
         field("documents", array(documentSummarySchema())).required(),
-        field("activeDocument", any()).describe("Handle of the active document or null"),
-        field("tool", any()).describe("Name of the active editor tool or null"),
+        activeDocumentField(),
+        activeDocumentClosedField(),
+        targetDocumentField(),
+        field("tool", any())
+          .describe("Name of the active editor tool of the target document or null"),
         field("grid", any()).describe("{size (map units), visible, snap} or null"),
         field(
           "locks",
@@ -302,11 +348,11 @@ void registerSessionTools(ToolRegistry& registry)
               .describe("UVs stay fixed on faces when vertices move (locks_set)"),
           })),
         field("compileRunning", boolean())
-          .describe("Whether a compile of the active document is running"),
+          .describe("Whether a compile of the target document is running"),
         field("transaction", any())
           .describe("{name, owner} of the open agent transaction, or null"),
         field("selection", any())
-          .describe("Selection summary of the active document (up to 20 items)"),
+          .describe("Selection summary of the target document (up to 20 items)"),
         field("agentActivity", any())
           .describe("{state: 'idle', 'running' or 'waitingForUser', tool}"),
       }))
@@ -319,13 +365,16 @@ void registerSessionTools(ToolRegistry& registry)
       .title("List Documents")
       .description(
         "Lists the open documents (one per editor window), read-only: handle ('doc:1'), "
-        "path, game, format, modified flag, focused window and which one is active for "
-        "this session. Use document_activate to change the active document. Example: "
-        "{}")
+        "path, game, format, modified flag, focused window, whether it is this "
+        "session's active document and which sessions (clients) have it active. Several "
+        "agents can work in the editor at once, each on its own active document; use "
+        "document_activate to change yours. Example: {}")
       .input(object({}))
       .output(object({
         field("documents", array(documentSummarySchema())).required(),
-        field("activeDocument", any()).describe("Handle of the active document or null"),
+        activeDocumentField(),
+        activeDocumentClosedField(),
+        targetDocumentField(),
       }))
       .mutation(Mutation::None)
       .idempotent()
@@ -335,10 +384,13 @@ void registerSessionTools(ToolRegistry& registry)
     ToolDef{"document_activate"}
       .title("Activate Document")
       .description(
-        "Chooses the document that this session's tools act on when they get no "
-        "'document' argument; until then they act on the focused window. It does not "
-        "change the focused window or the map. Handles come from document_list. "
-        "Example: {\"document\": \"doc:2\"}")
+        "Chooses this session's active document: the one its calls act on when they get "
+        "no 'document' argument. Each session has its own; document_new and "
+        "document_open set it, too. A session without one acts on the focused window "
+        "(and adopts it, with a DOCUMENT_FROM_FOCUS warning); if the active document is "
+        "closed, calls fail with ACTIVE_DOCUMENT_CLOSED until this is called. It does "
+        "not change the focused window, the map or other sessions. Handles come from "
+        "document_list. Example: {\"document\": \"doc:2\"}")
       .input(object({
         field("document", documentId()).required().describe("Handle from document_list"),
       }))

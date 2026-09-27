@@ -21,6 +21,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTargeting.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp

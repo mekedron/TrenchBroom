@@ -41,6 +41,13 @@ enum class ErrorCode
   NoSelection,
   NoDocument,
   DocumentNotFound,
+  /**
+   * The session's active document was closed (by the user or another session); calls
+   * without a `document` argument fail until the session chooses another one.
+   */
+  ActiveDocumentClosed,
+  /** The document is the active document of another session. */
+  DocumentInUse,
   InvalidGeometry,
   OutOfWorldBounds,
   OperationFailed,

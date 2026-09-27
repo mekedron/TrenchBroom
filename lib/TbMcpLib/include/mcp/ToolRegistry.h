@@ -95,6 +95,7 @@ private:
   std::optional<DocumentUse> m_documentUse;
   bool m_transactional = true;
   bool m_keepsActiveTool = false;
+  bool m_focusFallback = true;
   bool m_paginated = false;
   bool m_destructive = false;
   bool m_idempotent = false;
@@ -125,6 +126,12 @@ public:
    * user would, including the actions of the active tool (e.g. Perform Clip).
    */
   ToolDef& keepsActiveTool(bool keepsActiveTool = true);
+  /**
+   * Whether a call without a `document` argument may fall back to the focused window when
+   * the session has no active document. Default: true. Tools that close or reload a
+   * document turn it off, so that they only act on a document the agent chose.
+   */
+  ToolDef& focusFallback(bool focusFallback);
   /** Adds the standard list parameters `cursor`, `limit`, `fields`, `detail`. */
   ToolDef& paginated(bool paginated = true);
   ToolDef& destructive(bool destructive = true);
@@ -147,6 +154,7 @@ public:
   DocumentUse documentUse() const;
   bool transactional() const;
   bool keepsActiveTool() const;
+  bool focusFallback() const;
   bool paginated() const;
   bool destructive() const;
   bool idempotent() const;

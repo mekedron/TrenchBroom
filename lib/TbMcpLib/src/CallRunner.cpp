@@ -36,6 +36,7 @@
 #include "ui/MapDocument.h"
 
 #include "kd/contracts.h"
+#include "kd/string_utils.h"
 
 #include <algorithm>
 #include <exception>
@@ -207,12 +208,60 @@ void accumulateTransactionChanges(
   allChanges.erase(it);
 }
 
-Result<std::optional<DocumentInfo>, ToolError> resolveDocument(
+/** The document a call acts on. */
+struct ResolvedDocument
+{
+  std::optional<DocumentInfo> document;
+  /**
+   * The call has no `document` argument and the session no active document, so the call
+   * acts on the focused document, which becomes the session's active document.
+   */
+  bool fromFocus = false;
+  /**
+   * The session's active document was closed and the tool does not need a document: the
+   * call runs without one and is warned.
+   */
+  std::optional<ToolError> activeClosed = std::nullopt;
+};
+
+std::string describeOpenDocuments(ServerState& server)
+{
+  auto descriptions = std::vector<std::string>{};
+  for (const auto& document : server.host.documents())
+  {
+    descriptions.push_back(document.id + " (" + document.windowTitle + ")");
+  }
+  return descriptions.empty() ? std::string{"none"} : kdl::str_join(descriptions, ", ");
+}
+
+ToolError activeDocumentClosedError(ServerState& server, const Session& session)
+{
+  auto openDocuments = Json::array();
+  for (const auto& document : server.host.documents())
+  {
+    openDocuments.push_back(Json{{"id", document.id}, {"title", document.windowTitle}});
+  }
+
+  auto error = makeError(
+    ErrorCode::ActiveDocumentClosed,
+    "This session's active document " + *session.activeDocumentId
+      + " was closed. Open documents: " + describeOpenDocuments(server) + ".",
+    "Call document_activate {\"document\": ...} to choose the document to work on "
+    "(ask the user if unsure which one is yours), or open or create one with "
+    "document_open / document_new.");
+  error.details = Json{
+    {"closedDocument", *session.activeDocumentId},
+    {"openDocuments", std::move(openDocuments)},
+  };
+  return error;
+}
+
+Result<ResolvedDocument, ToolError> resolveDocument(
   ServerState& server, const ToolDef& tool, const Json& arguments, const Session& session)
 {
   if (tool.documentUse() == DocumentUse::None)
   {
-    return std::optional<DocumentInfo>{};
+    return ResolvedDocument{};
   }
 
   if (const auto* documentId = findMember(arguments, "document");
@@ -220,7 +269,7 @@ Result<std::optional<DocumentInfo>, ToolError> resolveDocument(
   {
     if (auto document = server.findDocument(documentId->get<std::string>()))
     {
-      return std::optional{std::move(*document)};
+      return ResolvedDocument{std::move(*document)};
     }
     return makeError(
       ErrorCode::DocumentNotFound,
@@ -228,9 +277,33 @@ Result<std::optional<DocumentInfo>, ToolError> resolveDocument(
       "Use document_list to see the open documents.");
   }
 
-  if (auto document = server.defaultDocument(session))
+  auto target = server.targetDocument(session);
+  switch (target.source)
   {
-    return std::optional{std::move(*document)};
+  case DocumentTarget::Source::Active:
+    return ResolvedDocument{std::move(target.document)};
+  case DocumentTarget::Source::ActiveClosed:
+    if (tool.documentUse() == DocumentUse::Optional)
+    {
+      return ResolvedDocument{
+        std::nullopt, false, activeDocumentClosedError(server, session)};
+    }
+    return activeDocumentClosedError(server, session);
+  case DocumentTarget::Source::Focused:
+    if (!tool.focusFallback())
+    {
+      return makeError(
+        ErrorCode::NoDocument,
+        tool.name()
+          + " only acts on the document named by 'document' or on this session's "
+            "active document, and this session has no active document. Open documents: "
+          + describeOpenDocuments(server) + ".",
+        "Pass 'document' explicitly, e.g. {\"document\": \"" + target.document->id
+          + "\"}.");
+    }
+    return ResolvedDocument{std::move(target.document), true};
+  case DocumentTarget::Source::None:
+    break;
   }
 
   if (tool.documentUse() == DocumentUse::Required)
@@ -240,7 +313,41 @@ Result<std::optional<DocumentInfo>, ToolError> resolveDocument(
       "No document is open in TrenchBroom.",
       "Open or create a map first.");
   }
-  return std::optional<DocumentInfo>{};
+  return ResolvedDocument{};
+}
+
+/**
+ * A call that fell back to the focused document makes it the session's active document,
+ * so that the session keeps working on it when the focus changes, and warns about it. A
+ * call that runs without a document because the active document was closed is warned,
+ * too.
+ */
+void applyDocumentChoice(
+  ServerState& server,
+  Session& session,
+  CallContext& context,
+  const ResolvedDocument& resolved)
+{
+  if (resolved.activeClosed)
+  {
+    context.warn(
+      "ACTIVE_DOCUMENT_CLOSED",
+      resolved.activeClosed->message
+        + " The call ran without a document; call document_activate to choose one.");
+  }
+  if (!resolved.fromFocus)
+  {
+    return;
+  }
+
+  const auto& document = *resolved.document;
+  server.setActiveDocument(session, document.id);
+  context.warn(
+    "DOCUMENT_FROM_FOCUS",
+    "This session had no active document, so the call acts on " + document.id + " ("
+      + document.windowTitle
+      + "), the focused window; it is now this session's active document. If this is "
+        "not the map you are working on, call document_activate or pass 'document'.");
 }
 
 bool isBusy(ServerState& server, ui::MapDocument& document)
@@ -503,8 +610,8 @@ void CallRunner::pump()
       const auto document =
         resolveDocument(m_server, *tool, head.request.arguments, *session);
       if (
-        document.is_success() && document.value()
-        && isBusy(m_server, *document.value()->document))
+        document.is_success() && document.value().document
+        && isBusy(m_server, *document.value().document->document))
       {
         if (m_server.scheduler.now() - head.enqueued >= m_server.options.busyWaitTimeout)
         {
@@ -620,7 +727,8 @@ Json CallRunner::execute(const CallRequest& request)
   {
     return failWith(errorOf(document));
   }
-  auto documentInfo = std::move(document.value());
+  const auto resolved = std::move(document.value());
+  const auto& documentInfo = resolved.document;
 
   auto* mapDocument = documentInfo ? documentInfo->document : nullptr;
   auto* documentState = mapDocument ? &m_server.documentState(*mapDocument) : nullptr;
@@ -640,6 +748,7 @@ Json CallRunner::execute(const CallRequest& request)
 
   auto context =
     CallContext{m_server, *session, *tool, documentInfo, dryRun, request.progress};
+  applyDocumentChoice(m_server, *session, context, resolved);
 
   if (tool->mutation() == Mutation::Map && mapDocument && !tool->keepsActiveTool())
   {
@@ -935,10 +1044,12 @@ bool CallRunner::startAsync(CallRequest request, const bool readOnly)
     return false;
   }
 
-  auto documentInfo = document.value();
+  const auto& resolved = document.value();
+  const auto& documentInfo = resolved.document;
   call->document = documentInfo ? documentInfo->document : nullptr;
   call->context = std::make_unique<CallContext>(
     m_server, *session, *tool, documentInfo, call->dryRun, call->request.progress);
+  applyDocumentChoice(m_server, *session, *call->context, resolved);
 
   if (call->document)
   {

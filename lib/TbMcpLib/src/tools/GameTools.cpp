@@ -207,7 +207,7 @@ ToolResult gameList(CallContext& context, const Args& args)
     return errorOf(request);
   }
 
-  const auto active = context.server().defaultDocument(context.session());
+  const auto active = context.server().targetDocument(context.session()).document;
   const auto* activeGame =
     active ? &active->document->map().gameInfo().gameConfig.name : nullptr;
 

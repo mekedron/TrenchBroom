@@ -90,6 +90,7 @@ Schema documentInfoSchema()
              field("modified", boolean()),
              field("focused", boolean()),
              field("active", boolean()),
+             field("activeIn", array(string())),
              field("gamePath", string()).describe("Configured game folder ('' if unset)"),
              field("gamePathValid", boolean())
                .describe("Whether the game folder exists (game_set_path)"),
@@ -243,10 +244,33 @@ void warnIfGamePathInvalid(CallContext& context, const mdl::GameInfo& gameInfo)
   }
 }
 
-std::string activate(CallContext& context, const DocumentInfo& document)
+void activate(CallContext& context, const DocumentInfo& document)
 {
-  context.session().activeDocumentId = document.id;
-  return document.id;
+  context.server().setActiveDocument(context.session(), document.id);
+}
+
+/**
+ * Checks that a new or loaded document may replace the given one (single window mode): it
+ * must not be the active document of another session.
+ */
+std::optional<ToolError> checkReplace(CallContext& context, const DocumentInfo& replaced)
+{
+  for (const auto& [id, session] : context.server().sessions)
+  {
+    if (session.get() != &context.session() && session->activeDocumentId == replaced.id)
+    {
+      return makeError(
+        ErrorCode::DocumentInUse,
+        fmt::format(
+          "The editor shows one document at a time, and the new document would replace "
+          "{}, the active document of another session ({}).",
+          describeDocument(replaced),
+          session->clientDisplayName()),
+        "Ask the user to turn off single-window mode in the preferences so that each "
+        "document gets its own window, or wait until the other session is done.");
+    }
+  }
+  return std::nullopt;
 }
 
 Json fileEntry(ServerState& server, const std::filesystem::path& path)
@@ -329,6 +353,10 @@ ToolResult documentNew(CallContext& context, const Args& args)
   const auto replaced = host.documentHost().documentToReplace();
   if (replaced)
   {
+    if (auto error = checkReplace(context, *replaced))
+    {
+      return *error;
+    }
     if (
       auto error = handleUnsavedChanges(
         context, *replaced, args.get<std::string>("unsavedChanges"), "replaced"))
@@ -551,6 +579,11 @@ void documentOpen(CallContext& context, const Args& args, ToolCompletion complet
   const auto replaced = host.documentHost().documentToReplace();
   if (replaced)
   {
+    if (auto error = checkReplace(context, *replaced))
+    {
+      completion(*error);
+      return;
+    }
     if (
       auto error = handleUnsavedChanges(
         context, *replaced, args.get<std::string>("unsavedChanges"), "replaced"))
@@ -786,7 +819,7 @@ ToolResult documentClose(CallContext& context, const Args& args)
 
   if (context.session().activeDocumentId == document.id)
   {
-    context.session().activeDocumentId.reset();
+    context.server().setActiveDocument(context.session(), std::nullopt);
   }
   context.host().documentHost().closeDocument(context.document());
 
@@ -1110,13 +1143,12 @@ void registerDocumentTools(ToolRegistry& registry)
       .title("New Document")
       .description(
         "Creates a new, unsaved map for a game and opens it in a new editor window (not "
-        "undoable); it becomes the active document of this session. The map starts from "
-        "the game's initial map template for the format if it has one (otherwise with a "
-        "single 128x128x32 brush, or empty for some games); 'initialObjects' lists these "
-        "objects, "
-        "delete them with objects_delete if you build from scratch. game_list gives game "
-        "and "
-        "format names; save it with document_save_as. Example: "
+        "undoable); it becomes the active document of this session only (other sessions "
+        "keep theirs), and never replaces another session's document. The map starts "
+        "from the game's initial map template for the format if it has one (otherwise "
+        "with a single 128x128x32 brush, or empty for some games); 'initialObjects' "
+        "lists these objects, delete them with objects_delete if you build from scratch. "
+        "game_list gives game and format names; save it with document_save_as. Example: "
         "{\"game\": \"Quake\", \"format\": \"Valve\"}")
       .input(object({
         field("game", string())
@@ -1146,8 +1178,10 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_open"}
       .title("Open Document")
       .description(
-        "Opens a map file in a new editor window and makes it the active document. The "
-        "game and format are read from the file's header comments; pass 'game' and "
+        "Opens a map file in a new editor window and makes it the active document of "
+        "this session (other sessions keep theirs); it never replaces another session's "
+        "document. The game and format are read from the file's header comments; pass "
+        "'game' and "
         "'format' when the file has none or to override them (the format is otherwise "
         "detected from the content). Returns the document and any warnings logged while "
         "loading (missing materials, definition problems). If the file is already open, "
@@ -1223,7 +1257,10 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_close"}
       .title("Close Document")
       .description(
-        "Closes the document and its window (not undoable). With unsaved changes, "
+        "Closes the document and its window (not undoable): the one named by "
+        "'document', or this session's active document; it never falls back to the "
+        "focused window. Other sessions that had it active get ACTIVE_DOCUMENT_CLOSED "
+        "until they choose another one. With unsaved changes, "
         "'unsavedChanges' must say whether to save or discard them; otherwise the call "
         "fails with UNSAVED_CHANGES. An open agent transaction on it is rolled back; "
         "fails with COMPILE_RUNNING while it is being compiled. Example: "
@@ -1238,6 +1275,7 @@ void registerDocumentTools(ToolRegistry& registry)
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)
+      .focusFallback(false)
       .destructive()
       .handler(documentClose));
 
@@ -1245,7 +1283,9 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_revert"}
       .title("Revert Document")
       .description(
-        "Reloads the document from its file, dropping the undo history (not undoable). "
+        "Reloads the document (the one named by 'document', or this session's active "
+        "document; never the focused window) from its file, dropping the undo history "
+        "(not undoable). "
         "With unsaved changes, pass unsavedChanges: 'discard'. All object ids of the "
         "document become invalid (idsInvalidated); layer and group ids are remapped, "
         "so look objects up again (objects_find, map_tree). Example: "
@@ -1261,6 +1301,7 @@ void registerDocumentTools(ToolRegistry& registry)
       }))
       .mutation(Mutation::External)
       .documentUse(DocumentUse::Required)
+      .focusFallback(false)
       .destructive()
       .handler(documentRevert));
 

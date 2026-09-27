@@ -310,8 +310,42 @@ production, a temporary directory in tests). A killed editor leaves a stale file
 
 Each `initialize` creates an independent `Session`. Notifications fan out to every session subscribed to
 the resource (`resources/updated`) or to all sessions (`list_changed`). Tool calls from all sessions share
-one FIFO call queue (§4.1), so edits never interleave. Each session has its own active document (default:
-the focused window) and its own agent transaction.
+one FIFO call queue (§4.1), so edits never interleave. Each session has its own active document (§3.7) and
+its own agent transaction.
+
+### 3.7 Document targeting
+
+Several agents (e.g. a main agent and its subagents, each with its own session) can work in one editor, each
+on its own map. A call acts on the document named by its `document` argument; without one, on the target
+document of its session (`ServerState::targetDocument`, resolved by `CallRunner` before the call runs):
+
+- **Active document.** `Session::activeDocumentId` is set by `document_new` and `document_open` (the new or
+  opened document, for the calling session only) and by `document_activate`, always through
+  `ServerState::setActiveDocument`, which notifies the session if it subscribed to `trenchbroom://editor/status`.
+  An explicit `document` argument does not change it. The focused window does not matter: on Linux every new
+  map opens in its own window and takes the focus, so following the focus would make one session act on
+  another session's new map.
+- **Focus fallback.** A session without an active document (a fresh session, or one that closed its own active
+  document with `document_close`) acts on the focused document (or the first one if none is focused) and
+  adopts it as its active document, so that it stays on it when the focus changes. The result carries the
+  warning `DOCUMENT_FROM_FOCUS` naming the document. Tools declared with `ToolDef::focusFallback(false)`
+  (`document_close`, `document_revert`) fail with `NO_DOCUMENT` instead: closing and reloading only act on a
+  document the agent chose.
+- **Closed active document.** If the session's active document was closed by the user or by another session,
+  calls without `document` fail with `ACTIVE_DOCUMENT_CLOSED` (message and `details.openDocuments` list the
+  open documents, `details.closedDocument` the closed one; the hint names `document_activate`). They never
+  switch silently to another document. Tools with `DocumentUse::Optional` (e.g. `compile_status` with a run
+  handle) run without a document instead and carry an `ACTIVE_DOCUMENT_CLOSED` warning. `activeDocumentId` keeps the closed handle until the session chooses
+  another document (handles are never reused).
+- **No replacing.** In single-window mode (`DocumentHost::documentToReplace`), `document_new` and
+  `document_open` fail with `DOCUMENT_IN_USE` when the document they would replace is another session's active
+  document.
+- **Reporting.** `document_list` and `editor_status` report `activeDocument` (the session's, if open),
+  `activeDocumentClosed` and `targetDocument`; each document summary has `active` (the calling session's
+  active document) and `activeIn` (the display names of the sessions that have it active). The tool, grid,
+  selection, compile and transaction fields of `editor_status` describe the target document. Resources read
+  in a session (`trenchbroom://editor/status`, the manual's references to the current game) use that
+  session's target document.
 
 ---
 
@@ -512,7 +546,8 @@ through `McpServer::state()`. It creates a `DocumentState` (`IdRegistry`, open `
 change hooks) for every open document whenever the document list changes, so subscriptions work before any
 tool touched a document, and drops it on `documentWillCloseNotifier`. `DocumentState::disabledValidators` holds the validators turned off with `validators_set` (§10.13). It owns the `CompileRuns` registry
 (§10.10) and the server clipboard (`ServerState::clipboard`, §10.11); `ServerState::isCompileRunning(document)` is true while an MCP run or the editor's compilation
-dialog compiles the document.
+dialog compiles the document. `targetDocument(session)`, `setActiveDocument(session, id)` and
+`sessionsWithActiveDocument(id)` implement document targeting (§3.7).
 
 ---
 
@@ -827,13 +862,17 @@ void registerGeometryTools(ToolRegistry& registry)
   .required() .describe() .defaultsTo()`. Published output schemas do not contain
   `additionalProperties: false`.
 - `ToolDef`: `title description input output mutation documentUse transactional paginated destructive
-  idempotent openWorld keepsActiveTool handler asyncHandler`. `keepsActiveTool` makes a `Map` tool skip
-  `prepareForAgentEdit` (§4.1), so it runs in the editor's current tool state (`action_invoke`). Annotations: `readOnlyHint` (Mutation::None),
+  idempotent openWorld keepsActiveTool focusFallback handler asyncHandler`. `keepsActiveTool` makes a `Map` tool skip
+  `prepareForAgentEdit` (§4.1), so it runs in the editor's current tool state (`action_invoke`).
+  `focusFallback(false)` makes a tool fail with `NO_DOCUMENT` instead of falling back to the focused window
+  when the session has no active document (§3.7). Annotations: `readOnlyHint` (Mutation::None),
   `destructiveHint`, `idempotentHint`, `openWorldHint`.
 - `Mutation`: `None` (read-only, runs immediately), `Map` (one transaction, busy gate), `External`
   (non-undoable side effects, busy gate).
 - `DocumentUse`: `None` (no `document` parameter), `Optional`, `Required` (`NO_DOCUMENT` without a target
-  document). Default: `Required` for `Mutation::Map`, `None` otherwise.
+  document). Default: `Required` for `Mutation::Map`, `None` otherwise. When the session's active document
+  was closed, `Required` tools fail with `ACTIVE_DOCUMENT_CLOSED` and `Optional` tools run without a document
+  with a warning of the same code (§3.7).
 - Injected parameters: `document?` for `DocumentUse != None`; `dryRun? = false` for `Map`/`External`;
   `detail? = "summary"|"ids"|"full"` (default `"ids"`) for `Map` (§6.3, response size);
   for `.paginated()`: `cursor?`, `limit? = 100 (1..1000)`, `fields?`, `detail? = "summary"|"full"`.
@@ -858,7 +897,7 @@ using ToolResult = Result<Json, ToolError>;
 ```
 
 Codes: `INVALID_ARGUMENT`, `OBJECT_NOT_FOUND`, `WRONG_OBJECT_KIND`, `OBJECT_NOT_EDITABLE`, `NO_SELECTION`,
-`NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`, `OPERATION_FAILED`,
+`NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `ACTIVE_DOCUMENT_CLOSED` and `DOCUMENT_IN_USE` (§3.7), `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`, `OPERATION_FAILED`,
 `TRANSACTION_ACTIVE`, `NO_TRANSACTION`, `BUSY_TIMEOUT`, `CANCELLED`, `UNSAVED_CHANGES`, `FILE_EXISTS`,
 `IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`, `DRY_RUN_UNSUPPORTED`, `COMPILE_RUNNING`,
 `DIALOG_REQUIRED`, `ACTION_REFUSED` (§10.9), `INTERNAL_ERROR`.
@@ -889,7 +928,7 @@ Mapping to MCP:
 
 | URI | Content | Updated when |
 |---|---|---|
-| `trenchbroom://editor/status` | editor status | documents open/close/focus change; info or selection changes, grid, tool changes, lock preferences (`AlignmentLock`, `UvLock`), agent transactions opening or closing |
+| `trenchbroom://editor/status` | editor status of the reading session (§3.7) | documents open/close/focus change; the session's active document changes; info or selection changes, grid, tool changes, lock preferences (`AlignmentLock`, `UvLock`), agent transactions opening or closing |
 | `trenchbroom://documents/{doc}/info` | `documentInfo()` | save, load, modified flag flips, mods, entity definitions, materials or worldspawn change |
 | `trenchbroom://documents/{doc}/summary` | `mapSummary()` (= `map_summary`) | nodes added/removed/changed, visibility, locking, current layer, grid, entity definitions, reload |
 | `trenchbroom://documents/{doc}/selection` | `selectionDetails()`, ≤ 100 items | selection changes, changes of selected nodes |
@@ -1087,7 +1126,10 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
 - `unsavedChanges: "error" | "save" | "discard"` (default `"error"` → `UNSAVED_CHANGES`) on
   `document_close`, `document_revert`, and on `document_new` / `document_open` when they replace a document
   (single-window mode). `"save"` fails for a never-saved document. The server does not create folders.
-- `document_new` / `document_open` make the result the session's active document. `document_new` reports the
+- `document_new` / `document_open` make the result the calling session's active document (§3.7); in
+  single-window mode they refuse to replace another session's active document (`DOCUMENT_IN_USE`).
+  `document_close` and `document_revert` act only on the document named by `document` or on the session's
+  active document. `document_new` reports the
   game's `initialMap` template for the format (or null) and the ids of the objects the new map starts with
   (`initialObjects`, e.g. the single default brush), with an `INITIAL_OBJECTS` warning, so that agents delete
   them before building at the origin.
@@ -1100,7 +1142,7 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   non-`.map` paths. Exports refuse the document's own path.
 - `map_files_list` matches a case-insensitive glob (default `*.map`), optionally recursive, sorted naturally.
   `autosave_list` lists `<map dir>/autosave/<name>.<n>.map`, newest first.
-- `game_info` without `game` describes the active document's game; smart tags are reported with name,
+- `game_info` without `game` describes the target document's game; smart tags are reported with name,
   attributes and a textual definition.
 - `mods_set`, `entity_definitions_set`, `materials_collections_set` and `soft_bounds_set` are
   `Mutation::Map` (worldspawn changes, one undo step each); reload problems become `LOAD_WARNING` /
@@ -2010,6 +2052,7 @@ breaks, with the subsections and the parent, previous and next sections. Without
 | `tst_Prompts` | the nine prompts with their arguments, missing required arguments, inserted and default values; every tool named in the prompts and the agent guide is registered |
 | `tst_ToolCatalog` | every registered tool: a title, a description of at least 60 characters starting with an upper-case letter, at least one JSON object after "Example" and every such object accepted by the input schema, an object input schema with a description on every property (nested objects, array items, oneOf branches), an output schema |
 | `tst_ObjectIds`, `tst_Targets` | id format/parse; delete→undo→same id; redo; linked-group aliasing; reload remap; target resolution |
+| `tst_DocumentTargeting` | two sessions: session A opens map 1, session B creates map 2 (focused); calls without `document` stay on each session's active document regardless of focus; `document_list` `active` / `activeIn` and `editor_status` per session, also as a resource; explicit `document` leaves the active document; `ACTIVE_DOCUMENT_CLOSED` with the open documents after the user, another session or (fallback) the session itself closed it; the `DOCUMENT_FROM_FOCUS` fallback and adoption of a fresh session; `document_close` / `document_revert` never fall back; the status notification on activation; `DOCUMENT_IN_USE` in single-window mode |
 | `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks; asynchronous read-only calls (immediate while busy, concurrent, cancel, session close, document close, no undo step) |
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
@@ -2040,7 +2083,9 @@ tiles (every node reachable, one node per column); `spaces_list` (also `EDGE_ONL
 | `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities; E12's acceptance scenario on `spaces.map` (pick the chair in a snapshot, both spaces with their doorway, a wall spot for a poster with the face id, z-fighting and an entity outside the hull reported by the calls that caused them); S2 on `issues.map` (every issue with type, object and explanation; the codes with one fix fixed one call each with the deleted and changed objects reported; fewer issues afterwards and the rest listed with reasons; one `AI: Fix Issues` undo step per call) |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
-(`ui::MapDocumentFixture`), a `FakeHost` and a `FakeScheduler`, with one initialized session:
+(`ui::MapDocumentFixture`), a `FakeHost` and a `FakeScheduler`, with one initialized session. Like
+`document_new`, `create` and `load` make the new document the active document of that session (not of the
+sessions opened with `openSession`):
 
 ```cpp
 ui::MapDocument& create(mdl::MapFixtureConfig = {});

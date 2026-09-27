@@ -27,7 +27,7 @@ namespace tb::mcp
 namespace
 {
 
-constexpr auto ErrorCodeNames = std::array<std::pair<ErrorCode, std::string_view>, 24>{{
+constexpr auto ErrorCodeNames = std::array<std::pair<ErrorCode, std::string_view>, 26>{{
   {ErrorCode::InvalidArgument, "INVALID_ARGUMENT"},
   {ErrorCode::ObjectNotFound, "OBJECT_NOT_FOUND"},
   {ErrorCode::WrongObjectKind, "WRONG_OBJECT_KIND"},
@@ -35,6 +35,8 @@ constexpr auto ErrorCodeNames = std::array<std::pair<ErrorCode, std::string_view
   {ErrorCode::NoSelection, "NO_SELECTION"},
   {ErrorCode::NoDocument, "NO_DOCUMENT"},
   {ErrorCode::DocumentNotFound, "DOCUMENT_NOT_FOUND"},
+  {ErrorCode::ActiveDocumentClosed, "ACTIVE_DOCUMENT_CLOSED"},
+  {ErrorCode::DocumentInUse, "DOCUMENT_IN_USE"},
   {ErrorCode::InvalidGeometry, "INVALID_GEOMETRY"},
   {ErrorCode::OutOfWorldBounds, "OUT_OF_WORLD_BOUNDS"},
   {ErrorCode::OperationFailed, "OPERATION_FAILED"},

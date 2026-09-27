@@ -65,6 +65,19 @@ texturing, fixing, compiling, explaining and cleaning up a map.
 - Material names ignore case. Unknown materials, classes, properties and values are
   warnings, never errors.
 
+## Documents and sessions
+- Each MCP session (client connection) has its own active document; calls without
+  'document' act on it. `document_new` and `document_open` make the new document the
+  active document of your session only, `document_activate` chooses another one. Several
+  agents can work in the editor at once, each on its own map; `document_list` shows which
+  sessions work on which document.
+- A session without an active document acts on the focused window and adopts it, with a
+  DOCUMENT_FROM_FOCUS warning: check that it is your map.
+- If your active document is closed (by the user or another agent), calls without
+  'document' fail with ACTIVE_DOCUMENT_CLOSED, listing the open documents; call
+  `document_activate`. `document_close` and `document_revert` only act on the document
+  named by 'document' or on your active document, never on the focused window.
+
 ## Player dimensions
 Used by the eyeHeight camera helper, the "player" annotation, `spaces_list` cells (half
 the player width) and `walkable_plan`. Units; "~" marks approximate engine values.
@@ -287,9 +300,10 @@ void registerResources(McpServer& server)
     "trenchbroom://editor/status",
     "editor-status",
     "Editor Status",
-    "Active document, open documents, current tool, grid, locks and selection summary. "
-    "Subscribe to get notified when documents are opened, closed or saved, or the tool, "
-    "locks, open transaction or selection change.",
+    "This session's active document, open documents, current tool, grid, locks and "
+    "selection summary. Subscribe to get notified when documents are opened, closed or "
+    "saved, this session's active document changes, or the tool, locks, open "
+    "transaction or selection change.",
     "application/json",
     [](ServerState& state, Session& session, const std::string& uri, const auto&)
       -> Result<Json, ToolError> {

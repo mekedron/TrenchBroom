@@ -96,7 +96,12 @@ public:
   /** Whether the client sent `notifications/initialized`. */
   bool initialized = false;
 
-  /** The document chosen with `document_activate`, if any. */
+  /**
+   * The handle of the session's active document, which calls without a `document`
+   * argument act on: set by document_new, document_open and document_activate, or by
+   * the first call that fell back to the focused document. It keeps the handle of a
+   * document that was closed by someone else (ServerState::targetDocument).
+   */
   std::optional<std::string> activeDocumentId;
 
   /** Subscribed resource URIs. */

@@ -102,6 +102,29 @@ enum class DocumentAspect
   Status,
 };
 
+/**
+ * The document that a call without a `document` argument acts on, and how it was chosen
+ * (ServerState::targetDocument).
+ */
+struct DocumentTarget
+{
+  enum class Source
+  {
+    /** The session's active document. */
+    Active,
+    /** The session has no active document; the focused (or first) document. */
+    Focused,
+    /** The session's active document was closed; there is no target. */
+    ActiveClosed,
+    /** The session has no active document and no document is open. */
+    None,
+  };
+
+  Source source = Source::None;
+  /** Set for Active and Focused. */
+  std::optional<DocumentInfo> document = std::nullopt;
+};
+
 /** The server's state for one open document. */
 class DocumentState
 {
@@ -196,11 +219,20 @@ public:
   std::optional<DocumentInfo> findDocument(std::string_view documentId) const;
 
   /**
-   * The document that tools of the given session target by default: the one chosen with
-   * document_activate if it is still open, otherwise the focused document, otherwise the
-   * first one.
+   * The document that a call of the given session without a `document` argument acts on:
+   * the session's active document; if the session has none, the focused document (or the
+   * first one); none if the session's active document was closed.
    */
-  std::optional<DocumentInfo> defaultDocument(const Session& session) const;
+  DocumentTarget targetDocument(const Session& session) const;
+
+  /**
+   * Makes the given document the session's active document, or clears it. Notifies the
+   * session if it subscribed to the editor status, which reports the active document.
+   */
+  void setActiveDocument(Session& session, std::optional<std::string> documentId);
+
+  /** The display names of the sessions whose active document is the given one. */
+  std::vector<std::string> sessionsWithActiveDocument(std::string_view documentId) const;
 
   /** The transaction depth that the server itself opened on the given document. */
   size_t agentDepth(ui::MapDocument& document) const;

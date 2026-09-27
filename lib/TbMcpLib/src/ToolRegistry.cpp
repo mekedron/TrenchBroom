@@ -114,6 +114,12 @@ ToolDef& ToolDef::keepsActiveTool(const bool keepsActiveTool)
   return *this;
 }
 
+ToolDef& ToolDef::focusFallback(const bool focusFallback)
+{
+  m_focusFallback = focusFallback;
+  return *this;
+}
+
 ToolDef& ToolDef::paginated(const bool paginated)
 {
   m_paginated = paginated;
@@ -178,6 +184,11 @@ bool ToolDef::transactional() const
 bool ToolDef::keepsActiveTool() const
 {
   return m_keepsActiveTool;
+}
+
+bool ToolDef::focusFallback() const
+{
+  return m_focusFallback;
 }
 
 bool ToolDef::paginated() const

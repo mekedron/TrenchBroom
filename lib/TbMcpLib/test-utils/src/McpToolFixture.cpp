@@ -108,6 +108,7 @@ ui::MapDocument& McpToolFixture::create(mdl::MapFixtureConfig config)
     *m_documentFixtures.emplace_back(std::make_unique<ui::MapDocumentFixture>());
   auto& document = fixture.create(std::move(config));
   m_host.addDocument(document, "unnamed" + std::to_string(m_documentFixtures.size()));
+  activate(document);
   return document;
 }
 
@@ -118,7 +119,17 @@ ui::MapDocument& McpToolFixture::load(
     *m_documentFixtures.emplace_back(std::make_unique<ui::MapDocumentFixture>());
   auto& document = fixture.load(path, std::move(config));
   m_host.addDocument(document, path.filename().string());
+  activate(document);
   return document;
+}
+
+void McpToolFixture::activate(const ui::MapDocument& document)
+{
+  // set directly: the host already notified the status subscribers of the new document
+  if (auto* session = m_server->state().findSession(m_sessionId))
+  {
+    session->activeDocumentId = documentId(document);
+  }
 }
 
 std::string McpToolFixture::documentId(const ui::MapDocument& document) const

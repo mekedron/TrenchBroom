@@ -94,8 +94,13 @@ public:
   FakeScheduler& scheduler();
   const std::string& sessionId() const;
 
-  /** Creates a new document and registers it with the host (it gets the focus). */
+  /**
+   * Creates a new document and registers it with the host (it gets the focus). Like
+   * document_new, it becomes the active document of the fixture's session (not of the
+   * sessions opened with openSession).
+   */
   ui::MapDocument& create(mdl::MapFixtureConfig config = {});
+  /** Loads a document like create. */
   ui::MapDocument& load(
     const std::filesystem::path& path, mdl::MapFixtureConfig config = {});
 
@@ -138,6 +143,7 @@ public:
 
 private:
   ui::MapDocument& focusedDocument();
+  void activate(const ui::MapDocument& document);
 };
 
 /** Converts the error object of a failed tool result. */
