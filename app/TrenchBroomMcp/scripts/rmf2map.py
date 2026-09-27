@@ -198,12 +198,18 @@ class RmfParser:
     def entity_data(self):
         r = self.reader
         classname = r.string()
-        r.skip(4)
+        angle = r.int()
         spawnflags = r.int()
         properties = [(r.string(), r.string()) for _ in range(r.int())]
-        if spawnflags and not any(key == "spawnflags" for key, _ in properties):
-            properties.append(("spawnflags", str(spawnflags)))
-        return classname, properties
+        # Hammer writes these two fields right after the classname, before the
+        # key values; a separate "angles" key does not replace "angle".
+        keys = {key for key, _ in properties}
+        header = []
+        if angle and "angle" not in keys:
+            header.append(("angle", str(angle)))
+        if spawnflags and "spawnflags" not in keys:
+            header.append(("spawnflags", str(spawnflags)))
+        return classname, header + properties
 
 
 def fmt_num(value):
