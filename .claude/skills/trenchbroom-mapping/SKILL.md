@@ -289,6 +289,31 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   playing.
 - Wait for compiles and the game with an `until grep -q ...; do sleep 2; done` loop.
 
+## Large maps from prefab scripts
+
+For a map with many rooms, generate the geometry with Python and let the editor assemble,
+check, compile and fix it:
+
+- **Shell from air boxes**: list every room, doorway and window as an axis-aligned box of air;
+  the walls are the union of the boxes grown by the wall thickness minus the air, cut on a grid of
+  all box edges plus half-wall lines (so each half of a shared wall takes its own room's
+  materials) and merged into large brushes. It is sealed by construction; a changed layout is a
+  rerun. Keep the sky only on faces that face open air — a hidden sky face turns its whole brush
+  into sky contents.
+- **One script per area** writing a Valve 220 `.map` (brushes with textures fitted from the WAD
+  sizes, `func_detail`/brush entities, point entities, named groups), imported with
+  `map_import {"targetLayer": ...}` into one layer per area. To update an area, select its layer
+  (`select_by {"layers": [...]}`), delete, import again. When a delete times out
+  (`BUSY_TIMEOUT` while the user works in the editor) do not import before it succeeded, or the
+  area doubles.
+- Subagents can build areas in parallel as scripts (they cannot share the editor): give them one
+  brief with the room boxes, doors, materials, units and naming rules, let each verify its output
+  itself (z-fighting script, hulls against the parsed shell, light near every NPC), and review
+  their imports with snapshots.
+- Scripts should draw random choices even for items they skip, so a later edit does not move
+  every following random placement.
+- Ids change when the document is reopened: find layers and groups again by name.
+
 ## Porting pieces of other maps
 
 Original map sources (or decompiled maps) are good references for props and scripted gags.

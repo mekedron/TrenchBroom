@@ -20,6 +20,26 @@ ones (`zfight.py`, `mapio.py`) are in the trenchbroom-mapping skill.
   for Xen, `liquids.wad` for more water. The server stores their paths so compiling finds them.
 - The editor's "unused targetname" issues are false positives for Half-Life logic that is fired by
   `multi_manager` keys or `m_iszEntity`; hide them with `issue_hide` instead of deleting names.
+- Sky: worldspawn `skyname` picks the skybox from `valve/gfx/env` (`night`, `city`, `black`, ...);
+  without it the game shows the default desert sky.
+- `func_detail` (sdHLT) is not in the built-in FGD: the editor reports it as a missing
+  definition, the compiler handles it. Turn that validator off with `validators_set`.
+
+## Assets from other games
+
+The map runs in `valve`, which only sees files inside `valve/`. Textures, models and sprites of
+other installed games (Counter-Strike, Condition Zero, Day of Defeat, TFC, Opposing Force, Blue
+Shift, Quake 1/2) work once a script copies them there; the repository keeps only the script.
+
+- Textures: combine the chosen ones into one WAD3 in `valve/` (8-bit, 256-colour palette per
+  texture, 4 mips, sizes multiple of 16, names ≤ 15 chars with the special prefix first:
+  `{`, `~`, `+0`). Quake and Quake 2 textures convert through their game palette. Original
+  art (signs, posters, animated screens `+0NAME` … `+9NAME`, ~10 fps) goes the same way. List
+  the WADs with `materials_collections_set` and add their `~` textures to an `info_texlights`.
+- Models: copy the `.mdl` with its `<name>t.mdl` texture file and its `<name>01.mdl`… sequence
+  files, and rewrite the sequence-group paths inside the model to the new folder; otherwise a
+  copied model loads a same-named Valve file (Blue Shift's `scientist01.mdl`).
+- A BSP compiled against such WADs has no embedded textures and can be committed.
 
 ## Units
 
@@ -86,6 +106,16 @@ Light fixtures: the housing in `LAB1_CAB2`, `~LIGHT3B` (64×16) only on the bott
 light. For others (e.g. the `~SPOT*` dance-floor tiles) add an `info_texlights` point entity
 with keys `"~SPOTBLUE" "20 90 255 120"`. The game logs `Can't init info_texlights` — harmless.
 
+### How dark is too dark
+
+A club, a basement or a maze lit only by coloured spots reads as pitch black on a normal
+monitor. Give every walkable area a dim fill (a `light` of 70–120 every ~250 units in a maze)
+and a floor for the whole map with RAD's `-ambient r g b` (0.07–0.1 keeps the mood; 0.14 already
+washes it out). Pass it through a compile profile (`compile_profile_save`, rad parameters
+`-ambient 0.09 0.08 0.10 "<map>"`). A BSP whose RAD step was stopped has no lightmaps and renders
+fully bright — never judge lighting from it. Models are lit by the lightmap under their origin:
+an NPC on an unlit patch is a black silhouette.
+
 ## Preview versus game
 
 The editor shows models in their default pose, not the scripted one (sunbathers and sitters
@@ -109,11 +139,13 @@ detail goes into `func_wall`.
 | Ladder | invisible `func_ladder` (AAATRIGGER brush) + visible `{LADDER1` brush in a `func_wall` with `rendermode 4 renderamt 255` |
 | Rotating object | `func_rotating`, spawnflag 1, with an ORIGIN brush at the rotation centre |
 | Health / HEV chargers | `func_healthcharger` (`+0MEDKIT`), `func_recharge` (`+0RECHARGE`) |
-| Looping music | `ambient_generic`, `message sound/<dir>/<file>.wav` relative to `sound/`, spawnflag 8 (large radius). The WAV must have a cue point — make it with `scripts/makeloop.py` |
+| Looping music | `ambient_generic`, `message sound/<dir>/<file>.wav` relative to `sound/`, spawnflag 8 (large radius). The WAV must have a cue point — make it with `scripts/makeloop.py`; 16-bit mono 22050 Hz keeps it small |
+| Music per room | one `ambient_generic` per zone with spawnflags 1+16 (everywhere, start silent), placed at the zone's source (DJ, stage, door of the loud room): the volume stays even, the stereo image points at the placement — an ambient far away plays "behind the player". A `trigger_multiple` (`wait 1`) filling each zone fires a `multi_manager` that fires `trigger_relay`s with `triggerstate 1` for its ambient and `0` for all others (ambient_generic honours on/off, so repeats are harmless) |
 | Lightning | `env_beam` with `LightningStart` (info_target, outside solids), spawnflags 1+4+32 (start on, random strike, end sparks), `Radius`, `texture sprites/lgtning.spr` |
 | Glow, steam | `env_sprite` `sprites/glow01.spr`, `glow02.spr`, `steam1.spr`, `rendermode 5`, spawnflag 1 |
 | Pulsing lights | `light` with `style` (2 slow pulse, 5 gentle pulse, 9 slow strobe, 11 slow pulse no black). A face takes at most 4 styles; reuse styles near each other |
-| Model prop | `cycler` with `model models/<x>.mdl` (e.g. `crystal.mdl`) |
+| Model prop (static) | `env_sprite` with `model models/<x>.mdl`, `framerate 0`, `"angles" "0 <yaw> 360"` (with roll 0 the sprite code copies the yaw into roll and tips the model over): non-solid, no AI. Check each model's forward axis in a test — some props face +Y |
+| Model prop (animated) | `cycler` with `model models/<x>.mdl`: solid 32×32×72 box, not dropped to the floor; sequence 0 animates on its own, any other `sequence` only after the cycler is triggered once (fire all cyclers from a `trigger_auto` → `multi_manager`, at most 16 targets per manager, chain them) |
 | Xen life | `xen_plantlight`, `xen_hair`, `xen_spore_small/medium/large`; `xen_tree` is 188 tall |
 | Items | `weapon_9mmhandgun`, `ammo_9mmclip`, `item_battery`, `item_suit` — `dropToFloor` onto furniture |
 
@@ -143,6 +175,14 @@ detail goes into `func_wall`.
   mods copied into `valve/models/`) is friendly, drops to the floor and can be held in a
   looping pose by a scripted_sequence; its hull is 32×32×72 from the origin up. Keep poles and
   props out of that box or it spawns "stuck in wall" inside a yellow particle field.
+- **Poses that read wrong**: player models (CS, CZ, DoD, TFC, `player/gina`) in a `cycler`
+  render their sequences at blend 0 — bent over, aiming at the floor; use NPC models instead.
+  The female assassin's `fly_attack` is a shooting pose standing on one leg; her dance-like loops
+  are `fly_down`, `grenadethrow`, `idle1`, `idle3` (`body 1` hides the pistol). Opposing Force
+  soldiers' `victorydance` looks like firing a rifle even unarmed — two of them facing each
+  other stage a shoot-out; recruits' `jumping_jacks` and `pushups` are the safe (and funny) choice.
+- **Pole dancer**: a non-solid pole (`func_illusionary`) and a `cycler` with the dancer's loop
+  placed ~12 units from the pole axis; a `monster_generic` there would spawn stuck.
 - **Busy NPCs must not follow the player**: spawnflag 256 (`Pre-Disaster`) on scientists and
   guards — they decline to follow and keep their script. Seated scientists have it
   implicitly. Leave one guard without it if the player should get a follower.
@@ -160,6 +200,23 @@ detail goes into `func_wall`.
   `script "..." using monster "..."` (scripts grabbed their NPCs), `stuck in wall`,
   `Host_Error`, missing models and sounds.
 - Stop the game with `kill $(pgrep -x hl_linux)`.
+- **Entity budget**: the engine allocates 900 edicts by default; a detailed map with hundreds of
+  props, NPCs and scripts fails with `ED_Alloc: no free edicts`. Unnamed `light`s are removed at
+  spawn, everything else counts (each `env_beam` adds its beam at run time). Count the spawned
+  entities before release; above ~800 either cut props or launch with `-num_edicts 2048` (the
+  engine maximum) and say so in the map's notes.
+- **Screenshots from the game** (for checks and for publishing): add `trigger_camera`s
+  (`spawnflags 4` freezes the player, `wait` = hold time) with `info_target`s, fired one after
+  another by a `multi_manager` from a `trigger_auto`; keep them in a layer that is omitted from
+  export, or write them straight into the entity lump of a copy of the compiled BSP
+  (`<map>_album.bsp`: parse the lump with a quote-aware tokenizer, append the new lump at the
+  end of the file and update its header entry). A `maps/<map>_load.cfg` runs at load:
+  `hud_draw 0; crosshair 0; r_drawviewmodel 0; developer 0; default_fov 110` and a loop
+  `alias shotloop "w90;snapshot;shotloop"` (w90 = 90 `wait`s) writes `<map>NNNN.bmp` to `valve/`
+  roughly every 1.5 s, independent of window focus. The game reuses the first free number, so
+  move each BMP away under your own counter before the next one lands. Launch windowed at the
+  wanted size (`-windowed -w 2560 -h 1440`), pick the sharpest frame per camera, and delete the
+  load cfg afterwards — it also runs for players.
 
 ## Original maps worth porting from
 
