@@ -17,44 +17,15 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/Host.h"
+#pragma once
 
 namespace tb::mcp
 {
+class ToolRegistry;
 
-DocumentHost::~DocumentHost() = default;
-
-CompileJob::~CompileJob() = default;
-
-CompileHost::~CompileHost() = default;
-
-McpHost::~McpHost() = default;
-
-CompileHost* McpHost::compileHost()
-{
-  return nullptr;
-}
-
-Logger* McpHost::logTarget(ui::MapDocument&)
-{
-  return nullptr;
-}
-
-SnapshotRenderer* McpHost::snapshotRenderer()
-{
-  return nullptr;
-}
-
-ConsoleBuffer* McpHost::consoleBuffer()
-{
-  return nullptr;
-}
-
-void McpHost::clearConsoleViews() {}
-
-std::optional<std::filesystem::path> McpHost::knowledgeDirectory()
-{
-  return std::nullopt;
-}
+/**
+ * Registers the tools entity_animation_set and entity_placement_check.
+ */
+void registerEntityModelTools(ToolRegistry& registry);
 
 } // namespace tb::mcp

@@ -234,6 +234,7 @@ FakeHost::FakeHost()
       std::make_unique<fs::WritableDiskFileSystem>(m_configEnvironment->dir()),
       createGameInfos(*m_configEnvironment))}
 {
+  knowledgeDir = m_configEnvironment->dir() / "mcp-knowledge";
 }
 
 FakeHost::~FakeHost()
@@ -356,6 +357,11 @@ ConsoleBuffer* FakeHost::consoleBuffer()
 void FakeHost::clearConsoleViews()
 {
   ++clearConsoleViewsCount;
+}
+
+std::optional<std::filesystem::path> FakeHost::knowledgeDirectory()
+{
+  return knowledgeDir;
 }
 
 std::optional<DocumentInfo> FakeHost::documentToReplace()

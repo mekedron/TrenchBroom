@@ -39,6 +39,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/AssetUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
@@ -49,6 +50,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityCreateTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityModelTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityModelUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityPropertyTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityUtils.h
@@ -59,6 +62,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GroupTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/LayerTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialKnowledge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialKnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.h
@@ -71,6 +76,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TransformTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/UvCheck.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/UvTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ViewTools.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
@@ -111,6 +118,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/StreamableHttp.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/AssetUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ClipboardTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
@@ -121,6 +129,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityModelTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityModelUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityPropertyTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/FaceTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GameTools.h
@@ -129,6 +139,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GroupTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/LayerTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialKnowledge.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialKnowledgeTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
@@ -137,6 +149,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpatialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TagTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TransformTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/UvCheck.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/UvTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ViewTools.h
 )
 

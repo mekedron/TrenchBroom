@@ -1,0 +1,32 @@
+// Entity classes with models for the model-aware placement tests.
+// progs/person.mdl has the frames "stand" (z -24..40) and "sit" (z -59..8), x and y -16..16.
+// models/cube.mdl is a Half-Life studio model with the sequences idle, slide and spin.
+
+@PointClass size(-16 -16 -24, 16 16 40) model({ "path": "progs/person.mdl", "frame": sequence }) = monster_person : "A person that can stand or sit"
+[
+	sequence(integer) : "Animation sequence" : 0
+	angle(integer) : "Yaw" : 0
+]
+
+@PointClass size(-16 -16 -24, 16 16 40) model({ "path": "progs/person.mdl", "frame": 1 }) = monster_person_seated : "A person that always sits" []
+
+@PointClass size(-16 -16 -24, 16 16 40) model({ "path": "progs/person.mdl", "frame": sequence, "scale": 2 }) = monster_giant : "A person twice the size"
+[
+	sequence(integer) : "Animation sequence" : 0
+]
+
+@PointClass size(-16 -16 0, 16 16 72) model({ "path": "models/cube.mdl", "frame": sequence }) = studio_cube : "A studio model with sequences"
+[
+	sequence(integer) : "Animation sequence" : 0
+]
+
+@PointClass size(-16 -16 -24, 16 16 40) model({ "path": "progs/missing.mdl", "frame": sequence }) = monster_missing : "A class whose model file is missing"
+[
+	sequence(integer) : "Animation sequence" : 0
+]
+
+@PointClass size(-8 -8 -8, 8 8 8) = info_marker : "A class without model" []
+
+@SolidClass = func_wall : "Wall" []
+
+@SolidClass = trigger_multiple : "Trigger" []

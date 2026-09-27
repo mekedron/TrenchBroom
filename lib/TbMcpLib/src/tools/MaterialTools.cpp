@@ -36,6 +36,8 @@
 #include "mcp/Pagination.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/AssetUtils.h"
+#include "mcp/tools/UvTools.h"
 #include "mdl/BezierPatch.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
@@ -501,6 +503,7 @@ ToolResult materialApply(CallContext& context, const Args& args)
     {
       return context.operationFailed(fmt::format("Could not apply material '{}'.", name));
     }
+    warnUvFindings(context, faces.value());
     return Json{
       {"material", name},
       {"faces", faces.value().size()},
@@ -906,117 +909,12 @@ ToolResult materialReplace(CallContext& context, const Args& args)
           fmt::format("Could not replace materials with '{}'.", target));
       }
     }
+    warnUvFindings(context, allFaces);
     return result;
   });
 }
 
 // material_preview
-
-Result<RgbaImage, ToolError> toRgbaImage(
-  const gl::Texture& texture, const std::string& name)
-{
-  const auto format = texture.format();
-  if (gl::isCompressedFormat(format))
-  {
-    return makeError(
-      ErrorCode::Unsupported,
-      fmt::format(
-        "Material '{}' uses a compressed texture format, which cannot be previewed.",
-        name));
-  }
-  if (format != GL_RGB && format != GL_BGR && format != GL_RGBA && format != GL_BGRA)
-  {
-    return makeError(
-      ErrorCode::Unsupported,
-      fmt::format("Material '{}' uses an unsupported texture format.", name));
-  }
-
-  const auto& buffers = texture.buffersIfLoaded();
-  const auto width = texture.width();
-  const auto height = texture.height();
-  const auto bytesPerPixel = gl::bytesPerPixelForFormat(format);
-  if (
-    buffers.empty() || buffers.front().size() < width * height * bytesPerPixel
-    || width == 0 || height == 0)
-  {
-    return makeError(
-      ErrorCode::OperationFailed,
-      fmt::format("The image data of material '{}' is not available.", name));
-  }
-
-  const auto swap = format == GL_BGR || format == GL_BGRA;
-  const auto* data = buffers.front().data();
-  auto image = RgbaImage{width, height, std::vector<unsigned char>(width * height * 4)};
-  for (size_t i = 0; i < width * height; ++i)
-  {
-    const auto* src = data + i * bytesPerPixel;
-    auto* dst = image.pixels.data() + i * 4;
-    dst[0] = swap ? src[2] : src[0];
-    dst[1] = src[1];
-    dst[2] = swap ? src[0] : src[2];
-    dst[3] = bytesPerPixel == 4 ? src[3] : 255;
-  }
-  return image;
-}
-
-/**
- * Loads the texture of a material from the game file system, the way the document loads
- * its material collections. Needed because the editor drops the CPU copy of a texture
- * once it was uploaded to the GPU.
- */
-Result<gl::Texture, ToolError> reloadTexture(
-  const mdl::Map& map, const gl::Material& material)
-{
-  auto logger = NullLogger{};
-  const auto& gameConfig = map.gameInfo().gameConfig;
-  const auto& materialConfig = gameConfig.materialConfig;
-
-  auto fs = mdl::GameFileSystem{};
-  auto mods = std::vector<std::filesystem::path>{};
-  for (const auto& mod : mdl::enabledMods(map))
-  {
-    mods.emplace_back(mod);
-  }
-  fs.initialize(map.environmentConfig(), gameConfig, map.gamePath(), mods, logger);
-
-  if (const auto* wads = map.worldNode().entity().property(mdl::EntityPropertyKeys::Wad))
-  {
-    auto wadPaths = std::vector<std::filesystem::path>{};
-    for (const auto& wad : mdl::splitWadProperty(*wads))
-    {
-      wadPaths.emplace_back(wad);
-    }
-    const auto searchPaths = std::vector<std::filesystem::path>{
-      map.path().parent_path(),
-      map.gamePath(),
-      map.environmentConfig().appFolderPath,
-    };
-    fs.reloadWads(materialConfig.root, searchPaths, wadPaths, logger);
-  }
-
-  auto palette = std::optional<mdl::Palette>{};
-  if (!materialConfig.palette.empty())
-  {
-    fs.openFile(materialConfig.palette) | kdl::and_then([&](auto file) {
-      return mdl::loadPalette(*file, materialConfig.palette);
-    }) | kdl::transform([&](auto loaded) { palette = std::move(loaded); })
-      | kdl::transform_error([](auto) {});
-  }
-
-  auto texture = mdl::loadTexture(material.relativePath(), material.name(), fs, palette);
-  if (texture.is_error())
-  {
-    return makeError(
-      ErrorCode::OperationFailed,
-      fmt::format(
-        "Could not load the image of material '{}' from {}: {}",
-        material.name(),
-        material.relativePath().generic_string(),
-        errorMessage(texture)),
-      "Shader materials and materials without an image file cannot be previewed.");
-  }
-  return std::move(texture).value();
-}
 
 std::string averageColor(const RgbaImage& image)
 {
@@ -1048,26 +946,13 @@ ToolResult materialPreview(CallContext& context, const Args& args)
     return unknownMaterialError(map, name);
   }
 
-  const auto* texture = material->texture();
-  const auto inMemory = texture && !texture->buffersIfLoaded().empty();
-  auto reloaded = std::optional<gl::Texture>{};
-  if (!inMemory)
-  {
-    auto loaded = reloadTexture(map, *material);
-    if (loaded.is_error())
-    {
-      return errorOf(loaded);
-    }
-    reloaded = std::move(loaded).value();
-  }
-
-  const auto image = toRgbaImage(inMemory ? *texture : *reloaded, material->name());
+  const auto image = loadMaterialImage(map, *material);
   if (image.is_error())
   {
     return errorOf(image);
   }
 
-  const auto preview = downscale(image.value(), maxSize);
+  const auto preview = downscale(image.value().image, maxSize);
   const auto png = encodePng(preview);
   if (!png)
   {
@@ -1078,12 +963,12 @@ ToolResult materialPreview(CallContext& context, const Args& args)
   return Json{
     {"name", material->name()},
     {"collection", material->collectionName()},
-    {"width", image.value().width},
-    {"height", image.value().height},
+    {"width", image.value().image.width},
+    {"height", image.value().image.height},
     {"previewWidth", preview.width},
     {"previewHeight", preview.height},
-    {"averageColor", averageColor(image.value())},
-    {"source", inMemory ? "memory" : "file"},
+    {"averageColor", averageColor(image.value().image)},
+    {"source", image.value().fromMemory ? "memory" : "file"},
   };
 }
 
@@ -1211,7 +1096,9 @@ void registerMaterialTools(ToolRegistry& registry)
         "their faces); without ids, the selected faces or all faces of the selected "
         "objects. Only the material changes; the alignment (offset, scale, rotation) "
         "stays. A material that is not loaded is applied anyway with an "
-        "UNKNOWN_MATERIAL warning. Example: {\"material\": \"wall_brick\", \"ids\": "
+        "UNKNOWN_MATERIAL warning. The uv_check findings on the faces (UV_* codes, e.g. "
+        "a panel that does not fit) are added as warnings. Example: {\"material\": "
+        "\"wall_brick\", \"ids\": "
         "[\"brush:12\", \"brush:14/face:2\"]} -> {\"material\": \"wall_brick\", "
         "\"faces\": 7}")
       .input(object({
@@ -1264,7 +1151,9 @@ void registerMaterialTools(ToolRegistry& registry)
         "are skipped (skippedFaces). Targets that are not loaded are not applied but "
         "reported in 'unmatched' unless allowMissingTargets is true (then they are "
         "applied with an UNKNOWN_MATERIAL warning). 'noMatch' lists patterns that "
-        "matched no face. One undo step. Example: {\"from\": \"wall_old*\", \"to\": "
+        "matched no face. The uv_check findings on the changed faces are added as "
+        "warnings (UV_* codes). One undo step. Example: {\"from\": \"wall_old*\", "
+        "\"to\": "
         "\"wall_new*\", \"layer\": \"Castle\"} -> {\"scope\": {\"kind\": \"layer\", "
         "\"layer\": {\"id\": \"layer:3\", \"name\": \"Castle\"}, \"faces\": 120}, "
         "\"replaced\": [{\"from\": \"wall_old_a\", \"to\": \"wall_new_a\", \"faces\": "

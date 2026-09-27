@@ -245,6 +245,12 @@ public:
   /** The number of clearConsoleViews() calls. */
   size_t clearConsoleViewsCount = 0;
 
+  /**
+   * The folder returned by knowledgeDirectory(); by default "mcp-knowledge" in the host's
+   * temporary directory. nullopt simulates a host without one.
+   */
+  std::optional<std::filesystem::path> knowledgeDir;
+
 private:
   size_t m_nextDocumentId = 1;
   std::unique_ptr<fs::TestEnvironment> m_configEnvironment;
@@ -295,6 +301,7 @@ public:
   Logger* logTarget(ui::MapDocument& document) override;
   ConsoleBuffer* consoleBuffer() override;
   void clearConsoleViews() override;
+  std::optional<std::filesystem::path> knowledgeDirectory() override;
 
   // DocumentHost
   std::optional<DocumentInfo> documentToReplace() override;

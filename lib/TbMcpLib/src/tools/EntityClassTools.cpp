@@ -27,6 +27,7 @@
 #include "mcp/ObjectIds.h"
 #include "mcp/Pagination.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/EntityModelUtils.h"
 #include "mcp/tools/GameTools.h"
 #include "mdl/DecalDefinition.h"
 #include "mdl/Entity.h"
@@ -604,7 +605,11 @@ Result<std::vector<mdl::EntityNodeBase*>, ToolError> modelInfoTargets(
 }
 
 Json modelInfoJson(
-  const mdl::Map& map, const IdRegistry& ids, const mdl::EntityNodeBase& entityNode)
+  const mdl::Map& map,
+  const IdRegistry& ids,
+  const mdl::EntityNodeBase& entityNode,
+  EntityModelLoader& loader,
+  const size_t maxAnimations)
 {
   const auto& entity = entityNode.entity();
   auto result = Json{
@@ -614,6 +619,11 @@ Json modelInfoJson(
     {"model", nullptr},
     {"modelLoaded", false},
     {"modelBounds", nullptr},
+    {"frameProperty", nullptr},
+    {"currentAnimation", nullptr},
+    {"animationCount", nullptr},
+    {"animations", Json::array()},
+    {"animationsTruncated", false},
     {"bounds", toJson(entityNode.logicalBounds())},
     {"definitionBounds", nullptr},
     {"scale", nullptr},
@@ -647,13 +657,8 @@ Json modelInfoJson(
       map.gameInfo().gameConfig.entityConfig.scaleExpression));
   }
 
-  const auto* model = entity.model();
-  result["modelLoaded"] =
-    model && model->dataResource().isLoaded() && model->data() != nullptr;
-  if (entity.modelFrame())
-  {
-    result["modelBounds"] = toJson(pointNode->modelBounds());
-  }
+  // the model data is loaded from the game files if the editor has not loaded it yet
+  result.update(entityModelAnimationsJson(entity, loader, maxAnimations));
 
   if (auto rotation = rotationInfoJson(mdl::entityRotationInfo(entity));
       !rotation.is_null())
@@ -674,10 +679,13 @@ ToolResult entityModelInfo(CallContext& context, const Args& args)
   }
 
   const auto& map = context.map();
+  const auto maxAnimations = size_t(args.get<int>("maxAnimations"));
+  auto loader = EntityModelLoader{map};
   auto entities = Json::array();
   for (const auto* entityNode : targets.value())
   {
-    entities.push_back(modelInfoJson(map, context.ids(), *entityNode));
+    entities.push_back(
+      modelInfoJson(map, context.ids(), *entityNode, loader, maxAnimations));
   }
   return Json{{"entities", std::move(entities)}};
 }
@@ -819,20 +827,33 @@ void registerEntityClassTools(ToolRegistry& registry)
         "The model of up to 50 entities (default: the selected entities), as the "
         "editor evaluates it with the entity's properties (e.g. spawnflags that pick "
         "another frame): model {path, skin, frame} or null (brush entities and classes "
-        "without model), modelLoaded (the model file was found and loaded; false if the "
-        "game data is missing), modelBounds (world bounds of the loaded model frame, "
-        "else null), bounds (the entity's bounds), definitionBounds (the class size), "
-        "scale [x,y,z] and rotation {key, type, yawPitchRoll} (degrees, or null if the "
-        "entity cannot be oriented). modelError reports a model expression that failed "
-        "to evaluate. Example: {\"ids\":[\"entity:40\"]} -> {\"entities\":[{\"id\":"
-        "\"entity:40\",\"classname\":\"monster_ogre\",\"pointEntity\":true,\"model\":{"
-        "\"path\":\"progs/ogre.mdl\",\"skin\":0,\"frame\":0},\"modelLoaded\":false,"
-        "\"modelBounds\":null,\"bounds\":{...},\"definitionBounds\":{\"min\":[-32,-32,"
-        "-24],\"max\":[32,32,64]},\"scale\":[1,1,1],\"rotation\":{\"key\":\"angle\","
-        "\"type\":\"angle_up_down\",\"yawPitchRoll\":[90,0,0]}}]}")
+        "without model), modelLoaded (the model file was found and loaded, by the editor "
+        "or from the game files; false if the game data is missing, with the reason in "
+        "modelLoadError), modelBounds (world bounds of the current model frame, else "
+        "null), frameProperty (the property that selects the animation, e.g. "
+        "\"sequence\"; null if the frame is fixed; set it with entity_animation_set), "
+        "currentAnimation and animations (the model's frames / animations such as "
+        "studio model sequences: {index, name (null if the format has no names), bounds "
+        "(model space), worldBounds (with the entity's origin, rotation and scale)}; at "
+        "most maxAnimations, animationCount counts all, animationsTruncated), bounds "
+        "(the entity's bounds), definitionBounds (the class size), scale [x,y,z] and "
+        "rotation {key, type, yawPitchRoll} (degrees, or null if the entity cannot be "
+        "oriented). modelError reports a model expression that failed to evaluate. "
+        "Example: {\"ids\":[\"entity:40\"],\"maxAnimations\":2} -> {\"entities\":[{"
+        "\"id\":\"entity:40\",\"classname\":\"monster_scientist\",\"pointEntity\":"
+        "true,\"model\":{\"path\":\"models/scientist.mdl\",\"skin\":0,\"frame\":13},"
+        "\"modelLoaded\":true,\"modelBounds\":{...},\"frameProperty\":\"sequence\","
+        "\"currentAnimation\":{\"index\":13,\"name\":\"idle1\",\"bounds\":{...},"
+        "\"worldBounds\":{...}},\"animationCount\":80,\"animations\":[{\"index\":0,"
+        "\"name\":\"walk\",...},{\"index\":1,...}],\"animationsTruncated\":true,"
+        "\"bounds\":{...},\"definitionBounds\":{\"min\":[-16,-16,0],\"max\":[16,16,"
+        "72]},\"scale\":[1,1,1],\"rotation\":{\"key\":\"angle\",\"type\":"
+        "\"angle_up_down\",\"yawPitchRoll\":[90,0,0]}}]}")
       .input(object({
         field("ids", array(objectId({ObjectKind::Entity})).minSize(1).maxSize(50))
           .describe("Entity ids. Default: the selected entities"),
+        field("maxAnimations", integer().min(0).max(1000).defaultsTo(100))
+          .describe("List at most this many animations per entity; 0 lists none"),
       }))
       .output(object({
         field("entities", array(any())).required().describe("In the order of ids"),

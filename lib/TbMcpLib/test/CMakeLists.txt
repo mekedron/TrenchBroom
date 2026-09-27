@@ -9,8 +9,8 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileUtils.cpp
@@ -20,6 +20,8 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityCreateTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityModelTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityModelUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityPropertyTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Errors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FaceTools.cpp
@@ -35,6 +37,8 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ObjectIds.cpp
@@ -56,8 +60,12 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TransformTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamCommandProcessor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamLoadAssimpModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamMap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamNode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvCheck.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvWarnings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewTools.cpp
 )
 

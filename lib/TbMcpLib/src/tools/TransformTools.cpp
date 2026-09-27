@@ -27,6 +27,7 @@
 #include "mcp/ObjectIds.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/EntityModelUtils.h"
 #include "mcp/tools/GeometryUtils.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/EntityProperties.h"
@@ -326,7 +327,7 @@ ToolResult objectsMove(CallContext& context, const Args& args)
       "Pass a non-zero vector, e.g. [64, 0, 0].");
   }
 
-  return transformTargets(
+  auto result = transformTargets(
     context,
     args,
     [&](const vm::bbox3d&) {
@@ -336,6 +337,16 @@ ToolResult objectsMove(CallContext& context, const Args& args)
     },
     "The objects could not be moved by " + toText(vector) + ".",
     "Use a smaller vector or keep the objects inside the world bounds.");
+  if (result.is_success())
+  {
+    // models that now reach into floors or furniture, or float
+    if (const auto moved = resolveTargets(context, args, "ids", TransformableKinds);
+        moved.is_success())
+    {
+      warnModelPlacement(context, moved.value());
+    }
+  }
+  return result;
 }
 
 // objects_rotate
@@ -1112,7 +1123,10 @@ void registerTransformTools(ToolRegistry& registry)
       .description(
         "Moves objects by a vector, like dragging them or using the move shortcuts. "
         "Respects texture lock unless alignmentLock is false. Fails with "
-        "OUT_OF_WORLD_BOUNDS if an object would reach the world bounds. "
+        "OUT_OF_WORLD_BOUNDS if an object would reach the world bounds. Moved point "
+        "entities whose model can be loaded are checked like entity_placement_check "
+        "(warnings MODEL_BELOW_FLOOR, MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, "
+        "MODEL_NO_FLOOR). "
         "Example: {\"ids\": [\"brush:12\"], \"vector\": [64, 0, 0]}")
       .input(object({
         transformIdsField(),

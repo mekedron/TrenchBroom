@@ -81,6 +81,21 @@ Entities
   they never block a call.
 - trenchbroom://documents/{doc}/entity-definitions lists all classes of a document.
 
+Placing models
+- entity_model_info lists a model's animations (frames, or a studio model's sequences
+  such as "sitting2") with their real bounds ('bounds' in model space, 'worldBounds'
+  where the entity stands) and names the property that selects the animation
+  ('frameProperty', e.g. "sequence"). The class's size box is often not the model.
+- Set the pose with entity_animation_set {"animation": "sitting2"} (a name or an index)
+  before placing precisely; the result has the new model bounds.
+- entity_create_point with dropToFloor rests the bottom of the current animation's model
+  on the floor (dropUsing "auto"), so a seated pose may stand higher than the class box.
+- Creating and moving entities warns MODEL_BELOW_FLOOR, MODEL_FLOATING, MODEL_NO_FLOOR or
+  MODEL_PENETRATES_BRUSHES; apply 'suggestedMove' with objects_move, drop to the floor or
+  choose another animation. A seated model always touches its chair: check it with a
+  snapshot. Run entity_placement_check {"scope": "map", "onlyProblems": true} before
+  compiling.
+
 Materials and faces
 - Material names are case-insensitive. Find materials with materials_list (search
   "wall_*", usedOnly, includeMissing for materials the map uses but that are not
@@ -107,6 +122,30 @@ Materials and faces
 - Smart tags: tags_list shows the game's object tags (trigger, detail) and face tags
   (clip, skip, hint) with what they match. tag_apply is "Turn into <tag>", tag_remove
   "Make non-<tag>"; 'option' picks one choice when a tag offers several.
+
+Texturing like a designer of the game
+- Before texturing, read the material's profile with material_usage: its kind (panel,
+  tile, trim, decal, sky, liquid, tool), typical scale, typical face size and repeats,
+  each with its source (notes, config, corpus, map, name, image) and sample count.
+  Trust notes and corpus values over the image analysis.
+- Scan the original game's map sources once with material_corpus_scan {"folder": ...}
+  (load the game's WADs or materials first, so that sizes and repeats are recorded); the
+  statistics are kept per game and mod for all later calls. Record facts you or the user
+  know with material_notes_set ({"notes": [{"material": "lab1_gad2", "kind": "panel",
+  "scale": 0.5}]}); notes override statistics.
+- Prefer the typical scale: uv_align {"operation": "typical"} applies it and aligns the
+  texture to the face edge.
+- Panels (screens, doors, signs) fit whole: adjust the geometry to the texture instead of
+  stretching it. material_fit_geometry tells the face size at which the panel fits at its
+  typical scale and the face_extrude call that gets there; then uv_align typical. When
+  the size is fixed, use uv_align fit {"repeatU": 1, "keepAspect": true, "round": true}
+  instead of fitting both axes to arbitrary sizes.
+- Tiles may repeat fractionally; keep one scale across neighbouring faces. Trims fit
+  whole across the strip and repeat along it (fit repeatV with keepAspect).
+- Material and UV tools warn UV_ASPECT_DISTORTION, UV_FRACTIONAL_REPEAT,
+  UV_PANEL_NOT_ALIGNED, UV_UNUSUAL_SCALE, UV_TEXEL_DENSITY_MISMATCH and UV_SEAM with a
+  suggested fix. Run uv_check {"scope": "map"} before finishing, apply the 'fix' calls,
+  and look at the result with view_snapshot.
 
 Layers, groups and visibility
 - layers_list shows the layers with their state; layer_set_state sets current, hidden,

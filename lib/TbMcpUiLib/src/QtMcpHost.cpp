@@ -24,6 +24,7 @@
 
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
+#include "mdl/EnvironmentConfig.h"
 #include "mdl/Map.h"
 #include "ui/AppController.h"
 #include "ui/CompilationDialog.h"
@@ -277,6 +278,11 @@ void QtMcpHost::clearConsoleViews()
   {
     m_consoleHook->clearConsoleViews();
   }
+}
+
+std::optional<std::filesystem::path> QtMcpHost::knowledgeDirectory()
+{
+  return m_appController.environmentConfig().userDataFolderPath / "mcp-knowledge";
 }
 
 std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()

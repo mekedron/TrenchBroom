@@ -27,6 +27,7 @@
 #include "mcp/Schema.h"
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/EntityModelUtils.h"
 #include "mcp/tools/GeometryUtils.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EditorContext.h"
@@ -319,7 +320,8 @@ std::optional<RayHit> findFloor(mdl::Map& map, const vm::bbox3d& bounds)
   return best;
 }
 
-Json floorJson(CallContext& context, const RayHit& hit, const double movedDown)
+Json floorJson(
+  CallContext& context, const RayHit& hit, const double movedDown, const bool model)
 {
   const auto& ids = context.ids();
   auto result = Json{
@@ -327,6 +329,7 @@ Json floorJson(CallContext& context, const RayHit& hit, const double movedDown)
     {"object", ids.format(*hit.node)},
     {"face", nullptr},
     {"distance", roundForOutput(movedDown)},
+    {"bounds", model ? "model" : "definition"},
   };
   if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(hit.node);
       brushNode && hit.faceIndex)
@@ -414,10 +417,7 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
       "'" + classname + "' is a brush entity class; it needs brushes.",
       "Use entity_create_brush with the brushes that should make up the entity.");
   }
-  const auto localBounds = definition && definition->pointEntityDefinition
-                             ? definition->pointEntityDefinition->bounds
-                             : mdl::EntityNode::DefaultBounds;
-
+  auto models = EntityModelLoader{map};
   const auto dropToFloor = args.get<bool>("dropToFloor");
   auto position = args.get<vm::vec3d>("position");
   if (args.get<bool>("snapToGrid"))
@@ -432,8 +432,22 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
 
   auto floor = std::optional<RayHit>{};
   auto movedDown = 0.0;
+  auto dropBounds = DropBounds{};
   if (dropToFloor)
   {
+    auto bounds = dropToFloorBounds(
+      definition,
+      classname,
+      properties,
+      args.get<bool>("applyDefaults"),
+      args.get<std::string>("dropUsing"),
+      models);
+    if (bounds.is_error())
+    {
+      return errorOf(bounds);
+    }
+    dropBounds = std::move(bounds).value();
+    const auto& localBounds = dropBounds.bounds;
     floor = findFloor(map, localBounds.translate(position));
     if (!floor)
     {
@@ -484,6 +498,7 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
         + "; move it into open space or use dropToFloor.",
       std::move(warningIds));
   }
+  warnModelPlacement(context, {entityNode}, models);
   if (!map.worldBounds().contains(bounds))
   {
     context.warn(
@@ -501,7 +516,8 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
     {"classname", classname},
     {"origin", toJson(entityNode->entity().origin())},
     {"bounds", toJson(bounds)},
-    {"floor", floor ? floorJson(context, *floor, movedDown) : Json(nullptr)},
+    {"floor",
+     floor ? floorJson(context, *floor, movedDown, dropBounds.model) : Json(nullptr)},
     {"onFloor", bool(onFloor)},
     {"overlaps", overlaps},
     {"properties", propertiesJson(entityNode->entity())},
@@ -746,10 +762,15 @@ void registerEntityCreateTools(ToolRegistry& registry)
         "all other properties. A brush entity class fails (use entity_create_brush); an "
         "unknown class is created anyway with an UNKNOWN_CLASSNAME warning. Warnings: "
         "ENTITY_OVERLAPS_BRUSHES if the entity intersects solid brushes, "
-        "OUTSIDE_WORLD_BOUNDS. 'onFloor' tells whether the entity stands on a floor "
-        "(within 1 unit). Example: {\"classname\": \"monster_ogre\", \"position\": [256, "
-        "128, 64], \"angle\": 90, \"dropToFloor\": true, \"properties\": "
-        "{\"spawnflags\": 256}}")
+        "OUTSIDE_WORLD_BOUNDS, and for entities whose model can be loaded the model "
+        "placement findings of entity_placement_check (MODEL_BELOW_FLOOR, "
+        "MODEL_FLOATING, MODEL_PENETRATES_BRUSHES, MODEL_NO_FLOOR). dropUsing chooses "
+        "the bounds that rest on the floor: \"model\" (the model bounds of the "
+        "animation the properties select, e.g. a sitting pose), \"definition\" (the "
+        "class size) or \"auto\" (the model if it can be loaded). 'onFloor' tells "
+        "whether the entity stands on a floor (within 1 unit). Example: {\"classname\": "
+        "\"monster_ogre\", \"position\": [256, 128, 64], \"angle\": 90, "
+        "\"dropToFloor\": true, \"properties\": {\"spawnflags\": 256}}")
       .input(object({
         field("classname", string().nonEmpty())
           .required()
@@ -760,6 +781,10 @@ void registerEntityCreateTools(ToolRegistry& registry)
           .describe("Yaw in degrees (0 = east / +x, 90 = north / +y); sets 'angle'"),
         field("dropToFloor", boolean().defaultsTo(false))
           .describe("Place the entity on the floor below the position"),
+        field("dropUsing", enumOf({"auto", "model", "definition"}).defaultsTo("auto"))
+          .describe(
+            "Bounds that dropToFloor rests on the floor: the model's bounds in its "
+            "current animation, the class size, or auto (model if loadable)"),
         field("applyDefaults", boolean().defaultsTo(false))
           .describe("Set the definition's default values of the missing properties"),
         field("snapToGrid", boolean().defaultsTo(true))
@@ -773,8 +798,8 @@ void registerEntityCreateTools(ToolRegistry& registry)
         field("floor", any())
           .required()
           .describe(
-            "With dropToFloor: {z, object, face, distance} (distance the entity moved "
-            "down); otherwise null"),
+            "With dropToFloor: {z, object, face, distance, bounds} (distance the "
+            "entity moved down; bounds \"model\" or \"definition\"); otherwise null"),
         field("onFloor", boolean())
           .required()
           .describe("Whether a floor is within 1 unit below the entity"),

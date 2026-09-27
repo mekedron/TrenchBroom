@@ -30,6 +30,7 @@
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
 #include "mcp/tools/GeometryUtils.h"
+#include "mcp/tools/UvTools.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushFaceHandle.h"
@@ -868,6 +869,7 @@ ToolResult faceAttributesSet(CallContext& context, const Args& args)
       return result;
     }
   }
+  warnUvFindings(context, faces.value());
   return facesResult(context, faces.value());
 }
 
@@ -1030,7 +1032,15 @@ std::optional<mdl::UpdateBrushFaceAttributes> fitUpdate(
 }
 
 const auto AlignParameterKeys = std::vector<std::string_view>{
-  "edge", "policy", "repeatU", "repeatV", "trimSheet", "axis", "direction"};
+  "edge",
+  "policy",
+  "repeatU",
+  "repeatV",
+  "keepAspect",
+  "round",
+  "trimSheet",
+  "axis",
+  "direction"};
 
 std::vector<std::string_view> relevantAlignParameters(
   const std::string& operation, const Args& args)
@@ -1049,7 +1059,8 @@ std::vector<std::string_view> relevantAlignParameters(
   {
     return args.getOr<bool>("trimSheet", false)
              ? std::vector<std::string_view>{"trimSheet", "policy"}
-             : std::vector<std::string_view>{"trimSheet", "repeatU", "repeatV"};
+             : std::vector<std::string_view>{
+                 "trimSheet", "repeatU", "repeatV", "keepAspect", "round"};
   }
   if (operation == "flip")
   {
@@ -1130,6 +1141,8 @@ ToolResult uvAlign(CallContext& context, const Args& args)
   };
 
   auto result = ToolResult{Json::object()};
+  auto reportFits = false;
+  auto fitProfiles = std::optional<UvFitProfiles>{};
   if (operation == "justify")
   {
     const auto edge = args.get<std::string>("edge");
@@ -1163,18 +1176,36 @@ ToolResult uvAlign(CallContext& context, const Args& args)
     }
     else
     {
-      auto repeatU = args.getOptional<double>("repeatU");
-      auto repeatV = args.getOptional<double>("repeatV");
-      if (!repeatU && !repeatV)
+      const auto request = uvFitRequest(args);
+      if (request.is_error())
       {
-        repeatU = 1.0;
-        repeatV = 1.0;
+        return errorOf(request);
       }
       removeFacesWithoutMaterial(context, faces, "fitting");
-      result = applyPerFace(context, faces, [&](const auto& face) {
-        return fitUpdate(face, repeatU, repeatV);
-      });
+      if (request.value().keepAspect)
+      {
+        fitProfiles = uvFitProfiles(context, faces, false);
+        result = applyPerFace(context, faces, [&](const auto& face) {
+          return aspectFitUpdate(face, request.value(), *fitProfiles);
+        });
+      }
+      else
+      {
+        result = applyPerFace(context, faces, [&](const auto& face) {
+          return fitUpdate(face, request.value().repeatU, request.value().repeatV);
+        });
+      }
+      reportFits = true;
     }
+  }
+  else if (operation == "typical")
+  {
+    removeFacesWithoutMaterial(context, faces, "the typical scale");
+    fitProfiles = uvFitProfiles(context, faces, true);
+    result = applyPerFace(context, faces, [&](const auto& face) {
+      return typicalFitUpdate(face, *fitProfiles);
+    });
+    reportFits = true;
   }
   else if (operation == "autoFit")
   {
@@ -1205,8 +1236,14 @@ ToolResult uvAlign(CallContext& context, const Args& args)
     return result;
   }
 
+  warnUvFindings(context, faces);
   auto json = facesResult(context, faces);
   json["operation"] = operation;
+  if (reportFits)
+  {
+    json["fits"] =
+      uvFitReport(faces, context.ids(), operation == "typical" ? &*fitProfiles : nullptr);
+  }
   return json;
 }
 
@@ -1374,7 +1411,8 @@ void registerFaceTools(ToolRegistry& registry)
         "[r, g, b] with components 0-255 (Daikatana). unset lists attributes to return "
         "to the material's defaults (surfaceFlags, contentFlags, surfaceValue) or to "
         "remove (color). Setting flags or values in a format that does not store them "
-        "(e.g. Standard, Valve) warns with ATTRIBUTE_NOT_SAVED. Example: {\"ids\":"
+        "(e.g. Standard, Valve) warns with ATTRIBUTE_NOT_SAVED. The uv_check findings "
+        "on the changed faces are added as warnings (UV_* codes). Example: {\"ids\":"
         "[\"brush:12/face:3\"],\"scale\":[0.5,0.5],\"surfaceFlags\":{\"add\":"
         "[\"light\"]},\"surfaceValue\":300} -> {\"count\":1,\"faces\":[{\"id\":"
         "\"brush:12/face:3\",...}],\"truncated\":false}")
@@ -1448,7 +1486,13 @@ void registerFaceTools(ToolRegistry& registry)
         "\"fit\" (scale so that the texture repeats repeatU times along U and repeatV "
         "times along V across the face, starting at the face's edge; repeats may be "
         "fractional, an omitted one leaves that axis unchanged, both omitted means "
-        "1 x 1; trimSheet: true instead uses the editor's trim sheet fit); "
+        "1 x 1; keepAspect: true with only repeatU or only repeatV lets the other "
+        "axis follow with undistorted texels (the material's typical aspect ratio "
+        "from notes or corpus, else square); round: true rounds the repeats, "
+        "including the following axis, to whole numbers (at least 1); trimSheet: true "
+        "instead uses the editor's trim sheet fit); \"typical\" (the material's "
+        "typical scale from material_usage, justified to the face's edge like fit; "
+        "TYPICAL_SCALE_DEFAULT if only the game's default is known); "
         "\"autoFit\" (align, justify and fit to the nearest whole number of repeats); "
         "\"reset\" (offset 0, rotation 0, the game's default scale, default UV axes); "
         "\"resetToWorld\" (the same with world-aligned axes); \"flip\" (axis \"u\" or "
@@ -1457,9 +1501,13 @@ void registerFaceTools(ToolRegistry& registry)
         "the choices of justify, align and trim sheet fit like repeated clicks. "
         "Parameters that do not apply are ignored with an IGNORED_ARGUMENT warning. "
         "Center and fit need the texture size: faces with materials that are not "
-        "loaded are skipped (MATERIAL_NOT_LOADED). Example: {\"ids\":[\"brush:12\"],"
-        "\"operation\":\"fit\",\"repeatU\":2,\"repeatV\":3} -> {\"count\":6,\"faces\":"
-        "[...],\"truncated\":false,\"operation\":\"fit\"}")
+        "loaded are skipped (MATERIAL_NOT_LOADED). fit and typical report the resulting "
+        "scale and repeats per face in 'fits'. The result warns with the uv_check "
+        "findings on the changed faces (UV_* codes). Example: {\"ids\":[\"brush:12\"],"
+        "\"operation\":\"fit\",\"repeatU\":2,\"keepAspect\":true,\"round\":true} -> "
+        "{\"count\":6,\"faces\":[...],\"truncated\":false,\"operation\":\"fit\","
+        "\"fits\":[{\"id\":\"brush:12/face:0\",\"material\":\"LAB1_GAD2\","
+        "\"scale\":[0.5,0.5],\"repeats\":[2,1]},...]}")
       .input(object({
         faceTargetsField(),
         field(
@@ -1472,7 +1520,8 @@ void registerFaceTools(ToolRegistry& registry)
              "reset",
              "resetToWorld",
              "flip",
-             "rotate90"}))
+             "rotate90",
+             "typical"}))
           .required()
           .describe("The alignment operation"),
         field("edge", enumOf({"left", "right", "up", "down", "center"}))
@@ -1484,13 +1533,25 @@ void registerFaceTools(ToolRegistry& registry)
           .describe("fit: number of texture repeats along U across the face"),
         field("repeatV", number().min(0.001))
           .describe("fit: number of texture repeats along V across the face"),
+        field("keepAspect", boolean())
+          .describe(
+            "fit: with only repeatU or only repeatV, the other axis keeps the texels "
+            "undistorted. Default: false"),
+        field("round", boolean())
+          .describe("fit: round the repeats to whole numbers (>= 1). Default: false"),
         field("trimSheet", boolean())
           .describe("fit: use the editor's trim sheet fit. Default: false"),
         field("axis", enumOf({"u", "v"})).describe("flip: the axis to flip"),
         field("direction", enumOf({"cw", "ccw"}))
           .describe("rotate90: clockwise (-90) or counterclockwise (+90)"),
       }))
-      .output(facesOutput({field("operation", string()).required()}))
+      .output(facesOutput({
+        field("operation", string()).required(),
+        field("fits", array(any()))
+          .describe(
+            "fit and typical: [{id, material, scale, repeats, typicalScale?: {value, "
+            "source, samples}}] for the first 50 faces"),
+      }))
       .mutation(Mutation::Map)
       .handler(uvAlign));
 

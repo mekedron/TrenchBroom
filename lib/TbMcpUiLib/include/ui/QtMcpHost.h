@@ -103,6 +103,8 @@ public: // mcp::McpHost
   mcp::SnapshotRenderer* snapshotRenderer() override;
   mcp::ConsoleBuffer* consoleBuffer() override;
   void clearConsoleViews() override;
+  /** "mcp-knowledge" in the user data folder. */
+  std::optional<std::filesystem::path> knowledgeDirectory() override;
 
 public: // mcp::DocumentHost
   std::optional<mcp::DocumentInfo> documentToReplace() override;

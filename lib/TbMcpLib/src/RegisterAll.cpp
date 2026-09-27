@@ -28,6 +28,7 @@
 #include "mcp/tools/DocumentTools.h"
 #include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/EntityCreateTools.h"
+#include "mcp/tools/EntityModelTools.h"
 #include "mcp/tools/EntityPropertyTools.h"
 #include "mcp/tools/FaceTools.h"
 #include "mcp/tools/GameTools.h"
@@ -35,6 +36,7 @@
 #include "mcp/tools/GroupTools.h"
 #include "mcp/tools/HistoryTools.h"
 #include "mcp/tools/LayerTools.h"
+#include "mcp/tools/MaterialKnowledgeTools.h"
 #include "mcp/tools/MaterialTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
@@ -43,6 +45,7 @@
 #include "mcp/tools/SpatialTools.h"
 #include "mcp/tools/TagTools.h"
 #include "mcp/tools/TransformTools.h"
+#include "mcp/tools/UvTools.h"
 #include "mcp/tools/ViewTools.h"
 
 namespace tb::mcp
@@ -64,9 +67,12 @@ void registerAll(McpServer& server)
   registerMaterialTools(server.tools());
   registerFaceTools(server.tools());
   registerTagTools(server.tools());
+  registerMaterialKnowledgeTools(server.tools());
+  registerUvTools(server.tools());
   registerEntityClassTools(server.tools());
   registerEntityCreateTools(server.tools());
   registerEntityPropertyTools(server.tools());
+  registerEntityModelTools(server.tools());
   registerLayerTools(server.tools());
   registerGroupTools(server.tools());
   registerClipboardTools(server.tools());

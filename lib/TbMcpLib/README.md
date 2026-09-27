@@ -88,6 +88,16 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   geometry, brush editing and transform tools (brush builder with game defaults, material
   argument, world bounds and validity errors, `intersectsInterior`, `castRay`, brush
   classification, non-integer vertex warnings, `ScopedLockOverride`).
+- `tools/AssetUtils` (public header): the game file system and material images read on the
+  CPU (the editor drops texture pixels after uploading them).
+- `tools/MaterialKnowledge`, `tools/UvCheck` (public headers, tested directly): material
+  profiles merged from knowledge notes, the game's smart tags, a scanned reference corpus,
+  the current map and image analysis, each value with its source; the texturing checks of
+  `uv_check` and of the warnings of the material and face tools. Corpus statistics and
+  notes are stored per game and mod in `McpHost::knowledgeDirectory()`.
+- `tools/EntityModelUtils` (public header, tested directly): entity models loaded from the
+  game files when the editor has not loaded them yet, animations with real bounds, the
+  property that selects the animation, and placement checks against the model bounds.
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type
   descriptions, value validation with X14 warnings, flag lookup by name, `resolveEntities` /
   `withEntities` for tools that act on entities including worldspawn).

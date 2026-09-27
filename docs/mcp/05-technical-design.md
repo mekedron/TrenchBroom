@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-27 · Status: implemented for E1–E10; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-27 · Status: implemented for E1–E11; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint of the MCP server. It describes the current design and
 implementation. When the code and this document disagree, fix the code or update this document in the
@@ -97,6 +97,10 @@ lib/TbMcpLib/
                             (ConsoleTools.h also declares registerConsoleResources)
     tools/CompileUtils.h    compile presets per game family, tool path checks, profile JSON (§10.10)
     tools/CompileLog.h      compile log analysis: tasks, exit codes, errors, warnings, leaks (§10.10)
+    tools/AssetUtils.h      the game file system and material images read on the CPU (§10.8)
+    tools/MaterialKnowledge.h  face sampling, statistics, image analysis, notes, corpus, profiles (§10.8)
+    tools/UvCheck.h         the texturing checks of uv_check and the material/UV tool warnings (§10.8)
+    tools/EntityModelUtils.h   model loading, animations, frame property, placement checks (§10.7)
   src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
   test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/)
   test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture
@@ -340,7 +344,7 @@ class DocumentHost {
   virtual std::vector<std::filesystem::path> recentDocuments() = 0;
 };
 
-class McpHost {  // ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E15)
+class McpHost {  // ui::QtMcpHost, mcp::FakeHost (tests), later mcp::HeadlessHost (E16)
 public:
   Notifier<ui::MapDocument&> documentWillCloseNotifier;    // before a document is destroyed
   Notifier<> documentsDidChangeNotifier;                   // open, close, focus change
@@ -358,6 +362,7 @@ public:
   virtual SnapshotRenderer* snapshotRenderer();             // §10.12, default nullptr → UNSUPPORTED_IN_HOST
   virtual ConsoleBuffer* consoleBuffer();                   // §9.1, default nullptr → UNSUPPORTED_IN_HOST
   virtual void clearConsoleViews();                         // console_clear, default no-op
+  virtual std::optional<std::filesystem::path> knowledgeDirectory(); // §10.8, default nullopt
 };
 
 class CompileJob {  // destroying a running job terminates it without callbacks
@@ -393,6 +398,9 @@ game's `gamePathPreference` directly (Qt-free; open documents react through thei
   close the welcome window. `isCompileRunning` asks the window's compilation dialog
   (`MapWindow::compilationDialog()`, `CompilationDialog::running()`, §15).
 
+`QtMcpHost::knowledgeDirectory()` is `mcp-knowledge` in the user data folder; `FakeHost` uses
+`mcp-knowledge` in its temporary directory (`knowledgeDir`, nullopt simulates a host without one).
+
 `QtMcpHost::compileHost()` returns its `McpCompileHost`, whose camera provider copies the perspective camera
 of the document's map window (`MapWindow::mapView()`, §15) (used by export tasks that add an entity at the camera position).
 
@@ -407,7 +415,7 @@ like a test run, `startError` makes the start fail); `compileHostOverride` subst
 (`TbMcpUiLibTest` uses the real `McpCompileHost`), and `supportsCompile = false` simulates a host without one.
 
 Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost`
-(E13). A host that does not implement a capability maps to `UNSUPPORTED_IN_HOST`.
+(E14). A host that does not implement a capability maps to `UNSUPPORTED_IN_HOST`.
 
 ### 4.4 Server state
 
@@ -446,7 +454,7 @@ dialog compiles the document.
    `brush:1042`. The world is always `world` and the default layer always `layer:default` (canonical, also
    accepted on input). Faces are `brush:1042/face:3`, the index into `BrushNode::brush().faces()`; a face id
    resolves to its brush, and `resolveFace` (`Targets.h`) returns the `BrushFaceHandle`. Other handles:
-   `doc:<n>` (documents), `run:<n>` (compile runs, E7), `issue:<runtimeId>:<issueType>:<k>` (issues, E12).
+   `doc:<n>` (documents), `run:<n>` (compile runs, E7), `issue:<runtimeId>:<issueType>:<k>` (issues, E13).
 3. **`IdRegistry`** (one per `MapDocument`) maps `runtimeId → Node*` for nodes currently in the tree.
    - Built by a full tree walk on attach and on `documentWasLoadedNotifier`; `nodesWereAdded` registers nodes
      and descendants, `nodesWereRemoved` unregisters them, so a pointer is never dereferenced after it could
@@ -517,7 +525,7 @@ call rolls back only itself. `transaction_commit` → `commitTransaction()`, `tr
   transaction stack).
 - Session DELETE, disconnect, **Stop agent**, or closing the document → rollback.
 - The status bar shows "AI transaction open: <name>". Human edits made meanwhile become part of the agent
-  transaction; the manual section (E14.5) documents this.
+  transaction; the manual section (E15.5) documents this.
 
 ### 6.3 Change report (`ChangeCollector`, X5)
 
@@ -627,7 +635,7 @@ the editor's `csgHollow` with the thickness as a parameter; thickness ≤ 0 fail
 - Common argument names: `ids`, `faces`, `document`, `dryRun`, `cursor`, `limit`, `fields`, `detail`.
   Coordinates are `position`/`min`/`max`/`center`/`vector`; angles `angle`/`angles` in degrees; lengths in
   map units. All paths are absolute.
-- Prompt names (E14): `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
+- Prompt names (E15): `blockout_level`, `populate_level`, `lighting_pass`, `texture_pass`, `fix_all_issues`,
   `compile_and_debug`, `explain_map`, `explain_entity`, `cleanup_map`.
 
 ### 7.2 `ToolDef` and the schema builder (`ToolRegistry.h`, `Schema.h`)
@@ -743,7 +751,7 @@ subscriptions (the hooks run on every map change, e.g. during drags).
 scheduled without subscribers. Lines that start with `[AI] ` (the call log sink, §9) do not notify, so a
 client that answers notifications with calls cannot loop.
 
-Planned resources: `documents/{doc}/issues` (E12), `manual/{section}` (E13).
+Planned resources: `documents/{doc}/issues` (E13), `manual/{section}` (E14).
 
 ---
 
@@ -809,7 +817,7 @@ call log lines, and so on.
 | `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut` | E4 |
 | `BrushEditTools.cpp` | `brush_clip`, `face_extrude`, `face_extrude_new`, `vertices_move/remove/snap`, `vertex_add`, `csg_merge/subtract/intersect/hollow` | E4 |
 | `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/delete/array`, `command_repeat`, `command_repeat_clear` | E4 |
-| `ViewTools.cpp` | `grid_get/set`; E13: `camera_*`, `view_*` | E4, E13 |
+| `ViewTools.cpp` | `grid_get/set`; E14: `camera_*`, `view_*` | E4, E14 |
 | `MaterialTools.cpp` | `materials_list`, `material_apply`, `material_set_current`, `material_replace`, `material_preview`, `locks_get/set` | E4, E6 |
 | `FaceTools.cpp` | `face_attributes_get/set/copy`, `uv_align`, `uv_nudge` | E6 |
 | `TagTools.cpp` | `tags_list`, `tag_apply`, `tag_remove` | E6 |
@@ -822,16 +830,20 @@ call log lines, and so on.
 | `LayerTools.cpp` | `layers_list`, `layer_create/rename/remove/reorder`, `layer_set_state`, `objects_move_to_layer`, `visibility_set` | E9 |
 | `GroupTools.cpp` | `group_create/ungroup/rename`, `groups_merge`, `group_add_objects/remove_objects`, `group_open/close`, `linked_group_duplicate/select/separate/extract` | E9 |
 | `ClipboardTools.cpp` | `clipboard_copy/cut/paste`, `map_file_inspect`, `map_import` | E9 |
+| `MaterialKnowledgeTools.cpp` | `material_corpus_scan`, `material_notes_get/set`, `material_usage` | E11 |
+| `UvTools.cpp` | `uv_check`, `material_fit_geometry` | E11 |
+| `EntityModelTools.cpp` | `entity_animation_set`, `entity_placement_check` | E11 |
 
 Planned files: `ValidationTools.cpp` (`issues_list`,
-`issue_*`, `validators_*`, `map_check`, `engine_*`) in E12; `ActionTools.cpp` (`actions_list`,
+`issue_*`, `validators_*`, `map_check`, `engine_*`) in E13; `ActionTools.cpp` (`actions_list`,
 `action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
-`manual_section`) in E13; `Prompts.cpp` in E14.
+`manual_section`) in E14; `Prompts.cpp` in E15.
 
 `CompileTools.h` also declares `registerCompileResources`. Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
 shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
 `entityDefinitionsJson()`, `materialsJson()`, `softBoundsJson()` (GameTools.h); `mapSummary()`
-(SceneTools.h); `selectionDetails()` (SelectionTools.h); `materialsResource()` (MaterialTools.h).
+(SceneTools.h); `selectionDetails()` (SelectionTools.h); `materialsResource()` (MaterialTools.h);
+`materialKnowledge()` and `warnKnowledgeProblems()` (MaterialKnowledgeTools.h).
 
 ### 10.2 Shared helpers (`src/tools/`)
 
@@ -859,6 +871,13 @@ reads the call's logged problems or changes the selection for the call. No helpe
   `warnUnknownClassname`), entity targeting (`resolveEntities` over `mdl::Map` and `IdRegistry`;
   `withEntities`). `validateProperty` and `warnUnknownClassname` take `CallContext` because they warn,
   `withEntities` because it selects through `withTargets`.
+- **`AssetUtils.{h,cpp}`** (header in `include/mcp/tools/`): `createGameFileSystem` (the game path, the
+  enabled mods and the WADs of the world's `wad` property, as the map mounts them; the map's own game file
+  system is private), `loadMaterialImage` and `MaterialImageLoader` (mip 0 as RGBA from the texture's CPU
+  buffers, or read from the game file system with the palette; the loader builds the file system once).
+- **`MaterialKnowledge.{h,cpp}`**, **`UvCheck.{h,cpp}`** and **`EntityModelUtils.{h,cpp}`** (headers in
+  `include/mcp/tools/`, tested directly): material profiles (§10.8), texturing checks (§10.8), entity
+  models and placement checks (§10.7).
 - **`CompileUtils.{h,cpp}`** and **`CompileLog.{h,cpp}`** (headers in `include/mcp/tools/` so that
   `TbMcpLibTest` can test them directly): compile presets, tool path checks, profile JSON and schemas; log
   analysis (§10.10).
@@ -995,6 +1014,34 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   corners, from the height of the bounds center) against visible solid and brush-entity brushes and patches
   (not triggers) and places the bounds on the highest hit; it warns `ENTITY_OVERLAPS_BRUSHES` if the bounds
   intersect brushes (`intersectsInterior`).
+- **Model-aware placement (E11).** `EntityModelUtils` loads entity models synchronously with
+  `mdl::loadEntityModelSync` from `createGameFileSystem` when the editor has not loaded them yet (the editor
+  loads models asynchronously and processes them per frame, so right after `entity_create_point` a model is
+  usually not loaded). The entity's own loaded model is preferred; an `EntityModelLoader` caches loads per call
+  by path, failures included, and uses 1×1 placeholder skins because only geometry is needed. World bounds apply
+  the entity's model transformation (origin, rotation with the model's pitch type, scale expression) to a
+  frame's bounds.
+- **Animations.** Every frame of a model is an animation: Quake MDL/MD2/MD3 frames with their names, and one
+  frame per assimp animation (the animation's first frame), named after the animation — a studio model's
+  sequence such as `sitting2` (§15). The property that selects the frame is found from the class's model
+  definition, not hard-coded: the model expression is evaluated with a recording `el::VariableStore` wrapper,
+  and the first variable read whose value n selects frame n (tried for several n) without changing the model
+  path is the frame property — `sequence` for the Half-Life FGD, `frame` for `"frame": frame`, none for a fixed
+  frame. `entity_model_info` reports `frameProperty`, `currentAnimation`, `animationCount` and `animations`
+  (`{index, name, bounds, worldBounds}`, at most `maxAnimations`, default 100), and `modelLoaded` /
+  `modelBounds` also for models it loaded itself. `entity_animation_set` sets the frame property by animation
+  name (case-insensitive) or index in one undo step and returns the resulting model bounds.
+- **Placement checks.** For a point entity with a loadable model, five vertical rays go down from the top of the
+  current animation's world model box (center and inset corners) against visible solid and brush-entity
+  brushes and patches (not triggers, as in `dropToFloor`). A hit within 1 unit of the model bottom supports it
+  (e.g. the floor under a chair seat); otherwise the highest first hit is the surface: `MODEL_BELOW_FLOOR`
+  (depth and `suggestedMove`), `MODEL_FLOATING` (gap), `MODEL_NO_FLOOR`. Other brushes that intersect the
+  model box shrunk by 1 unit (`intersectsInterior`) give `MODEL_PENETRATES_BRUSHES`. `entity_create_point`
+  and `objects_move` add them as warnings (at most 20, then `MORE_PLACEMENT_FINDINGS`);
+  `entity_placement_check` lists them for ids, the selection or the whole map (`scope: "map"`,
+  `onlyProblems`). `map_check` (E13) is to reuse `checkModelPlacement`. `entity_create_point` takes
+  `dropUsing: "auto" | "model" | "definition"`; `auto` rests the current animation's model bottom on the floor
+  when the model loads and uses the definition bounds otherwise.
 - `entity_move_brushes` to `world` is the editor's Make Structural (smart tags such as detail are turned off).
 - `entity_links_get` without ids lists the whole map. `entity_link` reuses the target's name or generates
   `<classname>_<n>`, unique among all link values. `entity_color_set` converts to the property's color range
@@ -1045,7 +1092,7 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   then scales so the texture repeats `repeatU` × `repeatV` times, justified to the face edge; `trimSheet`
   uses the editor's trim-sheet fit), `autoFit`, `reset` (`resetAll` with the game's default UV attributes),
   `resetToWorld` (`resetAllToParaxial`), `flip` (scale × -1) and `rotate90` (rotation ± 90), the latter four
-  as in `UvEditor`. `policy` is the editor's best/next/prev. Arguments of other operations are
+  as in `UvEditor`, and `typical` (below). `policy` is the editor's best/next/prev. Arguments of other operations are
   `IGNORED_ARGUMENT` warnings; fit with repeats needs a loaded material (`MATERIAL_NOT_LOADED`).
 - `uv_nudge` changes offsets in each face's own texture axes (not camera-relative like `translateUv`),
   accounts for negative scales, and rotates by the grid angle by default.
@@ -1057,13 +1104,81 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   `TagMatcherCallback` that picks `option` or the first choice with a `TAG_OPTION_CHOSEN` warning. Material
   tags cannot be removed (`UNSUPPORTED`, hint: `material_apply`). Results list the targets that carry the tag
   afterwards; created brush entities also appear in the change report.
+- **Material knowledge (E11).** A `MaterialKnowledge` (one per call, `materialKnowledge(CallContext&)`) merges
+  knowledge notes, the game's smart tags, a scanned reference corpus, statistics of the current map, a name
+  fallback and a CPU image analysis into `MaterialProfile`s: kind (`panel`, `tile`, `trim`, `decal`, `sky`,
+  `liquid`, `tool`, `unknown`), texture size, typical scale per axis, scale range (min, 10th and 90th
+  percentile, max), texel density (world units per texel), typical face size, typical repeats, whole-repeat and
+  aligned fractions, and the image analysis. Each value carries its `source` (`notes`, `config`, `corpus`,
+  `map`, `name`, `image`) and sample count. Precedence: notes > corpus > current map > image; for the kind,
+  notes > config (smart tags) > corpus > map > name > image, because the image cannot recognize sky or liquid.
+  Nothing is specific to a game: config kinds come from face tags that match a probe face with the material
+  (names containing sky → sky; liquid, water, lava, slime → liquid; clip, skip, hint, origin, null, nodraw,
+  caulk, trigger, ... or a `transparent` tag → tool); the name fallback only knows sky and liquid prefixes.
+- **Face sampling.** `sampleFace` measures a face as the corpus, the map statistics and the UV checks see it:
+  |scale| and flips per axis, the rotation (`faceRotation`, so Valve faces use their UV axes), the extent
+  along the texture axes in world units and texels, the repeats, where the texture starts relative to the
+  face's min edge, whether a texture edge lies on a face edge (within 1 texel) and whether the repeats are
+  whole. Statistics are capped histograms (16 entries, dropped entries merged into the nearest kept one, exact
+  min and max kept), so a corpus of a million faces stays a few MB. With at least 4 sized samples, whole
+  repeats in ≥ 75% with median repeats ≤ 2 and ≥ 75% aligned is a panel; one axis fitted (≤ 1.05 repeats,
+  aligned) in ≥ 75% while the other is not in ≥ 50% is a trim; whole repeats in < 60% or median repeats > 2
+  is a tile.
+- **Image analysis.** `analyzeImage` compares opposite edges (left/right columns, top/bottom rows) with the
+  mean difference between adjacent columns or rows inside the image: an axis tiles when the edge difference is
+  at most 1.5 × that + 0.03, so noisy tiles still count as seamless. Both axes tile → tile; one axis or an
+  aspect ratio of at least 4:1 → trim; ≥ 25% pixels with alpha < 128 → decal; otherwise panel.
+- **Knowledge store.** `McpHost::knowledgeDirectory()/<game>/<mod or _game>/` holds `corpus.json` and
+  `notes.json` (sanitized folder names; the mod is the document's most specific enabled mod). Mod notes replace
+  the game-level note of the same material; the mod's corpus is consulted before the game's. Parsed files are
+  cached by path, last write time and size; files are written through a temporary file and a rename. An invalid
+  file is ignored with a `KNOWLEDGE_FILE_INVALID` warning. Without a knowledge directory the scan and notes
+  tools fail with `UNSUPPORTED_IN_HOST`; `material_usage` still works.
+- **`material_corpus_scan`** is an asynchronous `Mutation::External` tool: it lists the matching files
+  (`pattern`, `recursive`), reads one file per deferred step with progress (cancel writes nothing), each in its
+  own format (header, else the game's formats, then all), samples every brush face and discards the brushes,
+  and replaces or merges (`mode`) the corpus of the document's game and mod. Texture sizes come from the
+  document's loaded materials, so the game's WADs should be loaded first; unparsable files are listed, not
+  fatal. `material_notes_set` (`scope: game | mod`) merges per-material facts (kind, scale, faceSize, text),
+  clears fields or removes notes; `material_notes_get` pages them. `material_usage` returns profiles for names
+  or globs (an exact name wins over a glob, since Quake liquids start with `*`), by default for the materials
+  of the selection or the 20 most used in the map.
+- **Texturing checks.** `checkUv(faces, map, ProfileProvider, only)` (`UvCheck`) finds, per face:
+  `UV_ASPECT_DISTORTION` (the texel density ratio U/V deviates by more than 10% from the expected ratio: the
+  typical scale's ratio from notes or corpus, else 1:1); `UV_FRACTIONAL_REPEAT` (panels on both axes, trims
+  across their short axis — for a square texture the axis the image says does not tile — repeats not whole
+  within 1 texel, less than one repeat included); `UV_PANEL_NOT_ALIGNED` (no texture edge on a face edge);
+  `UV_UNUSUAL_SCALE` (|scale| outside the 10th–90th percentile range by more than a factor 1.25, with a range
+  from notes, the corpus (≥ 5 samples) or the map (≥ 20 samples)); `UV_TEXEL_DENSITY_MISMATCH` (tiles: the mean
+  density differs by more than 1.5× from a neighbour — faces of the same brush sharing an edge, or coplanar faces
+  of other brushes with overlapping edges, found through the world node tree; reported on the face further from
+  its typical scale); `UV_SEAM` (coplanar touching neighbours with the same tile, trim or unknown material whose
+  UV mapping does not continue across the edge by more than 1 texel). Tool, sky and liquid materials are
+  skipped, size-dependent checks need a loaded material, and a kind from fewer than 20 map samples gives way to
+  the image analysis (the checked faces themselves shape the map statistics). Each finding has the measured
+  values, a concrete fix (tool and arguments) and alternatives. A whole map of 10,000 faces takes about 1 s in
+  a Debug build.
+- **`uv_check`** (read-only, paginated) checks faces, brushes, groups or entities (`ids`), the selection or the
+  map (`scope`), filtered by `codes`, with counts per code. `material_apply`, `material_replace`,
+  `face_attributes_set` and `uv_align` report the findings on the faces they changed as warnings with the
+  finding code (`warnUvFindings`; at most 10, then `UV_CHECK_MORE`). `map_check` (E13) is to reuse `checkUv`.
+- **Fitting to the material.** `uv_align` `fit` takes `keepAspect` (with only `repeatU` or `repeatV`, default
+  `repeatU` 1: the other axis follows the expected ratio) and `round` (whole repeats, at least 1). The
+  operation `typical` applies the material's typical scale (notes, corpus, then the map if other faces use the
+  material, else the game's default with `TYPICAL_SCALE_DEFAULT`), keeps the signs and justifies the texture
+  like `fit`. Both report `fits` (scale, repeats, typical scale with its source). `material_fit_geometry`
+  (read-only) turns it around for panels: for a face and a material it returns the panel size at the typical
+  scale, the face size along the texture axes, the smaller and larger sizes with whole repeats and, per axis,
+  the resize (`delta`) with a `face_extrude` call on the adjacent face at the edge the texture axis points to,
+  then `uv_align typical`. For tiles it warns `MATERIAL_IS_TILE`; for trims only the axis across the strip is
+  relevant.
 
-### 10.9 Actions (E13)
+### 10.9 Actions (E14)
 
 `ActionHost` enumerates `ActionManager::visitMainMenu`, `visitMapViewActions` and `MapDocumentActionCache`
 tag/entity actions. The path is the action's preference path; `enabled`/`checked` are evaluated with an
 `ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
-`QtMcpHost`, checked by the E13.8 coverage test; each entry points to the matching semantic tool.
+`QtMcpHost`, checked by the E14.8 coverage test; each entry points to the matching semantic tool.
 
 ### 10.10 Compiling (E7)
 
@@ -1256,7 +1371,7 @@ up to 3 s, then renders anyway with a `RESOURCES_LOADING` warning. Without a ren
 `UNSUPPORTED_IN_HOST`.
 
 **Renderer** (`ui::McpSnapshotRenderer`, TbMcpUiLib). It depends only on the `gl::GlManager` and the document,
-so the headless mode (E15) can reuse it; only `userViews`/`captureUserView` need the map window.
+so the headless mode (E16) can reuse it; only `userViews`/`captureUserView` need the map window.
 - GL: its own `QOffscreenSurface` and `QOpenGLContext` that shares `QOpenGLContext::globalShareContext()`
   (standalone 2.1 compatibility context without one), a `QOpenGLFramebufferObject` (depth/stencil, 4× MSAA)
   read back with `toImage()`. Per render: make current (errors instead of assertions if GL is missing),
@@ -1293,9 +1408,12 @@ so the headless mode (E15) can reuse it; only `userViews`/`captureUserView` need
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
 | `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
 | `tst_GeometryUtils`, `tst_CsgUtils` | the pure model helpers over `mdl::MapFixture`: `intersectsInterior`, `owningBrushEntity`, `classifyBrush`, `isPointEntity`, `castRay`, `checkBox`, `geometryError`, `addBrushes`, `ScopedLockOverride`; hollowing with a thickness |
-| `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId` |
+| `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode`, `tst_UpstreamLoadAssimpModel` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId`, assimp frames named after their animations (a studio model's sequences; the model path without animations) |
 | `tst_AgentCamera`, `tst_Image`, `tst_SnapshotTools` | camera math, framing, orbit, eye height over a fixture room, camera JSON; image composition and diff; the snapshot tools over `FakeSnapshotRenderer`: option handling mapped into the recorded requests (hidden tags change the scene and the image, isolate, includeHidden, highlight, face tags, 2D cameras), limits, saveTo, keepAs and compare (the undo mode leaves the history unchanged), labels, progress and cancellation, the plan image, user views, unsupported hosts, no undo steps |
 | `tst_ConsoleBuffer`, `tst_ConsoleTools` | bounds, sequence numbers, clear, notifiers; `console_read` filters, cursor, pagination, `dropped`, invalid input; `console_clear` with dry run; the console resource and its coalesced notifications; the per-call `console` report (`document_open` of a map with a missing WAD) |
+| `tst_MaterialKnowledge`, `tst_MaterialKnowledgeTools` | kinds from names and the real Quake config, `sampleFace` on Standard and Valve faces, histograms and statistics (merge, cap, JSON), summaries and kinds from statistics, image tile detection on synthetic images and the fixture textures, notes and corpus files (round trips, cache, invalid files), profile precedence with sources and samples, mod notes over game notes; `material_corpus_scan` (replace, merge, pattern, recursion, dry run, progress, cancel, no knowledge directory), `material_notes_get/set`, `material_usage` (the panel and the tile of the fixture corpus, defaults from the selection and the map) |
+| `tst_UvCheck`, `tst_UvTools`, `tst_UvWarnings` | every finding code with negatives, source gating and skip rules, the finding JSON and fixes; `uv_check` on `uv_check.map` (a stretched tile and a fractional panel), following the suggested fixes, ids vs selection, codes, pagination; `uv_align` `keepAspect`, `round`, `typical` (notes, map, default), dry run; `material_fit_geometry` followed until the face fits; the warnings of `material_apply`, `material_replace`, `face_attributes_set` and `uv_align` and their limit |
+| `tst_EntityModelUtils`, `tst_EntityModelTools` | frame property discovery (`sequence`, `frame`, fixed frames, variables that change the model), animations with names and bounds per frame, world bounds with scale, `entity_model_info`, `entity_animation_set` (names, indices, unknown animations, dry run, ids vs selection, one undo step), placement findings (a sitting model reaching below the floor, standing, floating, a chair brush, no floor), `dropToFloor` with model bounds, `objects_move` warnings, `entity_placement_check` |
 | `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
@@ -1322,7 +1440,10 @@ mdl::Node* node(std::string_view id, ui::MapDocument* = nullptr);
 spatial, selection and resource tests, and by `SceneQuestions`, which answers E3's acceptance questions with
 tool calls only), `mcp/wads/cr8_a_excerpt.wad`, `mcp/wads/materials.wad` (`wall_old_a/b/c`, `wall_new_a/b`, `floor_tile`;
 material and S3 tests), `mcp/maps/rooms.map` (Valve, several groups including Armory; import and S4),
-`mcp/maps/crate_quake2.map` (Quake 2 import), `mcp/maps/no_header.map` (format detection without a header
+`mcp/maps/crate_quake2.map` (Quake 2 import), `mcp/maps/uv_check.map` (knowledge.wad materials with UV problems), `mcp/corpus/` (a Valve and a Standard reference map and a
+broken one for `material_corpus_scan`), `mcp/wads/knowledge.wad` (`k_tile`, `k_panel`, `k_trim`, `{k_decal`),
+`mcp/models.fgd` with `mdl/Game/Quake/id1/progs/person.mdl` (a Quake model with the frames `stand` and `sit`)
+and `mdl/Game/Quake/id1/models/cube.mdl` (a Half-Life studio model with three sequences), `mcp/maps/no_header.map` (format detection without a header
 comment), and game paths in `mdl/Game/`.
 
 ### 11.2 `TbMcpUiLibTest` (Qt, `RunAllTests.cpp` QApplication, offscreen)
@@ -1394,6 +1515,18 @@ comment), and game paths in `mdl/Game/`.
   applies only its last face; `clipboard_cut` cuts objects, not faces. `map_import` does not recreate the
   source layers.
 - The bridge ignores portable mode when locating the discovery file.
+- UV neighbours must share an edge segment (overlapping coplanar faces are not neighbours) and seams are only
+  checked between coplanar faces; density mismatches and seams are not reported for panels, decals and trims;
+  the `material_fit_geometry` resize is exact for axis-aligned brushes only.
+- Material statistics need texture sizes at scan time (or the current size) for repeats and alignment; a framed
+  panel whose opposite edges have the same color looks seamless to the image analysis (notes and statistics
+  take precedence); `material_corpus_scan` in `merge` mode counts a rescanned file twice; patches are not
+  sampled; sloped faces use their projected extent.
+- Placement checks compare axis-aligned boxes of a whole frame, not triangles, so a seated model always
+  touches its chair (`MODEL_PENETRATES_BRUSHES`) and outstretched limbs enlarge the box; assimp and studio
+  models use the first frame of each animation; the frame property is found only for direct mappings (n selects
+  frame n); rays that start inside a brush pass through it. Loading a model the editor has not loaded yet
+  happens synchronously on the editor thread.
 - Snapshots do not draw entity decals, group links, or group bounds and classnames of objects inside groups.
   `view_snapshots_around` cannot save files, and `view_snapshot_compare` returns PNG only. The 2D grid is drawn
   at the world bounds, so an orthographic camera's far plane must reach them. Capturing a user view repaints
@@ -1435,17 +1568,23 @@ commit buildable and tested.
   `CallRunner`; `ConsoleBuffer`, `McpConsoleHook` and the console tools and resource (§9.1); agent cameras,
   `SnapshotTools` and the `map_plan_view` image form over the `SnapshotRenderer` seam, `McpSnapshotRenderer`
   (§10.12).
-- **E11 — level-design knowledge.** Material profiles merged from knowledge notes, a cached reference-corpus
-  scan of `.map` files, the current map and image analysis (edge matching for seamless tiles); `uv_check` and
-  UV warnings in material tools; aspect-preserving fit; `material_fit_geometry`; model bounds per animation and
-  placement checks against model bounds.
-- **E12** ValidationTools and engine launch; issues resource.
-- **E13** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
+- **E11 — level-design knowledge.** `McpHost::knowledgeDirectory`; `AssetUtils`; `MaterialKnowledge` (profiles
+  merged from knowledge notes, smart tags, a cached reference-corpus scan of `.map` files, the current map and
+  image analysis with edge matching for seamless tiles) and `MaterialKnowledgeTools`; `UvCheck` and `UvTools`
+  (`uv_check`, UV warnings in the material and face tools, aspect-preserving and typical fits in `uv_align`,
+  `material_fit_geometry`); `EntityModelUtils` and `EntityModelTools` (animations with real bounds, the frame
+  property, placement checks in `entity_create_point`, `objects_move` and `entity_placement_check`); assimp
+  frames named after their animations (§15).
+- **E12 — spatial understanding.** `view_pick` from a kept snapshot camera, snapshot annotations, space
+  detection by flood fill of the empty volume, surroundings, free spots, walkability plan, z-fighting and leak
+  prediction validators, per-map manifest file.
+- **E13** ValidationTools and engine launch; issues resource.
+- **E14** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
   (`PreferenceHost`), KnowledgeTools, action coverage check.
-- **E14 — agent experience.** Final agent guide text, description review, prompts (`Prompts.cpp`), scenario
+- **E15 — agent experience.** Final agent guide text, description review, prompts (`Prompts.cpp`), scenario
   tests, manual section, lazy bridge start (the bridge answers `initialize` and the list methods from the
   registries and connects to the editor only when needed).
-- **E15 — headless (v2, deferred).** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument`s owned by the host)
+- **E16 — headless (v2, deferred).** `HeadlessHost` in TbMcpLib (no Qt; `MapDocument`s owned by the host)
   and a `--headless-mcp` stdio mode in `TrenchBroomMcp` that links the core directly. Tools need no changes.
 
 ---
@@ -1486,10 +1625,11 @@ These are all changes to original TrenchBroom files (compared with the merge bas
 | `lib/TbMdlLib/include/mdl/CommandProcessor.h`, `src/CommandProcessor.cpp` | `undoCommandNames()`, `redoCommandNames()`, `transactionDepth()` | the undo/redo stacks and the transaction stack are private; `history_get` lists them, and the busy gate and agent transactions need the depth |
 | `lib/TbMdlLib/src/CommandProcessor.cpp` | the redo stack is cleared only when a command or transaction reaches the top-level undo stack | bug fix: a cancelled transaction (dry run, failed call, the human's cancelled gesture) cleared the redo history |
 | `lib/TbMdlLib/src/Map.cpp` | `canRedoCommand()` checks `redoCommandName()` | bug fix: it checked the undo stack |
+| `lib/TbMdlLib/src/LoadAssimpModel.cpp` | each frame is named after its assimp animation (a studio model's sequence); models without animations keep the model path as the frame name | every frame of an assimp model was named with the model path, so a Half-Life sequence such as `sitting2` could not be found by name; `entity_model_info` lists animations by name and `entity_animation_set` sets them by name. Parsing the sequence names from the model files in the MCP code would duplicate the loaders for each assimp format |
 | `lib/TbMdlLib/include/mdl/EditorContext.h`, `src/EditorContext.cpp` | `ignoreHiddenState()` / `setIgnoreHiddenState(bool)`: when set, the group, entity, brush and patch `visible()` checks skip `Node::visible()` | the snapshot renderer draws the nodes the MCP core chose with its own `EditorContext`; the entity, group and patch renderers ask their `EditorContext` about the editor's hidden state and `visible()` is not virtual. `ObjectRenderer::setShowHiddenObjects` is no substitute: it replaces the brush filter and forces entity models on |
 | `lib/TbUiLib/include/ui/Console.h`, `src/Console.cpp` | static `messageLoggedNotifier(Console&, LogLevel, message)` fired in `doLog` (serialized, not re-entrant); `clear()` | `console_read` needs every console message with its level as it is logged; `doLog` is private, consoles receive messages directly from `LoggingHub` and `MapWindow::logger()`, and a window's load messages are flushed into its console in the `MapWindow` constructor, before outside code could attach to it. `console_clear` must clear the text view, which is private |
 
 The tests of these changes are in `TbMcpLibTest` (`tst_UpstreamCommandProcessor.cpp`, `tst_UpstreamMap.cpp`,
-`tst_UpstreamNode.cpp`) and `TbMcpUiLibTest` (`tst_UpstreamHooks.cpp`, `tst_McpUiIntegration.cpp`); no
+`tst_UpstreamNode.cpp`, `tst_UpstreamLoadAssimpModel.cpp`) and `TbMcpUiLibTest` (`tst_UpstreamHooks.cpp`, `tst_McpUiIntegration.cpp`); no
 upstream test file is changed. The editor classes `AppController`, `LoggingHub`, `MapDocument`, `MapRenderer` and the
 preferences are unchanged; the MCP code integrates with them from the outside (§1.3, §4.3, §6.1).

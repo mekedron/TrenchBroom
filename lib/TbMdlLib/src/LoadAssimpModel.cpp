@@ -978,7 +978,12 @@ Result<EntityModelData> loadAssimpModel(
     }
 
     return std::views::iota(0u, numSequences) | std::views::transform([&](const auto i) {
-             return loadSceneFrame(*scene, i, data, modelPath);
+             // name each frame after its animation (e.g. a studio model's sequence)
+             const auto animationName = i < scene->mNumAnimations
+                                          ? scene->mAnimations[i]->mName.C_Str()
+                                          : std::string{};
+             return loadSceneFrame(
+               *scene, i, data, animationName.empty() ? modelPath : animationName);
            })
            | kdl::fold | kdl::transform([&]() { return std::move(data); });
   }

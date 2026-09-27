@@ -166,9 +166,11 @@ All transforms respect texture lock unless told otherwise, and accept a dry run.
 | `entity_links_get` | Shows link relations (target → targetname) for entities, including broken links | Entities or whole map | Links | v1 |
 | `entity_link` | Links a source entity to a target, generating a unique name when needed | Source, target, link key | Change report | v1 |
 | `entity_model_info` | Which model, skin and frame an entity shows; its animations with the real model bounds of each | Entity | Model info | v1 |
+| `entity_color_set` | Sets a color property in the right range (float or byte) for the class | Entity, key, color | Change report | v1 |
+| `entity_animation_set` | Sets an entity's animation by name or index through the property its model definition uses (e.g. `sequence`) | Entities, animation | Change report, model bounds | v1 |
+| `entity_placement_check` | Checks that models stand on the surface below and do not penetrate brushes, using the real bounds of the current animation | Entities or whole map | Findings | v1 |
 
 Placement uses the real model bounds of the entity's current animation: creating or moving an entity warns when the model penetrates brushes or floats, and dropping to the floor can use the model bounds.
-| `entity_color_set` | Sets a color property in the right range (float or byte) for the class | Entity, key, color | Change report | v1 |
 
 ## 11. Materials, UV alignment and face attributes
 
@@ -301,6 +303,21 @@ The agent also reads the editor console, where the editor reports errors (missin
 Every call result lists console warnings and errors logged while the call ran.
 
 Snapshots and console reads are read-only: they do not enter the undo history. A 1024×768 snapshot of a 5,000-brush map renders in under 500 ms, and the editor stays responsive while it renders.
+
+### 17.2. Spatial understanding
+
+The agent connects what it sees to objects and understands the map as spaces.
+
+| Tool | What it does | Key inputs | Returns | Priority |
+|---|---|---|---|---|
+| `view_pick` | Object, face, hit point, normal and distance under pixels of a snapshot | Snapshot, pixels | Hits | v1 |
+| `spaces_list` | Enclosed spaces with inner bounds, floor and ceiling heights, area, openings and neighbours | Region | Spaces | v1 |
+| `surroundings` | Text description of what is around a point: space, distances to walls, nearby objects, floor and ceiling | Point | Description | v1 |
+| `free_spots` | Free positions for a box in a space, on the floor or against a wall, with wall normal and face id | Size, space or region, placement | Positions | v1 |
+| `walkable_plan` | Where a player can walk and reach, as text and image | Region | Plan | v1 |
+| `map_manifest_get` / `map_manifest_set` | Per-map notes: spaces and their purpose, key points, named cameras | Manifest entries | Manifest | v1 |
+
+Snapshots can carry annotations: object labels, a coordinate grid, a compass and a player silhouette for scale. Z-fighting and entities outside the sealed hull are validators, reported right after the call that caused them.
 
 ## 18. Generic editor actions
 

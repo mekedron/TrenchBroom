@@ -278,6 +278,14 @@ public:
    * implementation does nothing.
    */
   virtual void clearConsoleViews();
+
+  /**
+   * The folder in which the server keeps level-design knowledge (material corpus
+   * statistics and material notes, one subfolder per game and mod), or nullopt if the
+   * host has none (the tools that read or write it then fail with UNSUPPORTED_IN_HOST).
+   * The folder may not exist yet. The default implementation returns nullopt.
+   */
+  virtual std::optional<std::filesystem::path> knowledgeDirectory();
 };
 
 } // namespace tb::mcp

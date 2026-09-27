@@ -4,7 +4,7 @@ Temporary working file. Delete it once all epics are done.
 
 Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) · [04-scenarios.md](04-scenarios.md)
 
-**Order:** epics run in numeric order. E15 is deferred.
+**Order:** epics run in numeric order. E16 is deferred.
 
 **How we work:** one epic at a time, all of its subtasks in one go. Each epic ends buildable, with tests passing (Catch2, `<Name>LibTest` targets, run through `ctest --test-dir <build>/lib/<Name>/test -j`) and formatted with clang-format. Mark `[x]` when a subtask is done.
 
@@ -22,11 +22,12 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E8 | Minimal upstream footprint | 01 §7.7 | v1 | Done |
 | E9 | Organization, clipboard and import | §12, §13 | v1 | Done |
 | E10 | Agent vision and editor console | §17 | v1 | Done |
-| E11 | Level-design knowledge: texturing and model-aware placement | §10, §11 | v1 | Not started |
-| E12 | Validation and engine launch | §15, §16 | MVP + v1 | Not started |
-| E13 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
-| E14 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Not started |
-| E15 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
+| E11 | Level-design knowledge: texturing and model-aware placement | §10, §11 | v1 | Done |
+| E12 | Spatial understanding: picking, rooms, free spots, placement checks | §5, §15, §17 | v1 | Not started |
+| E13 | Validation and engine launch | §15, §16 | MVP + v1 | Not started |
+| E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
+| E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Not started |
+| E16 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
 
 ---
 
@@ -113,7 +114,7 @@ Goal: the agent can understand a map without a screen and select anything.
 - [x] E3.5 `objects_at_point`, `ray_pick`.
 - [x] E3.6 `space_check` (overlaps, floor and ceiling heights for a box).
 - [x] E3.7 `map_text_get`, `map_stats`.
-- [x] E3.8 `map_plan_view` (text form: top-down grid of a region at a height; image form delivered in E13).
+- [x] E3.8 `map_plan_view` (text form: top-down grid of a region at a height; image form delivered in E14).
 - [x] E3.9 `selection_get`, `selection_set` (replace / add / remove; objects and faces), `selection_clear`.
 - [x] E3.10 `select_all`, `select_invert`, `select_by` (classname, material, layer, linked group).
 - [x] E3.11 `select_spatial` (touching, inside, tall), `select_siblings`, `select_by_line`, `select_faces_of`.
@@ -299,7 +300,7 @@ The agent can check its own work visually. It renders images of the map from cam
 - [x] E10.15 Snapshots are read-only calls: they never enter the undo history and skip the busy wait for user interaction.
 - [x] E10.16 Performance: a 1024×768 snapshot of a map with up to 5,000 brushes renders in under 500 ms; long multi-image calls report progress and can be cancelled.
 - [x] E10.17 Tests: unit tests for camera math, framing and option handling with a fake renderer; a GPU smoke test that renders the sample map to an image and checks it is not empty and that toggling "triggers" changes the image (skipped when no GL context is available).
-- [x] E10.18 Headless readiness: the offscreen renderer does not depend on a map window, so the E15 headless mode can reuse it.
+- [x] E10.18 Headless readiness: the offscreen renderer does not depend on a map window, so the E16 headless mode can reuse it.
 
 **Done when:** an agent builds a room, takes a snapshot from inside at eye height and from above, and compares the images with and without triggers — while the user keeps editing in the same editor with no visible effect on their views. The agent reads a material loading error from the console without the user copying it.
 
@@ -311,96 +312,133 @@ Goal: the agent textures surfaces the way an experienced designer of that game w
 
 **Material profiles**
 
-- [ ] E11.1 Material profile: for each material, its kind (panel, seamless tile, trim, decal-like, sky, liquid, tool), typical scale per axis, texel density (world units per texel), typical face size, typical repeat counts, and how confident each value is (number of samples, source).
-- [ ] E11.2 Image analysis, independent of any game: texture size and aspect ratio, and whether opposite edges match (seamless tile) or not (panel). Used when no other data exists.
-- [ ] E11.3 Reference corpus: `material_corpus_scan` reads a folder of `.map` files of the game or mod (e.g. the original game's map sources) and collects per-material statistics: scales, repeat counts, face sizes, alignment to face edges. Results are cached per game and mod in the user data folder and reused by all later calls.
-- [ ] E11.4 Knowledge notes: `material_notes_set` / `material_notes_get` store explicit facts per game or mod ("LAB1_GAD2 is a panel, scale 0.5"), written by the agent or the user; notes override statistics.
-- [ ] E11.5 `material_usage`: the profile of one or more materials, merged from notes, corpus statistics, the current map and image analysis, with the source of each value.
+- [x] E11.1 Material profile: for each material, its kind (panel, seamless tile, trim, decal-like, sky, liquid, tool), typical scale per axis, texel density (world units per texel), typical face size, typical repeat counts, and how confident each value is (number of samples, source).
+- [x] E11.2 Image analysis, independent of any game: texture size and aspect ratio, and whether opposite edges match (seamless tile) or not (panel). Used when no other data exists.
+- [x] E11.3 Reference corpus: `material_corpus_scan` reads a folder of `.map` files of the game or mod (e.g. the original game's map sources) and collects per-material statistics: scales, repeat counts, face sizes, alignment to face edges. Results are cached per game and mod in the user data folder and reused by all later calls.
+- [x] E11.4 Knowledge notes: `material_notes_set` / `material_notes_get` store explicit facts per game or mod ("LAB1_GAD2 is a panel, scale 0.5"), written by the agent or the user; notes override statistics.
+- [x] E11.5 `material_usage`: the profile of one or more materials, merged from notes, corpus statistics, the current map and image analysis, with the source of each value.
 
 **UV quality**
 
-- [ ] E11.6 `uv_check`: finds texturing problems on given faces or the whole map: aspect distortion above ~10%, fractional repeats on panel materials, panels not aligned to their face, scale far outside the material's typical range, texel density very different from neighbouring faces, and visible seams where coplanar neighbours do not continue the texture. Each finding names the face and a suggested fix.
-- [ ] E11.7 The same checks run as warnings in the results of material and UV tools (`material_apply`, `material_replace`, `face_attributes_set`, `uv_align`) and in `map_check`.
-- [ ] E11.8 `uv_align` fit with preserved aspect ratio: the agent sets the repeat count on one axis, the other axis follows the texture's aspect ratio; optional rounding to whole repeats; a "typical" mode that applies the material's typical scale and aligns it to the face.
-- [ ] E11.9 `material_fit_geometry`: for a panel material, the face size at which it fits the face exactly at its typical scale, and the resize needed for the given face — adjusting geometry to the texture instead of stretching the texture.
+- [x] E11.6 `uv_check`: finds texturing problems on given faces or the whole map: aspect distortion above ~10%, fractional repeats on panel materials, panels not aligned to their face, scale far outside the material's typical range, texel density very different from neighbouring faces, and visible seams where coplanar neighbours do not continue the texture. Each finding names the face and a suggested fix.
+- [x] E11.7 The same checks run as warnings in the results of material and UV tools (`material_apply`, `material_replace`, `face_attributes_set`, `uv_align`) and in `map_check`.
+- [x] E11.8 `uv_align` fit with preserved aspect ratio: the agent sets the repeat count on one axis, the other axis follows the texture's aspect ratio; optional rounding to whole repeats; a "typical" mode that applies the material's typical scale and aligns it to the face.
+- [x] E11.9 `material_fit_geometry`: for a panel material, the face size at which it fits the face exactly at its typical scale, and the resize needed for the given face — adjusting geometry to the texture instead of stretching the texture.
 
 **Model-aware placement**
 
-- [ ] E11.10 `entity_model_info` lists a model's animations (sequences / frames with names where the format has them) and returns the real model bounds for each, not only the definition's box.
-- [ ] E11.11 Setting an entity's animation (the property the game uses, e.g. `sequence` or the model spec's frame) through the entity tools, with the resulting model bounds in the result.
-- [ ] E11.12 Placement checks use model bounds: `entity_create_point`, `objects_move` and `map_check` warn when a model penetrates brushes (floor, furniture) or floats above the surface below; `dropToFloor` can use the model bounds of the current animation.
+- [x] E11.10 `entity_model_info` lists a model's animations (sequences / frames with names where the format has them) and returns the real model bounds for each, not only the definition's box.
+- [x] E11.11 Setting an entity's animation (the property the game uses, e.g. `sequence` or the model spec's frame) through the entity tools, with the resulting model bounds in the result.
+- [x] E11.12 Placement checks use model bounds: `entity_create_point`, `objects_move` and `map_check` warn when a model penetrates brushes (floor, furniture) or floats above the surface below; `dropToFloor` can use the model bounds of the current animation.
 
 **Tests and guide**
 
-- [ ] E11.13 Tests: corpus scan and profile merging on fixture maps; image tile detection on fixture textures; every `uv_check` finding; aspect-preserving fit; model bounds per animation and the placement warnings (e.g. a sitting model whose feet go below the floor).
-- [ ] E11.14 Agent guide: how to texture with profiles (check the profile, prefer the typical scale, adjust geometry for panels, run `uv_check`, look at a snapshot).
+- [x] E11.13 Tests: corpus scan and profile merging on fixture maps; image tile detection on fixture textures; every `uv_check` finding; aspect-preserving fit; model bounds per animation and the placement warnings (e.g. a sitting model whose feet go below the floor).
+- [x] E11.14 Agent guide: how to texture with profiles (check the profile, prefer the typical scale, adjust geometry for panels, run `uv_check`, look at a snapshot).
+
+`map_check` belongs to E13 and does not exist yet: the placement checks are available as `entity_placement_check` and the texturing checks as `uv_check`; `map_check` reuses `checkModelPlacement` and `checkUv`.
 
 **Done when:** after scanning a folder of reference maps, `material_usage` reports a panel and a tiling material correctly; `uv_check` finds a stretched texture and a fractional panel repeat on a fixture map; aspect-preserving fit works; placing a sitting character whose model reaches below the floor produces a warning.
 
 ---
 
-## E12. Validation and engine launch
+## E12. Spatial understanding: picking, rooms, free spots, placement checks
+
+Goal: the agent moves from "I see a problem in the picture" to "I know the object, the face and the coordinates" in one step, understands the map as rooms rather than brushes, finds where things fit, and gets placement problems reported automatically. An agent that built a whole map reported that most of its time went into this translation, not into building.
+
+**Picture ↔ objects**
+
+- [ ] E12.1 `view_pick`: for a pixel (or a list of pixels) of a snapshot, the object, face, hit point, surface normal and distance, using the snapshot's camera. Snapshots keep their camera so they can be picked later.
+- [ ] E12.2 Snapshot annotations on request: labels with id, classname or group name and size; a coordinate grid on floors and walls with a chosen step; a compass; a player silhouette of the game's size as a scale reference next to a given point.
+
+**Rooms instead of brushes**
+
+- [ ] E12.3 `spaces_list`: finds enclosed spaces by flood fill of the empty volume (at player-size resolution) and returns for each space its inner bounds, floor and ceiling heights, floor area, openings (doorways, windows) with their size and position, neighbouring spaces, and the layer or group names found in it. Spaces get stable ids until the geometry around them changes.
+- [ ] E12.4 `surroundings`: describes in text what is around a point: the space it is in, distances to walls in each direction, nearby objects with direction and distance, floor and ceiling height.
+- [ ] E12.5 `free_spots`: finds free positions for a box of a given size in a space, on the floor, or against a wall; returns positions, the wall normal, the id of the wall face, and the free clearance; options for distance from walls and other objects and for alignment to the grid.
+- [ ] E12.6 `walkable_plan`: top-down plan (text and image) of where a player can walk and reach, considering step height, jump height, clearance under ceilings and doorways, and doors.
+
+**Placement checks**
+
+- [ ] E12.7 Z-fighting validator: visible coplanar overlapping faces of different brushes facing the same way (not hidden by a touching face), reported in `issuesIntroduced` of every modifying call and in `issues_list`.
+- [ ] E12.8 Leak prediction: point entities outside the sealed volume and openings to the void, found by flood fill before compiling, reported as issues with the entity and the nearest gap.
+- [ ] E12.9 Every modifying call reports placement problems it introduced: models intersecting brushes or floating (with model bounds), entities outside the hull, z-fighting, texture distortion.
+
+**Map manifest**
+
+- [ ] E12.10 Map manifest: a per-map file next to the map (`<map>.mcp.json`) with spaces and their purpose, key points, notes and named agent cameras; tools to read and update it; agent cameras can be saved into it and restored in later sessions.
+
+**Tests and guide**
+
+- [ ] E12.11 Tests on fixture maps for picking, annotations (fake renderer), spaces, openings, surroundings, free spots, walkability, z-fighting, leak prediction and the manifest; GPU smoke test for annotations when GL is available.
+- [ ] E12.12 Agent guide: navigating a map by spaces and picks, placing with free spots, keeping a manifest.
+
+**Done when:** on a fixture map with two rooms and a doorway, an agent picks a chair in a snapshot and gets its id and face, lists both spaces with their doorway, finds a free wall spot for a poster with the wall face id, and gets z-fighting and an entity outside the hull reported right after the call that caused them.
+
+---
+
+## E13. Validation and engine launch
 
 Goal: the agent can find and fix problems in a map and start the game with it.
 
-- [ ] E12.1 `issues_list` (types, include hidden, objects, available fixes).
-- [ ] E12.2 `issue_fix` (single and bulk), `issue_hide`, `issue_show`.
-- [ ] E12.3 `validators_list`, `validators_set`.
-- [ ] E12.4 `map_check`: agent-oriented checks: entities in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms.
-- [ ] E12.5 `engine_profiles_list`, `engine_profile_save`, `engine_launch`.
-- [ ] E12.6 Resource: issues (subscribable).
+- [ ] E13.1 `issues_list` (types, include hidden, objects, available fixes).
+- [ ] E13.2 `issue_fix` (single and bulk), `issue_hide`, `issue_show`.
+- [ ] E13.3 `validators_list`, `validators_set`.
+- [ ] E13.4 `map_check`: agent-oriented checks: entities in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms.
+- [ ] E13.5 `engine_profiles_list`, `engine_profile_save`, `engine_launch`.
+- [ ] E13.6 Resource: issues (subscribable).
 
 **Done when:** scenario S2 passes; tests cover every quick fix and the agent-oriented checks.
 
 ---
 
-## E13. Views, camera, generic actions, preferences, knowledge
+## E14. Views, camera, generic actions, preferences, knowledge
 
 The camera tools here move the **user's** editor camera. Agent snapshots with their own cameras are in E10.
 
 Goal: the agent can see what it built, reach every remaining editor action, and look things up.
 
-- [ ] E13.1 `camera_get`, `camera_set`, `camera_focus`, `camera_step_pointfile`.
-- [ ] E13.2 `view_options_get`, `view_options_set` (render mode, shading, fog, edges, entity display, link mode, per-tag and per-class visibility).
-- [ ] E13.3 `view_layout_set`.
-- [ ] E13.4 `actions_list` — enumerate the action registry (menu, view, per-tag and per-entity actions) with label, path, shortcut, enabled / checked, opens-dialog flag.
-- [ ] E13.5 `action_invoke` — run any action by path; for dialog actions point to the matching semantic tool or open the dialog.
-- [ ] E13.6 `preferences_get`, `preferences_set` (all preferences).
-- [ ] E13.7 `manual_search`, `manual_section` over the bundled user manual; resource: user manual.
-- [ ] E13.8 Coverage check: script or test that lists every action in the registry and verifies it is reachable through a semantic tool or `action_invoke` (spec G1, coverage matrix).
+- [ ] E14.1 `camera_get`, `camera_set`, `camera_focus`, `camera_step_pointfile`.
+- [ ] E14.2 `view_options_get`, `view_options_set` (render mode, shading, fog, edges, entity display, link mode, per-tag and per-class visibility).
+- [ ] E14.3 `view_layout_set`.
+- [ ] E14.4 `actions_list` — enumerate the action registry (menu, view, per-tag and per-entity actions) with label, path, shortcut, enabled / checked, opens-dialog flag.
+- [ ] E14.5 `action_invoke` — run any action by path; for dialog actions point to the matching semantic tool or open the dialog.
+- [ ] E14.6 `preferences_get`, `preferences_set` (all preferences).
+- [ ] E14.7 `manual_search`, `manual_section` over the bundled user manual; resource: user manual.
+- [ ] E14.8 Coverage check: script or test that lists every action in the registry and verifies it is reachable through a semantic tool or `action_invoke` (spec G1, coverage matrix).
 
 **Done when:** the coverage check reports ≥ 95%, and the user's camera, view options and layout can be driven by an agent.
 
 ---
 
-## E14. Agent experience: prompts, guide, end-to-end scenarios
+## E15. Agent experience: prompts, guide, end-to-end scenarios
 
 Goal: agents use the server well without extra hints.
 
-- [ ] E14.1 Agent guide resource: coordinate conventions, grid, typical dimensions per game (player size, door, step height, jump height), workflow tips, common pitfalls.
-- [ ] E14.2 Review every tool description and schema for clarity; add examples.
-- [ ] E14.3 Prompts: blockout a level, populate with enemies and items, lighting pass, texture pass, fix all issues, compile and debug, explain this map, explain an entity, convert / clean up a map.
-- [ ] E14.4 Run scenarios S1–S7 and S9 from 04 with a real agent; record results and fix gaps.
-- [ ] E14.5 User documentation: how to enable the server and connect Claude Code / Claude Desktop / IDEs; add a section to the TrenchBroom manual.
-- [ ] E14.6 Lazy bridge start: the stdio bridge answers `initialize`, `tools/list`, `resources/list` and `prompts/list` itself (from the TbMcpLib registries) and launches or connects to the editor only on the first call that needs it, so starting an MCP client never opens TrenchBroom by itself.
+- [ ] E15.1 Agent guide resource: coordinate conventions, grid, typical dimensions per game (player size, door, step height, jump height), workflow tips, common pitfalls.
+- [ ] E15.2 Review every tool description and schema for clarity; add examples.
+- [ ] E15.3 Prompts: blockout a level, populate with enemies and items, lighting pass, texture pass, fix all issues, compile and debug, explain this map, explain an entity, convert / clean up a map.
+- [ ] E15.4 Run scenarios S1–S7 and S9 from 04 with a real agent; record results and fix gaps.
+- [ ] E15.5 User documentation: how to enable the server and connect Claude Code / Claude Desktop / IDEs; add a section to the TrenchBroom manual.
+- [ ] E15.6 Lazy bridge start: the stdio bridge answers `initialize`, `tools/list`, `resources/list` and `prompts/list` itself (from the TbMcpLib registries) and launches or connects to the editor only on the first call that needs it, so starting an MCP client never opens TrenchBroom by itself.
 
 **Done when:** all MVP and v1 scenarios pass with a real agent.
 
 ---
 
-## E15. Headless mode, batch and advanced features (v2)
+## E16. Headless mode, batch and advanced features (v2)
 
 Goal: automation without the GUI and the remaining advanced editing features.
 
-- [ ] E15.1 Headless server mode: command-line flag or separate executable that loads games and maps without a window, sharing the tool implementations.
-- [ ] E15.2 Batch tools: run validation / export / compile over a folder; aggregated report (scenario S8).
-- [ ] E15.3 `sweep`.
-- [ ] E15.4 `patch_convert`, `patch_edit` (Quake 3).
-- [ ] E15.5 `brush_create_from_planes`.
-- [ ] E15.6 `prefab_save`, `prefab_list`, `prefab_insert`.
-- [ ] E15.7 `linked_group_protect_property`.
-- [ ] E15.8 `autosave_restore`.
-- [ ] E15.9 `leak_locate` (start entity and likely gap from the point file).
+- [ ] E16.1 Headless server mode: command-line flag or separate executable that loads games and maps without a window, sharing the tool implementations.
+- [ ] E16.2 Batch tools: run validation / export / compile over a folder; aggregated report (scenario S8).
+- [ ] E16.3 `sweep`.
+- [ ] E16.4 `patch_convert`, `patch_edit` (Quake 3).
+- [ ] E16.5 `brush_create_from_planes`.
+- [ ] E16.6 `prefab_save`, `prefab_list`, `prefab_insert`.
+- [ ] E16.7 `linked_group_protect_property`.
+- [ ] E16.8 `autosave_restore`.
+- [ ] E16.9 `leak_locate` (start entity and likely gap from the point file).
 
 **Done when:** scenario S8 passes headless; all v2 tools have tests.
 
