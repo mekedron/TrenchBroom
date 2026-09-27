@@ -74,7 +74,11 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   compile profiles as `CompileJob`s and the `EngineHost` sub-interface that launches game
   engines). The editor implements it in `TbMcpUiLib` (`QtMcpHost`, `McpCompileHost`,
   `McpEngineHost`); tests use `FakeHost`, `FakeCompileHost` and `FakeEngineHost` from
-  `TbMcpTestUtilsLib`.
+  `TbMcpTestUtilsLib`. E14 adds the `ViewHost` (the user's views, their cameras and the maximized
+  view), `ActionHost` (the editor's action registry) and `PreferenceHost` (action shortcuts and the MCP
+  preferences) sub-interfaces and `manualPath()` (editor: `McpViewHost`, `McpActionHost`,
+  `McpPreferenceHost`; tests: `FakeViewHost`, `FakeActionHost` or `FakeHost::actionHostOverride` for the
+  real one, `FakePreferenceHost`, `FakeHost::manualFile`).
 - `Snapshot` (`SnapshotRenderer`, `SnapshotRequest`), `AgentCamera`, `Image`: agent vision. The
   core resolves agent cameras and visibility options into a request; the host's renderer
   (`McpSnapshotRenderer` in `TbMcpUiLib`, `FakeSnapshotRenderer` in tests) draws it offscreen
@@ -116,6 +120,17 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `tools/MapCheckTools`: `map_check`, the agent-oriented checks (entities in walls or floating, player start, entity
   links, missing materials, entities outside rooms) with a suggested fix per finding, built on `PlacementChecks`,
   `EntityModelUtils` and `SpaceAnalysis`.
+- `tools/ViewTools`: `grid_*`, the user camera tools and `view_layout_set` over `ViewHost`; `view_options_*`
+  set the view preferences and the document's `EditorContext` directly.
+- `tools/ActionCatalog` (public header, tested directly): the MCP classification of every editor action (invoke /
+  dialog / refuse, dialog kind, matching semantic tools) behind `actions_list` and `action_invoke`; the coverage test
+  in `TbMcpUiLibTest` fails when upstream adds or renames an action. `ToolDef::keepsActiveTool()` makes a Map tool
+  (`action_invoke`) skip `prepareForAgentEdit`.
+- `tools/PreferenceCatalog`, `PreferenceTools`: when upstream adds a preference to `prefs/Preferences.h`, add an entry
+  to `editorPreferences()` (`tst_PreferenceTools` fails until you do); host-only preferences come from
+  `PreferenceHost`.
+- `tools/Manual`, `KnowledgeTools`: the user manual from `McpHost::manualPath()` (the generated `manual/index.html`;
+  fixture in `test/fixture/mcp/manual/`), `manual_search`, `manual_section` and the manual resources.
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type
   descriptions, value validation with X14 warnings, flag lookup by name, `resolveEntities` /
   `withEntities` for tools that act on entities including worldspawn).

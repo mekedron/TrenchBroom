@@ -56,6 +56,13 @@ enum class ErrorCode
   DryRunUnsupported,
   /** A compilation of the document is already running. */
   CompileRunning,
+  /**
+   * The action opens a dialog, a file chooser or a confirmation that only the user can
+   * answer (action_invoke without openDialog).
+   */
+  DialogRequired,
+  /** The action must not run from a tool call; a semantic tool does the same. */
+  ActionRefused,
   InternalError,
 };
 

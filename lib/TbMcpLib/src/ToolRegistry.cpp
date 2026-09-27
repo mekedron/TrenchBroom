@@ -108,6 +108,12 @@ ToolDef& ToolDef::transactional(const bool transactional)
   return *this;
 }
 
+ToolDef& ToolDef::keepsActiveTool(const bool keepsActiveTool)
+{
+  m_keepsActiveTool = keepsActiveTool;
+  return *this;
+}
+
 ToolDef& ToolDef::paginated(const bool paginated)
 {
   m_paginated = paginated;
@@ -167,6 +173,11 @@ DocumentUse ToolDef::documentUse() const
 bool ToolDef::transactional() const
 {
   return m_mutation == Mutation::Map && m_transactional;
+}
+
+bool ToolDef::keepsActiveTool() const
+{
+  return m_keepsActiveTool;
 }
 
 bool ToolDef::paginated() const

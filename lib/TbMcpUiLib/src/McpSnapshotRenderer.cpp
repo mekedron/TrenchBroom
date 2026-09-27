@@ -478,25 +478,6 @@ QImage toQImage(const mcp::RgbaImage& image)
     .copy();
 }
 
-/** "3d" for the 3D view, "xy", "xz" or "yz" for a 2D view by its viewing direction. */
-std::string viewId(MapViewBase& mapView)
-{
-  if (qobject_cast<MapView3D*>(&mapView))
-  {
-    return "3d";
-  }
-
-  switch (vm::find_abs_max_component(mapView.camera().direction()))
-  {
-  case vm::axis::x:
-    return "yz";
-  case vm::axis::y:
-    return "xz";
-  default:
-    return "xy";
-  }
-}
-
 /** The editor's map views of the given window, visible ones first. */
 std::vector<MapViewBase*> mapViews(MapWindow& mapWindow)
 {
@@ -550,6 +531,24 @@ void processResources(gl::Gl& gl, mdl::Map& map)
 }
 
 } // namespace
+
+std::string mapViewId(MapViewBase& mapView)
+{
+  if (qobject_cast<MapView3D*>(&mapView))
+  {
+    return "3d";
+  }
+
+  switch (vm::find_abs_max_component(mapView.camera().direction()))
+  {
+  case vm::axis::x:
+    return "yz";
+  case vm::axis::y:
+    return "xz";
+  default:
+    return "xy";
+  }
+}
 
 mcp::AgentCamera toAgentCamera(const gl::Camera& camera)
 {
@@ -738,7 +737,7 @@ std::vector<mcp::UserView> McpSnapshotRenderer::userViews(MapDocument& document)
   auto result = std::vector<mcp::UserView>{};
   for (auto* mapView : mapViews(*mapWindow))
   {
-    auto id = viewId(*mapView);
+    auto id = mapViewId(*mapView);
     if (std::ranges::none_of(result, [&](const auto& view) { return view.id == id; }))
     {
       const auto ratio = mapView->devicePixelRatioF();
@@ -772,7 +771,7 @@ Result<mcp::RgbaImage> McpSnapshotRenderer::captureUserView(
 
   const auto views = mapViews(*mapWindow);
   const auto it =
-    std::ranges::find_if(views, [&](auto* mapView) { return viewId(*mapView) == id; });
+    std::ranges::find_if(views, [&](auto* mapView) { return mapViewId(*mapView) == id; });
   if (it == views.end())
   {
     return Error{fmt::format("The document's window has no view '{}'", id)};

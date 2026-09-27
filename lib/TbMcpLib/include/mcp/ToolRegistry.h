@@ -94,6 +94,7 @@ private:
   Mutation m_mutation = Mutation::None;
   std::optional<DocumentUse> m_documentUse;
   bool m_transactional = true;
+  bool m_keepsActiveTool = false;
   bool m_paginated = false;
   bool m_destructive = false;
   bool m_idempotent = false;
@@ -117,6 +118,13 @@ public:
    * dry run themselves.
    */
   ToolDef& transactional(bool transactional);
+  /**
+   * Whether a Map tool runs in the editor's current state: the call runner does not
+   * deactivate the active modal tool (McpHost::prepareForAgentEdit) before the call.
+   * Default: false. action_invoke sets it because it runs the editor's actions as the
+   * user would, including the actions of the active tool (e.g. Perform Clip).
+   */
+  ToolDef& keepsActiveTool(bool keepsActiveTool = true);
   /** Adds the standard list parameters `cursor`, `limit`, `fields`, `detail`. */
   ToolDef& paginated(bool paginated = true);
   ToolDef& destructive(bool destructive = true);
@@ -138,6 +146,7 @@ public:
   Mutation mutation() const;
   DocumentUse documentUse() const;
   bool transactional() const;
+  bool keepsActiveTool() const;
   bool paginated() const;
   bool destructive() const;
   bool idempotent() const;

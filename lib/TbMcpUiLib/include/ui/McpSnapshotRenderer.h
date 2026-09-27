@@ -44,7 +44,11 @@ class GlManager;
 namespace ui
 {
 class MapDocument;
+class MapViewBase;
 class MapWindow;
+
+/** "3d" for the 3D view, "xy", "xz" or "yz" for a 2D view by its viewing direction. */
+std::string mapViewId(MapViewBase& mapView);
 
 /**
  * Returns an agent camera with the projection, position, orientation, clipping planes

@@ -500,7 +500,7 @@ Json CallRunner::execute(const CallRequest& request)
   auto context =
     CallContext{m_server, *session, *tool, documentInfo, dryRun, request.progress};
 
-  if (tool->mutation() == Mutation::Map && mapDocument)
+  if (tool->mutation() == Mutation::Map && mapDocument && !tool->keepsActiveTool())
   {
     for (auto& note : m_server.host.prepareForAgentEdit(*mapDocument))
     {

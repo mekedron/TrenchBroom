@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-27 · Status: implemented for E1–E11; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-27 · Status: implemented for E1–E14; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint of the MCP server. It describes the current design and
 implementation. When the code and this document disagree, fix the code or update this document in the
@@ -13,7 +13,7 @@ same change.
 | Topic | Design |
 |---|---|
 | Core library | Qt-free static library `lib/TbMcpLib`, namespace `tb::mcp`, headers in `include/mcp/`. It contains JSON-RPC, the MCP lifecycle, the HTTP/SSE protocol state machine, the registries, the call runner, the ID registry, and **all** tool implementations. |
-| Editor glue | `lib/TbMcpUiLib` (links `TbUiLib`): `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `McpCompileHost` (compiles with the editor's `CompilationRun`), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`, `McpUiIntegration`. |
+| Editor glue | `lib/TbMcpUiLib` (links `TbUiLib`): `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `McpCompileHost` (compiles with the editor's `CompilationRun`), `McpViewHost`, `McpActionHost`, `McpPreferenceHost` (the user's views, the action registry and the host-only preferences, E14), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`, `McpUiIntegration`. |
 | stdio | Executable `app/TrenchBroomMcp`: a stdio ↔ Streamable HTTP proxy (Qt Core + Network). |
 | JSON | nlohmann/json 3.12.0 via CPM (`cmake/dependencies/nlohmann_json.cmake`). |
 | Protocol | MCP revision `2025-11-25`; also accepts `2025-06-18` and `2025-03-26`. Streamable HTTP on `127.0.0.1:47100` (configurable), endpoint `/mcp`. |
@@ -106,6 +106,9 @@ lib/TbMcpLib/
     tools/EntityModelUtils.h   model loading, animations, frame property, placement checks (§10.7)
     tools/SpaceAnalysis.h   voxel grid of empty space, spaces and openings, free spots, walking, leaks (§10.13)
     tools/PlacementChecks.h z-fighting, per-call placement tracking and the MCP issue checks (§6.3, §10.13)
+    tools/ActionCatalog.h   the MCP classification of every editor action: invoke, dialog or refuse, semantic tools (§10.9)
+    tools/PreferenceCatalog.h  the editor's static preferences with categories and constraints, game preferences (§10.15)
+    tools/Manual.h          the user manual parser: sections, Markdown text, shortcut references (§10.16)
   src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
   test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/)
   test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture
@@ -133,6 +136,9 @@ unchanged. Headers are in `include/ui/` (included as `ui/...`); it links `TbUiLi
 | `McpPreferencePane.{h,cpp}` | "AI Agents" pane added to `PreferenceDialog` (icon `McpPreferences.svg`): enable, port, bind address, access token (required only for non-loopback binding), log to file, busy-wait timeout. |
 
 | `McpSnapshotRenderer.{h,cpp}` | Implements `mcp::SnapshotRenderer` with an offscreen GL context and framebuffer (§10.12). Owned by `QtMcpHost`, created on first use from `AppController::glManager()` and `findMapWindow` (only the user-view capture needs windows). |
+| `McpViewHost.{h,cpp}` | Implements `mcp::ViewHost` over the `MapViewBase` widgets of a map window: cameras, maximized and current view (§10.14). `mapViewId` (the view ids "3d", "xy", "xz", "yz") is shared with `McpSnapshotRenderer`. |
+| `McpActionHost.{h,cpp}` | Implements `mcp::ActionHost` over `AppController::actionManager()`: lists and runs the main menu, map view, tag and entity definition actions (§10.9). |
+| `McpPreferenceHost.{h,cpp}` | Implements `mcp::PreferenceHost`: the MCP preferences and the shortcut preferences of all actions (§10.15). |
 | `McpConsoleHook.{h,cpp}` | Owns the `mcp::ConsoleBuffer` and fills it from `Console::messageLoggedNotifier` (§9.1, §15). Created by `McpServerController` in its constructor, so it records from editor start whether or not the server runs, and outlives the server; `QtMcpHost::setConsoleHook` gives the host access. |
 | `McpUiIntegration.{h,cpp}` | Adds the MCP widgets to editor windows and dialogs: `addMcpStatusIndicator` (appends the indicator to the window's status bar once); `addMcpPreferencePane` (adds the pane once with `PreferenceDialog::addPane`, §15). |
 | `McpPreferences.h` | The MCP preferences, namespace `tb::McpPreferences` (below). |
@@ -369,6 +375,33 @@ public:
   virtual ConsoleBuffer* consoleBuffer();                   // §9.1, default nullptr → UNSUPPORTED_IN_HOST
   virtual void clearConsoleViews();                         // console_clear, default no-op
   virtual std::optional<std::filesystem::path> knowledgeDirectory(); // §10.8, default nullopt
+  virtual ViewHost* viewHost();                             // §10.14, default nullptr → UNSUPPORTED_IN_HOST
+  virtual ActionHost* actionHost();                         // §10.9, default nullptr → UNSUPPORTED_IN_HOST
+  virtual PreferenceHost* preferenceHost();                 // §10.15, default nullptr (no host preferences)
+  virtual std::optional<std::filesystem::path> manualPath(); // §10.16, default nullopt → UNSUPPORTED_IN_HOST
+};
+
+class ViewHost {    // ui::McpViewHost, FakeViewHost (tests)
+  virtual std::vector<UserView> views(ui::MapDocument&) = 0;          // 3d, xy, xz, yz with cameras
+  virtual Result<void> setCamera(ui::MapDocument&, const std::string& viewId, const AgentCamera&) = 0;
+  virtual Result<ViewLayout> layout(ui::MapDocument&) = 0;            // maximized and current view
+  virtual Result<void> setMaximizedView(ui::MapDocument&, const std::optional<std::string>& viewId) = 0;
+  virtual void prepareForLayoutChange() = 0;                          // focus out of the views
+};
+
+class ActionHost {  // ui::McpActionHost, FakeActionHost (tests)
+  // All actions for the document's window; enabled/checked evaluated for the view (default: current).
+  virtual Result<std::vector<EditorAction>> actions(ui::MapDocument&, const std::optional<std::string>& viewId) = 0;
+  // Runs the action now, or after control returned to the event loop (deferred, for dialogs).
+  virtual Result<EditorAction> invokeAction(ui::MapDocument&, const std::string& path,
+                                            const std::optional<std::string>& viewId, bool deferred) = 0;
+};
+
+class PreferenceHost {  // ui::McpPreferenceHost, FakePreferenceHost (tests)
+  // AnyPreference = variant of Preference<T>* (bool, int, float, string, path, Color, shortcuts); the pointers
+  // stay valid until the next call. HostPreference: preference, category, description, minimum, maximum,
+  // lockedReason (agents cannot change it), secret (value reported as null).
+  virtual std::vector<HostPreference> preferences(ui::MapDocument*) = 0;
 };
 
 class CompileJob {  // destroying a running job terminates it without callbacks
@@ -435,8 +468,15 @@ process id from `nextProcessId`) instead of starting processes; its `engineParam
 `${MAP_BASE_NAME}`. `startError` and `parametersError` simulate failures, and `supportsEngine = false` simulates a
 host without one.
 
-Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost`
-(E14). A host that does not implement a capability maps to `UNSUPPORTED_IN_HOST`.
+`FakeHost` has `view` (`FakeViewHost`: four views, linked 2D cameras like `CameraLinkHelper`, `hasWindow`,
+recorded calls), `action` (`FakeActionHost`: `actionList`, recorded invocations, simulated failures; `actionHostOverride`
+substitutes the real host in `TbMcpUiLibTest`), `preference` (`FakePreferenceHost`) and `manualFile`; `supportsViews`,
+`supportsActions` and `supportsPreferences` simulate hosts without them. A host that does not implement a capability
+maps to `UNSUPPORTED_IN_HOST`.
+
+`QtMcpHost` owns `McpViewHost`, `McpActionHost` and `McpPreferenceHost`; `manualPath()` is
+`SystemPaths::findResourceFile("manual/index.html")` (the generated manual, in the build tree and in the installed
+application).
 
 ### 4.4 Server state
 
@@ -728,7 +768,8 @@ void registerGeometryTools(ToolRegistry& registry)
   .required() .describe() .defaultsTo()`. Published output schemas do not contain
   `additionalProperties: false`.
 - `ToolDef`: `title description input output mutation documentUse transactional paginated destructive
-  idempotent openWorld handler asyncHandler`. Annotations: `readOnlyHint` (Mutation::None),
+  idempotent openWorld keepsActiveTool handler asyncHandler`. `keepsActiveTool` makes a `Map` tool skip
+  `prepareForAgentEdit` (§4.1), so it runs in the editor's current tool state (`action_invoke`). Annotations: `readOnlyHint` (Mutation::None),
   `destructiveHint`, `idempotentHint`, `openWorldHint`.
 - `Mutation`: `None` (read-only, runs immediately), `Map` (one transaction, busy gate), `External`
   (non-undoable side effects, busy gate).
@@ -760,7 +801,7 @@ Codes: `INVALID_ARGUMENT`, `OBJECT_NOT_FOUND`, `WRONG_OBJECT_KIND`, `OBJECT_NOT_
 `NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`, `OPERATION_FAILED`,
 `TRANSACTION_ACTIVE`, `NO_TRANSACTION`, `BUSY_TIMEOUT`, `CANCELLED`, `UNSAVED_CHANGES`, `FILE_EXISTS`,
 `IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`, `DRY_RUN_UNSUPPORTED`, `COMPILE_RUNNING`,
-`INTERNAL_ERROR`.
+`DIALOG_REQUIRED`, `ACTION_REFUSED` (§10.9), `INTERNAL_ERROR`.
 
 Mapping to MCP:
 - Tool failures, including argument validation failures, are `CallToolResult` with `isError: true`,
@@ -797,6 +838,8 @@ Mapping to MCP:
 | `trenchbroom://documents/{doc}/issues` | `issuesResource()` (`ValidationTools.h`): the issues `issues_list` returns without filters (hidden issues and turned-off validators excluded), `total`, `counts`, `truncated`, at most 200 items, `leakCheck`, `disabledValidators` | whenever the summary is updated (objects added, removed or changed, entity definitions, reload), issues hidden or shown, validators turned on or off |
 | `trenchbroom://console` | the newest console messages (§9.1) | new messages (250 ms coalescing), clear |
 | `trenchbroom://guide` | agent guide (`AgentGuide` raw string in `Resources.cpp`) | static |
+| `trenchbroom://manual` | table of contents of the user manual: `{title, sectionCount, sections[{id, title, level, parent, uri}]}` (§10.16) | static |
+| `trenchbroom://manual/{section}` | one manual section as `text/markdown` (`{section}` is a section id), with links to its subsections; not listed per section | static |
 
 Templates are listed once per open document. `DocumentState` reports `DocumentAspect::{Info, Summary,
 Selection, EntityDefinitions, Materials, Issues, Status}` changes; every summary update also schedules the issues
@@ -810,8 +853,6 @@ subscriptions (the hooks run on every map change, e.g. during drags).
 `clearedNotifier` and sends one `resources/updated` per burst, 250 ms after the first message; nothing is
 scheduled without subscribers. Lines that start with `[AI] ` (the call log sink, §9) do not notify, so a
 client that answers notifications with calls cannot loop.
-
-Planned resources: `manual/{section}` (E14).
 
 ---
 
@@ -877,7 +918,7 @@ call log lines, and so on.
 | `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut` | E4 |
 | `BrushEditTools.cpp` | `brush_clip`, `face_extrude`, `face_extrude_new`, `vertices_move/remove/snap`, `vertex_add`, `csg_merge/subtract/intersect/hollow` | E4 |
 | `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/delete/array`, `command_repeat`, `command_repeat_clear` | E4 |
-| `ViewTools.cpp` | `grid_get/set`; E14: `camera_*`, `view_*` | E4, E14 |
+| `ViewTools.cpp` | `grid_get/set`, `camera_get/set/focus/step_pointfile`, `view_options_get/set`, `view_layout_set` | E4, E14 |
 | `MaterialTools.cpp` | `materials_list`, `material_apply`, `material_set_current`, `material_replace`, `material_preview`, `locks_get/set` | E4, E6 |
 | `FaceTools.cpp` | `face_attributes_get/set/copy`, `uv_align`, `uv_nudge` | E6 |
 | `TagTools.cpp` | `tags_list`, `tag_apply`, `tag_remove` | E6 |
@@ -899,10 +940,11 @@ call log lines, and so on.
 | `ValidationTools.cpp` | `issues_list`, `issue_fix`, `issue_hide`, `issue_show`, `validators_list`, `validators_set`; `issuesResource()` for the issues resource | E12 (E13.1), E13 |
 | `MapCheckTools.cpp` | `map_check` | E13 |
 | `EngineTools.cpp` | `engine_profiles_list`, `engine_profile_save`, `engine_launch` | E13 |
+| `ActionTools.cpp` | `actions_list`, `action_invoke` | E14 |
+| `PreferenceTools.cpp` | `preferences_get`, `preferences_set` | E14 |
+| `KnowledgeTools.cpp` | `manual_search`, `manual_section`; the manual resources | E14 |
 
-Planned: `ActionTools.cpp` (`actions_list`,
-`action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
-`manual_section`) in E14; `Prompts.cpp` in E15.
+Planned: `Prompts.cpp` in E15.
 
 `CompileTools.h` also declares `registerCompileResources`. Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
 shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
@@ -1252,10 +1294,44 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
 
 ### 10.9 Actions (E14)
 
-`ActionHost` enumerates `ActionManager::visitMainMenu`, `visitMapViewActions` and `MapDocumentActionCache`
-tag/entity actions. The path is the action's preference path; `enabled`/`checked` are evaluated with an
-`ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
-`QtMcpHost`, checked by the E14.8 coverage test; each entry points to the matching semantic tool.
+`ActionTools.cpp`: `actions_list`, `action_invoke`. `ActionHost` (`ui::McpActionHost`, `FakeActionHost`) lists the
+main menu (`ActionManager::visitMainMenu`, with the menu path), the map view actions (`visitMapViewActions`, sorted by
+path) and the document's tag and entity definition actions (`createTagActions` / `createEntityDefinitionActions`,
+created on every call because they refer to the document's tags and definitions). The path is the action's generic
+preference path; shortcuts are the `KeySequence` values of `pref(action.preference())`; the context is
+`actionContextName`; enabled and checked are evaluated with `ActionExecutionContext{appController, window, view}` for
+the requested view ("3d", "xy", "xz", "yz"; default `currentMapViewBase()`), whose action context `Action::enabled`
+checks. The host additionally reports `Entities/<brush class>/Create` as disabled without selected brushes or patches
+(`mdl::createBrushEntity` requires them). `invokeAction` runs the action like the menu or the view's shortcut; deferred
+actions run from a zero timer owned by the window and look the action and the view up again by path.
+
+`ActionCatalog` (public, Qt-free) classifies every action path as Invoke, Dialog (kind modal, file, input,
+confirmation, menu, window or browser) or Refuse, with the semantic tools that do the same, plus patterns for
+`Filters/Tags/<t>/Toggle Visible`, `Tags/<t>/Enable|Disable` and `Entities/<c>/Toggle|Create`. Unknown actions are
+Dialog if their label ends with "...", else Invoke. Refused: Undo, Redo and Repeat (they would act inside the call's
+transaction), Reload Material Collections / Entity Definitions (use the reload tools), the four entity link view
+filters (the editor stores the link mode in the face render mode preference; `view_options_set` sets it correctly),
+Debug Crash and Throw Exception. Dialog actions include New, Open, Save, Save as, Export, Load Point / Portal File,
+Revert, Close, Preferences, About, Move objects, Replace Material, Select by Line Number, Group, Rename Groups, Move
+Camera to, Compile, Launch, Rerun, Manual and Tag Enable (a popup menu when a tag allows several values).
+
+`actions_list` (paginated) filters by `kind`, `menu` (path prefix), `query`, `handling`, `enabledOnly` and `view`;
+items have `path, label, kind, menu, shortcuts, enabled, checked, opensDialog, invokable, tools` (`detail: "full"`
+adds `context, checkable, handling, dialog, reason`). `action_invoke` takes a `path` (or a unique label), `view` and
+`openDialog`; it is `Mutation::Map` with `ToolDef::keepsActiveTool()`: the call runner does not run
+`prepareForAgentEdit`, so the action runs in the editor's current state (tool actions such as Perform Clip work), and
+map changes become one undo step "AI: Invoke Action" with a change report; tool, view filter, grid and camera actions
+leave the transaction empty (no undo step). A dry run checks the action without running it. Dialog actions fail with
+`DIALOG_REQUIRED` naming the semantic tools unless `openDialog`, which runs them deferred after the call (outside the
+transaction; later modifying calls wait while the modal dialog is open); refused ones fail with `ACTION_REFUSED`.
+
+**Coverage check (E14.8).** `tst_McpActionHost.cpp` enumerates the whole registry for a real Quake document (main
+menu, map view, tag and entity definition actions), checks that `McpActionHost` lists every action once and that the
+catalog classifies it, that every catalog path still exists (upstream renames fail the test) and that every tool the
+catalog names is registered, and requires at least 95% of the actions to be reachable through a semantic tool or
+`action_invoke`. In a Debug build 390 of 395 actions (98.7%) are reachable; the other five are debug-only (Crash,
+Throw Exception During Command, Show Palette, Set Window Size, Show Crash Report Dialog), which release builds do not
+have.
 
 ### 10.10 Compiling (E7)
 
@@ -1675,6 +1751,84 @@ the manifest to the new name, and the save tools warn `MANIFEST_NOT_WRITTEN` on 
   pending, changed, removed, notFound, savedCameras, counts}`; warnings `MANIFEST_PENDING`,
   `MANIFEST_ENTRY_NOT_FOUND`, `MANIFEST_OVERWRITTEN`.
 
+### 10.14 User views and camera (E14)
+
+The camera, view option and layout tools in `ViewTools.cpp` change what the user sees; agent cameras and snapshots
+(§10.12) stay separate. They reach the editor through `ViewHost` (`McpHost::viewHost()`; nullptr →
+`UNSUPPORTED_IN_HOST`; a document without a window → `OPERATION_FAILED`): `views` lists the views of the document's
+window (3d, xy, xz, yz, all existing in every layout; `visible` = shown in the layout) with their cameras as
+`AgentCamera`s; `setCamera` sets a view's `gl::Camera` without animation; `layout` / `setMaximizedView` read and toggle
+the maximized view. `ui::McpViewHost` finds the `MapViewBase` widgets of the window's `SwitchableMapViewContainer`.
+
+- `camera_get`: the views with camera, size and visibility, the layout (`panes`, `maximizedView`, `currentView`),
+  `link2dCameras`, the field of vision preference and the point file position if one is loaded.
+- `camera_set`: `view` (default 3d), `position`, one of `lookAt` / `direction` / `yaw`+`pitch`, `up`, `fov`, `zoom`.
+  A 2D camera keeps its position along the view axis, and with the "Link 2D cameras" preference the other 2D views
+  follow (reported as `linkedViews`). The 3D field of view is the global "Field of vision" preference;
+  `camera_set.fov` overrides it on the view until that preference changes or the views are recreated.
+- `camera_focus`: `ids`, `box`, `point` or the selection; frames the targets with `frameBox` in the 3D view (keeping
+  its direction) and centers the 2D views, keeping their zoom unless the box does not fit. It does not select
+  anything and also focuses hidden or locked objects.
+- `camera_step_pointfile`: next, previous, first, last or current; advances `MapDocument::pointTrace()` and places
+  the cameras like `MapView3D::moveCameraToCurrentTracePoint` (point + 16 z, along the path, up +Z) without animation;
+  at either end `moved: false` with an `END_OF_TRACE` warning.
+- `view_options_get` / `view_options_set`: Qt-free in the core. The `Map view/*` preferences (face mode, shading,
+  fog, edges, classnames, bounds, point entities and models, brushes, patches, soft bounds, entity link mode) are set
+  with `setPref` exactly as `ViewEditor` does (global, all windows); tag and entity class visibility go through the
+  document's `EditorContext` (`setHiddenTags`, `setEntityDefinitionHidden`; classnames, globs or class groups);
+  `restoreDefaults` resets the preference options.
+- `view_layout_set`: `panes` 1–4 is the global preference `Views/Map view layout`, which `MapWindow` observes and
+  applies synchronously by recreating the views. Before that, `ViewHost::prepareForLayoutChange` clears the keyboard
+  focus if a map view has it: destroying the focused view makes `MapWindow::focusChange` reach the destroyed view
+  and crashes the editor. `maximized` maximizes a view or restores all. To maximize a view the
+  host makes it current with `MapViewBase::setIsCurrent` (the activation tracker only does so on focus-in, which needs
+  an active window), cycles a shared `CyclingMapView` pane to it with `MapView::cycleMapView`, and calls
+  `MapWindow::toggleMaximizeCurrentView`.
+
+All setters are `Mutation::External` and honor dry runs.
+
+### 10.15 Preferences (E14)
+
+`PreferenceCatalog.cpp` holds an explicit table of the editor's static preferences. Each entry references its
+`Preferences::` variable and carries a category (view, renderer, colors, camera, controls, editor, browser, updater,
+keyboard), a description, and allowed values, a range or a note where known. `tst_PreferenceTools` compares the table
+against every preference path in `prefs/Preferences.h`, so a new upstream preference fails the test. The occluded move
+trace color shares its path with the move trace color and is listed once. `gamePreferences()` adds each configured
+game's path, default engine and compilation tool paths (category games), and `PreferenceHost` adds the host's own:
+`ui::McpPreferenceHost` supplies the MCP preferences (category mcp) and the shortcut preferences of the action
+manager's menu and map view actions and, for a document, of its tag and entity definition actions (category
+keyboard; those `Action`s live in the host until the next call). The MCP server's enabled, port, bind address and
+access token preferences carry a `lockedReason`: changing them stops or restarts the server, which would destroy it
+inside the call. The access token is `secret`.
+
+`preferences_get` (paginated; `paths`, `prefix`, `category`, `query`, `modifiedOnly`) returns `path, type, value,
+modified, category, description` and constraints; `detail: "full"` adds `default`, `persistence`, `source`, `note` and
+`lockedReason`. `preferences_set` (`values`, `reset`; `Mutation::External`) validates every change (type, allowed
+values, range, read-only, locked) before applying any with `setPref`, which saves immediately; it warns about shortcut
+conflicts (`SHORTCUT_CONFLICT`) and missing game paths, and notifies the game config resource when a game preference
+changes. Colors are `#RRGGBB` or `#RRGGBBAA` (also accepted: `[r, g, b, a]` and TrenchBroom's `"r g b a"`); shortcuts
+are arrays of portable key sequences. The editor applies shortcuts, the layout, the field of vision, fonts and render
+settings immediately; the theme needs a restart (`note`).
+
+### 10.16 User manual (E14)
+
+`McpHost::manualPath()` returns the generated `manual/index.html`. `Manual.cpp` parses the pandoc output inside
+`article#content_body` into sections (h1–h6 with ids, parents and children), each with its own text as Markdown:
+lists, tables, code blocks, figures, definition lists, links and decoded entities. The manual's `print_menu_item` /
+`print_action` / `print_key` scripts become placeholders, resolved on every call: menu paths come from the document
+window's `ActionHost` if there is a document, else from the `shortcuts.js` next to the manual, else from the path;
+shortcuts come from the action host, else the current shortcut preferences, else `shortcuts.js`. Pandoc wraps some
+script arguments over lines; the parser joins them. The parse is cached by path, size and modification time; the real
+manual has 182 sections and 250 references, all resolved.
+
+`manual_search` (`query`, paginated) ranks sections by title and text hits (case-insensitive substrings; phrase and
+exact-title bonuses) and returns `id, title, level, path, score, snippets, uri`. `manual_section` (`section`: id,
+`#id`, exact title or resource URI; `offset`, `maxChars`, `includeSubsections`) returns the text, paged at line
+breaks, with the subsections and the parent, previous and next sections. Without a manual the tools fail with
+`UNSUPPORTED_IN_HOST`; an unreadable file is `IO_ERROR`.
+
+---
+
 ## 11. Testing
 
 ### 11.1 `TbMcpLibTest` (headless, no Qt)
@@ -1703,6 +1857,10 @@ the manifest to the new name, and the save tools warn `MANIFEST_NOT_WRITTEN` on 
 | `tst_PlacementChecks`, `tst_ValidationTools` | z-fighting rules (overlap, hidden by a touching face, tool materials and triggers ignored, different planes); per-call reports (`Z_FIGHTING` once with both faces, dry run, `ENTITY_OUTSIDE_HULL`, model placement, UV distortion, de-duplication with tool warnings; a `[.][benchmark]` case on 2,000 brushes); `issues_list` sources, filters, paging, hidden issues, ids and fixes of MCP issues; `issue_fix` on `issues.map`: every editor quick fix (Delete Objects, Delete Property with several issues on one object, `Replace \ with /`, Snap Vertices, Reset UV Scale on six faces of one brush, Move Brushes to World, Remove Mod, `Replace " with '`, Truncate Property Values reported as not fixed, a fix of another type), issues with several fixes, by id, by object, one undo step for several codes, dry run, checks without fixes, invalid input; `Apply Suggested Move` and `Apply Suggested UV Fix`; `issue_hide` / `issue_show` (hidden issues skipped by code, MCP issues, dry run); `validators_list` / `validators_set` (listing and issues introduced per call skip turned-off validators, dry run, `enableAll`); the issues resource (content equals `issues_list`, template listed, coalesced notifications on map changes, hiding and validator changes) |
 | `tst_MapCheckTools` | `map_check` on `map_check.map` (one room, an ogre in a wall, a floating soldier, a light inside a pillar, a broken target, an untriggered door, an unnamed relay, a missing material, health outside the room, no player start): every code with positive and negative cases, following each suggested fix until the finding disappears, model placement with `models.fgd`, deathmatch-only starts, multi_manager keys, a leak with a gap, `checks` / `ids` filters, pagination, progress, cancellation, invalid input |
 | `tst_EngineTools` | engine tools over `FakeEngineHost`: listing per game and the document's game, save/replace (id and parameters kept), path warnings, `FILE_EXISTS`, invalid input, dry runs; launch of the only / a named / an id-selected profile with interpolated and overridden parameters, unsaved-changes warning, never-saved map, unknown or ambiguous profile, missing engine, interpolation and start failures, host without engine support |
+| `tst_ViewTools` | grid; the camera tools over `FakeViewHost` (get, set by position, look-at, direction and yaw/pitch, 2D views and linked 2D cameras, focus on ids, boxes, points and the selection without changing it, point file stepping), view options on a Quake document (preferences, tags, classnames and class groups, restore defaults), layout; invalid input, dry runs, hosts without views or windows |
+| `tst_ActionTools` | `actions_list` and `action_invoke` over `FakeActionHost`: filters, pagination, labels, disabled, unknown and ambiguous actions, `DIALOG_REQUIRED` and `openDialog`, `ACTION_REFUSED`, the active tool kept, dry run, `UNSUPPORTED_IN_HOST` |
+| `tst_PreferenceTools` | the catalog against every path in `prefs/Preferences.h`; `preferences_get` filters, types and value forms; `preferences_set` success, type, range and allowed-value errors, read-only and locked preferences, unknown paths with suggestions, atomicity, reset, dry run, shortcut conflicts, game and host preferences |
+| `tst_KnowledgeTools` | the manual parser on a pandoc-like fixture (sections, Markdown, entities, wrapped script arguments), reference resolution with and without an action host and with `shortcuts.js`, search ranking, section paging and neighbours, the manual resources, no manual |
 | `tst_MapManifest`, `tst_ManifestTools` | manifest JSON round trips and invalid files; `map_manifest_get/set` merge, replace and remove, cameras saved and restored in a new session, an unsaved map's manifest written on `document_save_as`, dry run, invalid input |
 | `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities; E12's acceptance scenario on `spaces.map` (pick the chair in a snapshot, both spaces with their doorway, a wall spot for a poster with the face id, z-fighting and an entity outside the hull reported by the calls that caused them); S2 on `issues.map` (every issue with type, object and explanation; the codes with one fix fixed one call each with the deleted and changed objects reported; fewer issues afterwards and the rest listed with reasons; one `AI: Fix Issues` undo step per call) |
 
@@ -1756,6 +1914,15 @@ findings), and game paths in `mdl/Game/`.
   `Console::messageLoggedNotifier` and `Console::clear`, `EditorContext::setIgnoreHiddenState`,
   `launchGameEngineProfile`'s process id.
 - `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
+- `tst_McpViewHost.cpp`: `McpViewHost` on an unshown window: views and visibility per layout, cameras (perspective,
+  fov, 2D zoom and linked 2D cameras), maximize and restore (also of a cycling pane), layout switching.
+- `tst_McpActionHost.cpp`: the E14.8 coverage check (§10.9) and end-to-end actions through the tools with the real host
+  (`FakeHost::actionHostOverride`): grid size, select all / deselect all, a view filter, a tag visibility action,
+  `Entities/light/Create` as one undo step, a brush entity create reported as disabled, the clip tool kept active
+  across calls, a deferred action run from the event loop.
+- `tst_McpPreferenceHost.cpp`: the MCP and shortcut preferences (with a document's tag and entity actions), locked
+  and secret preferences, setting a shortcut through `preferences_set`; the real generated manual
+  (`MCP_TEST_MANUAL_PATH`, skipped if not built) parses into its sections with every reference resolved.
 - `tst_McpConsoleHook.cpp`: messages of a window console reach the buffer with level and document, worker-thread
   messages are marshalled, clearing clears the views and the buffer.
 - `tst_McpAnnotations.cpp`: `[gpu]` annotations drawn over real renders and `view_pick` consistency with the real
@@ -1860,6 +2027,25 @@ findings), and game paths in `mdl/Game/`.
   classified. The editor's compilation dialog does not know about MCP runs, so the user can start a dialog
   compile of the same document meanwhile. A cancelled tool process is killed without waiting (Qt logs
   "QProcess: Destroyed while process ... is still running").
+- User views: camera changes are not undoable and not animated; a camera animation the user started (e.g. Focus) may
+  overwrite them for its short duration. `camera_set.fov` is temporary (the permanent one is the preference
+  `Controls/Camera/Field of vision`). The pane count and all preference view options are global (all windows);
+  changing the pane count recreates the views, which resets their cameras. Maximizing a view in the cycling 2D pane
+  cycles the pane like Cycle Map View (which focuses that pane's 2D cameras on the selection) and moves the keyboard
+  focus to the view. The one-pane layout cannot maximize. `currentView` changes only when a view really gets the
+  focus. `camera_step_pointfile` uses the editor's subdivided point trace (`count` is larger than the number of lines
+  of the .pts file). Rendering and real focus changes of the user views are not covered by tests (they need a shown
+  window with OpenGL).
+- Actions: `action_invoke` undo steps are named "AI: Invoke Action", not after the action; its dry run does not run
+  the action and reports no changes; an action opened with `openDialog` runs after the call returns and its result is
+  not reported. Cut, Copy and Paste are disabled unless the map view has the keyboard focus (use the clipboard tools).
+  Actions run in the current or given view even if that view is hidden in the layout. The editor's four entity link
+  view filter actions store the link mode in the face render mode preference, so they are refused.
+- Preferences: the MCP server's enabled, port, bind address and access token cannot be changed by agents. Shortcut
+  conflicts are reported regardless of action context, and shortcut text is not validated in the core. Allowed values
+  and ranges are known only for the catalog's preferences.
+- Manual: the cache ignores changes to `shortcuts.js`; `manual_section` offsets and lengths are in bytes; search is
+  substring-based (no stemming).
 
 ---
 
@@ -1903,8 +2089,9 @@ commit buildable and tested.
   prediction validators, per-map manifest file.
 - **E13** ValidationTools (`issue_fix`, `issue_hide` / `issue_show`, `validators_list` / `validators_set`),
   `map_check`, EngineTools over the `EngineHost` seam (`McpEngineHost`), the issues resource.
-- **E14** ViewTools (camera, view options, layout), ActionTools (`ActionHost`, §10.9), PreferenceTools
-  (`PreferenceHost`), KnowledgeTools, action coverage check.
+- **E14** ViewTools (camera, view options, layout over `ViewHost`, §10.14), ActionTools and `ActionCatalog`
+  (`ActionHost`, `ToolDef::keepsActiveTool`, §10.9), PreferenceTools and `PreferenceCatalog` (`PreferenceHost`,
+  §10.15), KnowledgeTools and the manual parser (§10.16), the action coverage check.
 - **E15 — agent experience.** Final agent guide text, description review, prompts (`Prompts.cpp`), scenario
   tests, manual section, lazy bridge start (the bridge answers `initialize` and the list methods from the
   registries and connects to the editor only when needed).

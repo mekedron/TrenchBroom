@@ -288,6 +288,42 @@ Editor console
   new messages. console_clear clears the buffer and the editor's console views.
 - Every call result lists under 'console' the warnings and errors logged while it ran.
 
+Showing things to the user
+- Use view_snapshot and agent cameras to look at your work yourself. The camera_* tools
+  move the user's own views; use them only to show the user something: camera_focus
+  {"ids": [...]} frames objects without changing the selection, camera_set puts the 3D
+  view at a spot ({"position": [...], "lookAt": [...]}), and camera_step_pointfile walks
+  the user along a leak after pointfile_load. camera_get tells what the user is looking
+  at, useful when the user says "here" or "this room".
+- view_options_set changes the global view preferences (faceMode, fog, edges, entity
+  display, entityLinkMode) and the document's tag and class visibility, e.g.
+  {"hideTags": ["trigger", "clip"]}. Hidden objects are still in the map and compiled.
+  Undo such changes when done (showTags, {"showClassnames": ["*"]}, restoreDefaults).
+- view_layout_set changes the pane count of every window and resets the view cameras;
+  use it only when the user asks.
+
+Editor actions
+- Every menu item and shortcut is reachable. actions_list (filter by menu, query, kind,
+  enabledOnly) shows each action's path, shortcut, whether it is enabled or checked now,
+  and the semantic tools that do the same. Prefer those tools: they take explicit ids and
+  arguments.
+- action_invoke {"path": ...} runs the rest (tool toggles, view filters, inspector pages,
+  Perform Clip while the clip tool is active) exactly as the user would, in the current
+  selection and tool; map edits are one undo step. Actions that ask the user (dialogs,
+  file choosers, prompts) fail with DIALOG_REQUIRED naming the tool to use; pass
+  "openDialog": true only to open the dialog for the user. Undo, Redo and a few others
+  fail with ACTION_REFUSED; use the named tool.
+
+Preferences and the manual
+- manual_search finds how an editor feature works; read it with manual_section or
+  trenchbroom://manual/<id> (trenchbroom://manual is the table of contents). Shortcuts in
+  the text are the user's current ones.
+- preferences_get (category or query) finds any setting: view options, colors, camera,
+  keyboard shortcuts (same paths as actions_list), game and compile tool paths.
+  preferences_set changes several at once, all or nothing; it is saved immediately and
+  not undoable, so tell the user what you change, and check 'note' (restart needed) and
+  'conflicts' in the result. The MCP connection settings cannot be changed by agents.
+
 Results
 - Modifying calls return 'changes' (created / modified / removed ids), 'selection',
   'issuesIntroduced' (editor validator issues and placement problems the call caused),

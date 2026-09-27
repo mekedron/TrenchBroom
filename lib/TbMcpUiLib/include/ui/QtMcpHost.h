@@ -23,9 +23,12 @@
 
 #include "base/NotifierConnection.h"
 #include "mcp/Host.h"
+#include "ui/McpActionHost.h"
 #include "ui/McpCompileHost.h"
 #include "ui/McpEngineHost.h"
+#include "ui/McpPreferenceHost.h"
 #include "ui/McpSnapshotRenderer.h"
+#include "ui/McpViewHost.h"
 
 #include <filesystem>
 #include <memory>
@@ -74,6 +77,12 @@ private:
   McpCompileHost m_compileHost;
   /** Launches game engines. */
   McpEngineHost m_engineHost;
+  /** Drives the user's views. */
+  McpViewHost m_viewHost;
+  /** Lists and runs the editor's actions. */
+  McpActionHost m_actionHost;
+  /** The action shortcuts and the MCP preferences. */
+  McpPreferenceHost m_preferenceHost;
   /** Renders snapshots offscreen; created when first requested. */
   std::unique_ptr<McpSnapshotRenderer> m_snapshotRenderer;
   /** Collects the console messages; owned by McpServerController. */
@@ -109,6 +118,11 @@ public: // mcp::McpHost
   void clearConsoleViews() override;
   /** "mcp-knowledge" in the user data folder. */
   std::optional<std::filesystem::path> knowledgeDirectory() override;
+  mcp::ViewHost* viewHost() override;
+  mcp::ActionHost* actionHost() override;
+  mcp::PreferenceHost* preferenceHost() override;
+  /** manual/index.html in the editor's resources, if it exists. */
+  std::optional<std::filesystem::path> manualPath() override;
 
 public: // mcp::DocumentHost
   std::optional<mcp::DocumentInfo> documentToReplace() override;

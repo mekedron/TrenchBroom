@@ -6,15 +6,18 @@ target_sources(TbMcpUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpUiTestUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpUiTestUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpActionHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpAnnotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompileHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpConsoleHook.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpEngineHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpPreferenceHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServerController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpSnapshotRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpTcpTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpUiIntegration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpViewHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QtMcpHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamHooks.cpp
 
@@ -29,6 +32,10 @@ add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
 target_compile_definitions(TbMcpUiLibTest PRIVATE
   MCP_TEST_RESOURCE_DIR="${TB_RESOURCE_DIR}"
   MCP_TEST_MAPS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../TbMcpLib/test/fixture/mcp/maps")
+
+# The manual test parses the manual that the GenerateManual target writes (if it was built)
+target_compile_definitions(TbMcpUiLibTest PRIVATE
+  MCP_TEST_MANUAL_PATH="${CMAKE_BINARY_DIR}/app/TrenchBroom/gen-manual/index.html")
 
 target_link_libraries(TbMcpUiLibTest PRIVATE
   CompilerConfig

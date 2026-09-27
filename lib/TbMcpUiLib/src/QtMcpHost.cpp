@@ -36,6 +36,7 @@
 #include "ui/McpConsoleHook.h"
 #include "ui/RecentDocuments.h"
 #include "ui/SwitchableMapViewContainer.h"
+#include "ui/SystemPaths.h"
 
 #include "kd/contracts.h"
 #include "kd/ranges/to.h"
@@ -121,6 +122,11 @@ QtMcpHost::QtMcpHost(AppController& appController, QObject* parent)
     return mapWindow ? copyPerspectiveCamera(mapWindow->mapView().perspectiveCamera())
                      : nullptr;
   }}
+  , m_viewHost{[this](const MapDocument& document) { return findMapWindow(document); }}
+  , m_actionHost{
+      appController,
+      [this](const MapDocument& document) { return findMapWindow(document); }}
+  , m_preferenceHost{appController}
 {
   qApp->installEventFilter(this);
 
@@ -288,6 +294,31 @@ void QtMcpHost::clearConsoleViews()
 std::optional<std::filesystem::path> QtMcpHost::knowledgeDirectory()
 {
   return m_appController.environmentConfig().userDataFolderPath / "mcp-knowledge";
+}
+
+mcp::ViewHost* QtMcpHost::viewHost()
+{
+  return &m_viewHost;
+}
+
+mcp::ActionHost* QtMcpHost::actionHost()
+{
+  return &m_actionHost;
+}
+
+mcp::PreferenceHost* QtMcpHost::preferenceHost()
+{
+  return &m_preferenceHost;
+}
+
+std::optional<std::filesystem::path> QtMcpHost::manualPath()
+{
+  if (auto path = SystemPaths::findResourceFile("manual/index.html");
+      !path.empty() && std::filesystem::exists(path))
+  {
+    return path;
+  }
+  return std::nullopt;
 }
 
 std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()

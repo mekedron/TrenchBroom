@@ -409,5 +409,5 @@ Ready-made instructions a user can pick in their AI client.
 | Face Inspector: attributes, UV editor, material browser, collections | §4, §11 | Full |
 | Issue Browser | §15 | Full |
 | Preferences | §4, §16, §19 | Full read and write |
-| Any remaining menu or shortcut action | §18 | Generic fallback |
+| Any remaining menu or shortcut action | §18 | Generic fallback; an automated coverage check requires at least 95% of all actions (including per-tag and per-entity-class actions) to be reachable through a semantic tool or `action_invoke` (98.7% for Quake, 395 actions; the rest are debug-only) |
 | Capabilities without an editor equivalent: agent vision (offscreen snapshots, agent cameras), map import, prefabs, extra checks, leak locating, plan view | §5, §13, §15, §16, §17 | MCP-only |

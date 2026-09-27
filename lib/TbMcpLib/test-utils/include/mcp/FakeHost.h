@@ -20,6 +20,9 @@
 #pragma once
 
 #include "mcp/ConsoleBuffer.h"
+#include "mcp/FakeActionHost.h"
+#include "mcp/FakePreferenceHost.h"
+#include "mcp/FakeViewHost.h"
 #include "mcp/Host.h"
 #include "mcp/Snapshot.h"
 #include "mdl/CompilationProfile.h"
@@ -293,6 +296,25 @@ public:
    * temporary directory. nullopt simulates a host without one.
    */
   std::optional<std::filesystem::path> knowledgeDir;
+  /** The view host returned by viewHost(). */
+  FakeViewHost view;
+  /** If false, viewHost() returns nullptr (a host without views). */
+  bool supportsViews = true;
+  /** The action host returned by actionHost(). */
+  FakeActionHost action;
+  /**
+   * If set, actionHost() returns this host instead of `action`, e.g. the editor's real
+   * action host in TbMcpUiLibTest.
+   */
+  ActionHost* actionHostOverride = nullptr;
+  /** If false, actionHost() returns nullptr (a host without actions). */
+  bool supportsActions = true;
+  /** The preference host returned by preferenceHost(). */
+  FakePreferenceHost preference;
+  /** If false, preferenceHost() returns nullptr. */
+  bool supportsPreferences = true;
+  /** Returned by manualPath(); nullopt simulates a host without a manual. */
+  std::optional<std::filesystem::path> manualFile;
 
 private:
   size_t m_nextDocumentId = 1;
@@ -346,6 +368,10 @@ public:
   ConsoleBuffer* consoleBuffer() override;
   void clearConsoleViews() override;
   std::optional<std::filesystem::path> knowledgeDirectory() override;
+  ViewHost* viewHost() override;
+  ActionHost* actionHost() override;
+  PreferenceHost* preferenceHost() override;
+  std::optional<std::filesystem::path> manualPath() override;
 
   // DocumentHost
   std::optional<DocumentInfo> documentToReplace() override;

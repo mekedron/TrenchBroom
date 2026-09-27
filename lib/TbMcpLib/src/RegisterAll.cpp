@@ -21,6 +21,7 @@
 
 #include "mcp/McpServer.h"
 #include "mcp/Resources.h"
+#include "mcp/tools/ActionTools.h"
 #include "mcp/tools/BrushEditTools.h"
 #include "mcp/tools/ClipboardTools.h"
 #include "mcp/tools/CompileTools.h"
@@ -36,12 +37,14 @@
 #include "mcp/tools/GeometryTools.h"
 #include "mcp/tools/GroupTools.h"
 #include "mcp/tools/HistoryTools.h"
+#include "mcp/tools/KnowledgeTools.h"
 #include "mcp/tools/LayerTools.h"
 #include "mcp/tools/ManifestTools.h"
 #include "mcp/tools/MapCheckTools.h"
 #include "mcp/tools/MaterialKnowledgeTools.h"
 #include "mcp/tools/MaterialTools.h"
 #include "mcp/tools/PickTools.h"
+#include "mcp/tools/PreferenceTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
@@ -91,9 +94,13 @@ void registerAll(McpServer& server)
   registerValidationTools(server.tools());
   registerMapCheckTools(server.tools());
   registerConsoleTools(server.tools());
+  registerActionTools(server.tools());
+  registerPreferenceTools(server.tools());
+  registerKnowledgeTools(server.tools());
   registerResources(server);
   registerCompileResources(server.resources());
   registerConsoleResources(server.resources());
+  registerKnowledgeResources(server.resources());
 }
 
 } // namespace tb::mcp

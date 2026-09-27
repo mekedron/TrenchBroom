@@ -25,7 +25,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E11 | Level-design knowledge: texturing and model-aware placement | §10, §11 | v1 | Done |
 | E12 | Spatial understanding: picking, rooms, free spots, placement checks | §5, §15, §17 | v1 | Done |
 | E13 | Validation and engine launch | §15, §16 | MVP + v1 | Done |
-| E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
+| E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Done |
 | E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Not started |
 | E16 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
 
@@ -400,14 +400,14 @@ The camera tools here move the **user's** editor camera. Agent snapshots with th
 
 Goal: the agent can see what it built, reach every remaining editor action, and look things up.
 
-- [ ] E14.1 `camera_get`, `camera_set`, `camera_focus`, `camera_step_pointfile`.
-- [ ] E14.2 `view_options_get`, `view_options_set` (render mode, shading, fog, edges, entity display, link mode, per-tag and per-class visibility).
-- [ ] E14.3 `view_layout_set`.
-- [ ] E14.4 `actions_list` — enumerate the action registry (menu, view, per-tag and per-entity actions) with label, path, shortcut, enabled / checked, opens-dialog flag.
-- [ ] E14.5 `action_invoke` — run any action by path; for dialog actions point to the matching semantic tool or open the dialog.
-- [ ] E14.6 `preferences_get`, `preferences_set` (all preferences).
-- [ ] E14.7 `manual_search`, `manual_section` over the bundled user manual; resource: user manual.
-- [ ] E14.8 Coverage check: script or test that lists every action in the registry and verifies it is reachable through a semantic tool or `action_invoke` (spec G1, coverage matrix).
+- [x] E14.1 `camera_get`, `camera_set`, `camera_focus`, `camera_step_pointfile`.
+- [x] E14.2 `view_options_get`, `view_options_set` (render mode, shading, fog, edges, entity display, link mode, per-tag and per-class visibility).
+- [x] E14.3 `view_layout_set`.
+- [x] E14.4 `actions_list` — enumerate the action registry (menu, view, per-tag and per-entity actions) with label, path, shortcut, enabled / checked, opens-dialog flag.
+- [x] E14.5 `action_invoke` — run any action by path; for dialog actions point to the matching semantic tool or open the dialog.
+- [x] E14.6 `preferences_get`, `preferences_set` (all preferences).
+- [x] E14.7 `manual_search`, `manual_section` over the bundled user manual; resource: user manual.
+- [x] E14.8 Coverage check: script or test that lists every action in the registry and verifies it is reachable through a semantic tool or `action_invoke` (spec G1, coverage matrix).
 
 **Done when:** the coverage check reports ≥ 95%, and the user's camera, view options and layout can be driven by an agent.
 

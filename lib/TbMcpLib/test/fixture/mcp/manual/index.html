@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="generator" content="pandoc">
+        <title>TrenchBroom Test Reference Manual</title>
+    <link rel="stylesheet" href="default.css">
+    <script src="shortcuts.js"></script>
+    <script src="shortcuts_helper.js"></script>
+  </head>
+  <body>
+    <div id="toc_toggler">
+      <button class="toc_toggler_button" title="Open Table of Contents"><span>&#9776;</span></button>
+    </div>
+    <nav id="toc">
+      <div id="toc_inner">
+        <ul>
+        <li><a href="#introduction" id="toc-introduction">Introduction</a></li>
+        <li><a href="#camera_navigation" id="toc-camera_navigation">Camera
+        Navigation</a></li>
+        </ul>
+      </div>
+    </nav>
+    <main id="content">
+      <aside id="content_version">
+        <span id="content_version_heading">TrenchBroom Test Reference Manual</span>
+      </aside>
+      <article id="content_body">
+        <h1 id="introduction">Introduction</h1>
+        <p>TrenchBroom is a level editing program for brush-based game
+        engines such as Quake, Quake 2, and Hexen 2. It&#39;s easy to use
+        &amp; fast.</p>
+        <h2 id="features">Features</h2>
+        <ul>
+        <li><strong>General</strong>
+        <ul>
+        <li>Full support for editing in 3D and in up to three 2D
+        views</li>
+        <li>Unlimited Undo and Redo</li>
+        </ul></li>
+        <li><strong>Brush Editing</strong>
+        <ul>
+        <li>Robust vertex editing</li>
+        </ul></li>
+        </ul>
+        <h1 id="getting_started">Getting Started</h1>
+        <p>This section explains the main window and the camera.</p>
+        <h2 id="main_window">Main Window</h2>
+        <figure>
+        <img src="images/MainWindow.png"
+        alt="The main editing window (Ubuntu Linux)" />
+        <figcaption aria-hidden="true">The main editing window (Ubuntu
+        Linux)</figcaption>
+        </figure>
+        <p>You can show or hide the info bar by choosing
+        <script>print_menu_item("Menu/View/Toggle Info Panel");</script>. It contains the console
+        and the live <a href="#issue_browser">issue browser</a>. Maximize a view with
+        <script>print_menu_item("Menu/View/Maximize
+        Current View");</script>.</p>
+        <h3 id="the-info-bar">The Info Bar</h3>
+        <p>The info bar shows the <em>console</em> and the <code>issue</code> browser.</p>
+        <h2 id="camera_navigation">Camera Navigation</h2>
+        <p>Navigation in TrenchBroom is quite simple. The behavior of the camera
+        can be controlled in the <a
+        href="#mouse_input">preferences</a>. Hold <script>print_key("Alt");</script>
+        to move the camera horizontally.</p>
+        <h3 id="looking-and-moving-around">Looking and Moving
+        Around</h3>
+        <p>You can use the following keyboard shortcuts to move the camera:</p>
+        <table>
+        <thead>
+        <tr>
+        <th>Direction</th>
+        <th>Key</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr>
+        <td>Forward</td>
+        <td><script>print_action("Controls/Camera/Move forward");</script></td>
+        </tr>
+        <tr>
+        <td style="text-align: left;">Toggle | Mode</td>
+        <td><script>print_action("Controls/Map view/Unknown action");</script></td>
+        </tr>
+        </tbody>
+        </table>
+        <p>Move the camera to the next point with
+        <script>print_menu_item("Menu/View/Camera/Move to Next Point");</script>.</p>
+        <h4 id="orbiting">Orbiting</h4>
+        <p>The camera orbit mode rotates the camera about a point.</p>
+        <ol type="1">
+        <li>Select an object and choose
+        <script>print_menu_item("Menu/Edit/Copy");</script></li>
+        <li>Hold <script>print_key("Alt");</script> and drag the mouse.</li>
+        </ol>
+        <h1 id="editing">Editing</h1>
+        <p>The map file format:</p>
+        <pre><code>1. `Map      = Entity {Entity}`
+2. `Entity   = {Property} {Brush}`</code></pre>
+        <dl>
+        <dt>Group</dt>
+        <dd>
+        <a href="#groups">Groups</a> the selected objects.
+        </dd>
+        <dt>Ungroup</dt>
+        <dd>
+        Ungroups the selected objects.
+        </dd>
+        </dl>
+        <h2 id="vertex_editing">Vertex Editing</h2>
+        <p>The vertex tool edits the vertices of brushes. Select brushes and
+        choose <script>print_menu_item("Menu/Edit/Tools/Vertex Tool");</script> to
+        activate the vertex tool.</p>
+        <p>Vertices can be moved, merged and split. Moving a vertex onto
+        another vertex merges the two vertices. Brushes stay convex while
+        vertices are moved; the tool removes vertices that would make a brush
+        concave. This paragraph is long so that the section text can be paged
+        in small pieces for the paging tests of manual_section.</p>
+        <p>Another paragraph describes the edge tool and the face tool, which
+        work like the vertex tool on edges and faces.</p>
+      </article>
+    </main>
+  </body>
+</html>

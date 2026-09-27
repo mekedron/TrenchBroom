@@ -19,9 +19,13 @@
 
 #pragma once
 
+#include "base/Color.h"
+#include "base/KeySequence.h"
 #include "base/Notifier.h"
+#include "base/Preference.h"
 #include "base/Result.h"
 #include "mcp/LogCapture.h"
+#include "mcp/Snapshot.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -29,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace tb
@@ -215,11 +220,178 @@ public:
 };
 
 /**
+ * The layout of the views of a document's map window. The number of panes is the global
+ * "Views/Map view layout" preference; the maximized and the current view belong to the
+ * window.
+ */
+struct ViewLayout
+{
+  /** The id of the maximized view ("3d", "xy", "xz" or "yz"), or nullopt. */
+  std::optional<std::string> maximizedView;
+  /** The id of the view that has (or last had) the focus, or nullopt. */
+  std::optional<std::string> currentView;
+};
+
+/**
+ * The user's editor views of a document: their cameras and the maximized view. Changing
+ * them changes what the user sees. Implemented by ui::McpViewHost in the editor and by
+ * FakeViewHost in tests.
+ */
+class ViewHost
+{
+public:
+  virtual ~ViewHost();
+
+  /**
+   * The views of the document's window ("3d", then "xy", "xz", "yz"), each once, with
+   * its current camera, size and whether it is shown in the current layout. Empty if the
+   * document has no window.
+   */
+  virtual std::vector<UserView> views(ui::MapDocument& document) = 0;
+
+  /**
+   * Sets the camera of the given view without animation. For a perspective view the
+   * position, direction and up vector are used, and the field of view if it differs from
+   * the view's current (zoomed) one; it then lasts until the "Field of vision"
+   * preference changes or the views are recreated. For an orthographic view the
+   * position (its component along the view axis is ignored) and the zoom (0.02 to 100)
+   * are used; the direction of a 2D view is fixed. With "Link 2D cameras", the other 2D
+   * views follow. Fails if the document has no window, the view does not exist or the
+   * zoom is out of range.
+   */
+  virtual Result<void> setCamera(
+    ui::MapDocument& document, const std::string& viewId, const AgentCamera& camera) = 0;
+
+  /** The maximized and the current view. Fails if the document has no window. */
+  virtual Result<ViewLayout> layout(ui::MapDocument& document) = 0;
+
+  /**
+   * Maximizes the given view, or restores all views if nullopt. The view becomes the
+   * current view; if it shares a pane with other views (the cycling 2D pane of the two-
+   * and three-pane layouts), the pane is cycled to it first, like the Cycle Map View
+   * action. Fails if the document has no window, the view does not exist, or the layout
+   * has only one pane.
+   */
+  virtual Result<void> setMaximizedView(
+    ui::MapDocument& document, const std::optional<std::string>& viewId) = 0;
+
+  /**
+   * Called before the pane count preference changes, which makes every map window
+   * recreate its views. Moves the keyboard focus out of the map views: the editor
+   * crashes if a view is destroyed while it has the focus (the window's focus change
+   * handler reaches the destroyed view).
+   */
+  virtual void prepareForLayoutChange() = 0;
+};
+
+/** An action of the editor's action registry, as actions_list reports it. */
+struct EditorAction
+{
+  /** The action's preference path, which identifies it, e.g. "Menu/Edit/Undo". */
+  std::string path;
+  std::string label;
+  /**
+   * "menu" (main menu), "view" (map view shortcut), "tag" (a smart tag of the game) or
+   * "entity" (an entity definition of the document).
+   */
+  std::string kind;
+  /** The menu path of a menu action without the label, e.g. {"Edit", "CSG"}. */
+  std::vector<std::string> menu;
+  /** The keyboard shortcuts in portable text, e.g. "Ctrl+Shift+Z". */
+  std::vector<std::string> shortcuts;
+  /** The action context in which the action applies, e.g. "any" or "3D view". */
+  std::string context;
+  /** Whether the action can run now in the window and view it was evaluated for. */
+  bool enabled = false;
+  bool checkable = false;
+  bool checked = false;
+};
+
+/**
+ * The editor's action registry: the main menu, the map view actions and the tag and
+ * entity definition actions of a document. Implemented by ui::McpActionHost in the
+ * editor and by FakeActionHost in tests.
+ */
+class ActionHost
+{
+public:
+  virtual ~ActionHost();
+
+  /**
+   * All actions for the document's window, with enabled and checked evaluated for the
+   * given view ("3d", "xy", "xz", "yz"; default: the window's current view). Fails if
+   * the document has no window or the view does not exist.
+   */
+  virtual Result<std::vector<EditorAction>> actions(
+    ui::MapDocument& document, const std::optional<std::string>& viewId) = 0;
+
+  /**
+   * Runs the action with the given path in the context of the document's window and the
+   * given view (default: the current view), as the menu or the view's shortcut would. If
+   * deferred, the action runs after control returned to the event loop (for actions that
+   * open a modal dialog), and is looked up again by its path then; otherwise it runs
+   * before this function returns. Returns the action as evaluated afterwards (a deferred
+   * action: before it runs). Fails if the document has no window, the action or the view
+   * does not exist, or the action is disabled.
+   */
+  virtual Result<EditorAction> invokeAction(
+    ui::MapDocument& document,
+    const std::string& path,
+    const std::optional<std::string>& viewId,
+    bool deferred) = 0;
+};
+
+/** A preference of any type that preferences_get / preferences_set can access. */
+using AnyPreference = std::variant<
+  Preference<bool>*,
+  Preference<int>*,
+  Preference<float>*,
+  Preference<std::string>*,
+  Preference<std::filesystem::path>*,
+  Preference<Color>*,
+  Preference<std::vector<KeySequence>>*>;
+
+/** A preference that only the host knows, with its category. */
+struct HostPreference
+{
+  AnyPreference preference;
+  /** "keyboard" for action shortcuts, "mcp" for the MCP server's preferences, ... */
+  std::string category;
+  std::string description;
+  /** The range of a numeric preference, if limited. */
+  std::optional<double> minimum = std::nullopt;
+  std::optional<double> maximum = std::nullopt;
+  /**
+   * If not empty, agents cannot change the preference, and preferences_set reports this
+   * reason, e.g. because changing it would restart the MCP server during the call.
+   */
+  std::string lockedReason = {};
+  /** Whether the value is a secret that preferences_get does not report. */
+  bool secret = false;
+};
+
+/**
+ * The preferences that only the host knows: the keyboard shortcuts of the editor's
+ * actions (including the document's tag and entity definition actions) and the host's
+ * own preferences. The core knows the editor's static preferences and the game
+ * preferences itself. Implemented by ui::McpPreferenceHost in the editor and by
+ * FakePreferenceHost in tests.
+ */
+class PreferenceHost
+{
+public:
+  virtual ~PreferenceHost();
+
+  /**
+   * The host's preferences. The pointers stay valid until the next call of this
+   * function. The document, if given, contributes its tag and entity definition actions.
+   */
+  virtual std::vector<HostPreference> preferences(ui::MapDocument* document) = 0;
+};
+
+/**
  * The editor as seen by the MCP server. Implemented by ui::QtMcpHost in the editor and by
  * FakeHost in tests. All functions are called on the thread that owns the server.
- *
- * Further sub-interfaces (actions, views, preferences) are added by
- * the epics that need them.
  */
 class McpHost
 {
@@ -323,6 +495,33 @@ public:
    * The folder may not exist yet. The default implementation returns nullopt.
    */
   virtual std::optional<std::filesystem::path> knowledgeDirectory();
+
+  /**
+   * The user's editor views, or nullptr if the host has none (the camera and layout
+   * tools then fail with UNSUPPORTED_IN_HOST). The default implementation returns
+   * nullptr.
+   */
+  virtual ViewHost* viewHost();
+
+  /**
+   * The editor's action registry, or nullptr if the host has none (actions_list and
+   * action_invoke then fail with UNSUPPORTED_IN_HOST). The default implementation
+   * returns nullptr.
+   */
+  virtual ActionHost* actionHost();
+
+  /**
+   * The preferences only the host knows, or nullptr if there are none. The default
+   * implementation returns nullptr.
+   */
+  virtual PreferenceHost* preferenceHost();
+
+  /**
+   * The user manual as the editor ships it (manual/index.html, generated from the
+   * manual's Markdown source), or nullopt if the host has none (the manual tools then
+   * fail with UNSUPPORTED_IN_HOST). The default implementation returns nullopt.
+   */
+  virtual std::optional<std::filesystem::path> manualPath();
 };
 
 } // namespace tb::mcp

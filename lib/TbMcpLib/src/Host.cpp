@@ -30,6 +30,12 @@ CompileHost::~CompileHost() = default;
 
 EngineHost::~EngineHost() = default;
 
+ViewHost::~ViewHost() = default;
+
+ActionHost::~ActionHost() = default;
+
+PreferenceHost::~PreferenceHost() = default;
+
 McpHost::~McpHost() = default;
 
 CompileHost* McpHost::compileHost()
@@ -60,6 +66,26 @@ ConsoleBuffer* McpHost::consoleBuffer()
 void McpHost::clearConsoleViews() {}
 
 std::optional<std::filesystem::path> McpHost::knowledgeDirectory()
+{
+  return std::nullopt;
+}
+
+ViewHost* McpHost::viewHost()
+{
+  return nullptr;
+}
+
+ActionHost* McpHost::actionHost()
+{
+  return nullptr;
+}
+
+PreferenceHost* McpHost::preferenceHost()
+{
+  return nullptr;
+}
+
+std::optional<std::filesystem::path> McpHost::manualPath()
 {
   return std::nullopt;
 }

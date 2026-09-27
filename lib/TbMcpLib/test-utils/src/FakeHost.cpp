@@ -412,6 +412,30 @@ std::optional<std::filesystem::path> FakeHost::knowledgeDirectory()
   return knowledgeDir;
 }
 
+ViewHost* FakeHost::viewHost()
+{
+  return supportsViews ? &view : nullptr;
+}
+
+ActionHost* FakeHost::actionHost()
+{
+  if (!supportsActions)
+  {
+    return nullptr;
+  }
+  return actionHostOverride ? actionHostOverride : &action;
+}
+
+PreferenceHost* FakeHost::preferenceHost()
+{
+  return supportsPreferences ? &preference : nullptr;
+}
+
+std::optional<std::filesystem::path> FakeHost::manualPath()
+{
+  return manualFile;
+}
+
 std::optional<DocumentInfo> FakeHost::documentToReplace()
 {
   if (!singleWindow || documentList.empty())

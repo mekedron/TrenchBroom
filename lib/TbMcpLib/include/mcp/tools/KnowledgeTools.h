@@ -17,17 +17,18 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+
 #pragma once
 
 namespace tb::mcp
 {
+class ResourceRegistry;
 class ToolRegistry;
 
-/**
- * Registers the view tools: grid_get, grid_set, the user camera tools (camera_get,
- * camera_set, camera_focus, camera_step_pointfile), view_options_get, view_options_set
- * and view_layout_set.
- */
-void registerViewTools(ToolRegistry& registry);
+/** Registers the knowledge tools: manual_search and manual_section. */
+void registerKnowledgeTools(ToolRegistry& registry);
+
+/** Registers the user manual resources. */
+void registerKnowledgeResources(ResourceRegistry& registry);
 
 } // namespace tb::mcp

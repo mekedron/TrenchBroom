@@ -4,6 +4,7 @@ EMBED_UTF8_MANIFEST(TbMcpLibTest)
 target_sources(TbMcpLibTest
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ActionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AgentCamera.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Annotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Args.cpp
@@ -39,6 +40,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_KnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ManifestTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapCheckTools.cpp
@@ -49,6 +51,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Pagination.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PreferenceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PromptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PickTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PlacementChecks.cpp
@@ -82,6 +85,10 @@ target_sources(TbMcpLibTest
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
+
+# The preference catalog test checks the catalog against the editor's preference header
+target_compile_definitions(TbMcpLibTest PRIVATE
+  MCP_TEST_PREFERENCES_HEADER="${CMAKE_SOURCE_DIR}/lib/TbPreferencesLib/include/prefs/Preferences.h")
 
 target_link_libraries(TbMcpLibTest
   PRIVATE

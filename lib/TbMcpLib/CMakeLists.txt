@@ -43,6 +43,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/AssetUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ActionCatalog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ActionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
@@ -65,6 +67,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GeometryUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GroupTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/KnowledgeTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/Manual.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ManifestTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MapCheckTools.cpp
@@ -75,6 +79,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/PickTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/PlacementChecks.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/PreferenceCatalog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/PreferenceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SceneTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
@@ -133,6 +139,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/AssetUtils.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ActionCatalog.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ActionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ClipboardTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
@@ -153,6 +161,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GeometryUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GroupTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/KnowledgeTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/Manual.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/LayerTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ManifestTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MapCheckTools.h
@@ -161,6 +171,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/PickTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/PlacementChecks.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/PreferenceCatalog.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/PreferenceTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h

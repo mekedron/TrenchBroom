@@ -17,17 +17,24 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+
 #pragma once
+
+#include "mcp/Host.h"
+
+#include <vector>
 
 namespace tb::mcp
 {
-class ToolRegistry;
 
-/**
- * Registers the view tools: grid_get, grid_set, the user camera tools (camera_get,
- * camera_set, camera_focus, camera_step_pointfile), view_options_get, view_options_set
- * and view_layout_set.
- */
-void registerViewTools(ToolRegistry& registry);
+/** A preference host for tests. */
+class FakePreferenceHost : public PreferenceHost
+{
+public:
+  /** Returned by preferences(). */
+  std::vector<HostPreference> preferenceList;
+
+  std::vector<HostPreference> preferences(ui::MapDocument* document) override;
+};
 
 } // namespace tb::mcp
