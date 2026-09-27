@@ -158,6 +158,8 @@ private:
   std::set<std::string> m_pendingUpdates;
   std::set<std::pair<ui::MapDocument*, DocumentAspect>> m_pendingDocumentUpdates;
   bool m_flushScheduled = false;
+  /** A console resource update is scheduled (delayed to coalesce bursts). */
+  bool m_consoleUpdateScheduled = false;
 
 public:
   ServerState(
@@ -232,6 +234,7 @@ private:
   void documentWillClose(ui::MapDocument& document);
   void documentsDidChange();
   void documentAspectDidChange(ui::MapDocument& document, DocumentAspect aspect);
+  void consoleDidChange(bool cleared);
   bool hasSubscriptions() const;
   void scheduleFlush();
   void flushResourceUpdates();

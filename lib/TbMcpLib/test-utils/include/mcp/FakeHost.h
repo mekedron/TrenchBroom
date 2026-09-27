@@ -19,15 +19,19 @@
 
 #pragma once
 
+#include "mcp/ConsoleBuffer.h"
 #include "mcp/Host.h"
+#include "mcp/Snapshot.h"
 #include "mdl/CompilationProfile.h"
 #include "mdl/EnvironmentConfig.h"
 
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kdl
@@ -123,6 +127,69 @@ private:
 };
 
 /**
+ * A snapshot renderer for tests. It records every request and returns a deterministic
+ * image that depends on the request: a background whose color depends on the camera and
+ * the options, plus one 4 x 4 pixel block per drawn node (brushes, patches, point
+ * entities) at a position derived from the node's bounds, in a color that depends on
+ * the node's kind, whether it is highlighted and how many of its faces pass the face
+ * filter. Toggling objects therefore changes the image.
+ */
+class FakeSnapshotRenderer : public SnapshotRenderer
+{
+public:
+  /** What a render request contained; the node pointers must not be dereferenced. */
+  struct RecordedRequest
+  {
+    AgentCamera camera;
+    size_t width = 0;
+    size_t height = 0;
+    SnapshotOptions options;
+    std::vector<const mdl::Node*> nodes;
+    std::vector<const mdl::Node*> highlighted;
+    Color highlightColor;
+    std::vector<SnapshotMarker> markers;
+    /** For each listed brush: the indices of the faces that pass the face filter. */
+    std::vector<std::pair<const mdl::Node*, std::vector<size_t>>> visibleFaces;
+    bool hasFaceFilter = false;
+
+    bool contains(const mdl::Node& node) const;
+    bool isHighlighted(const mdl::Node& node) const;
+    /** The visible faces of the brush, or nullopt if it was not drawn. */
+    std::optional<std::vector<size_t>> facesOf(const mdl::Node& node) const;
+  };
+
+  /** Every render request so far, in order. */
+  std::vector<RecordedRequest> requests;
+  /** resourcesPending() returns true this many times, then false. */
+  size_t pendingChecks = 0;
+  /** The number of resourcesPending() calls. */
+  size_t resourceChecks = 0;
+  /** If set, render() fails with this message. */
+  std::optional<std::string> renderError;
+  /** Returned by userViews(). */
+  std::vector<UserView> userViewList;
+  /** Returned by captureUserView() for a view id; other ids fail. */
+  std::vector<std::pair<std::string, RgbaImage>> captures;
+  /** The view ids passed to captureUserView(). */
+  std::vector<std::string> capturedViews;
+  /** If true, encodeJpeg() returns "JPEG" followed by the quality. */
+  bool supportsJpeg = false;
+  /** Called by render() after the request was recorded, e.g. to cancel the call. */
+  std::function<void(const RecordedRequest&)> onRender;
+
+  bool resourcesPending(ui::MapDocument& document) override;
+  Result<RgbaImage> render(
+    ui::MapDocument& document, const SnapshotRequest& request) override;
+  std::vector<UserView> userViews(ui::MapDocument& document) override;
+  Result<RgbaImage> captureUserView(
+    ui::MapDocument& document, const std::string& viewId) override;
+  std::optional<std::string> encodeJpeg(const RgbaImage& image, int quality) override;
+
+  /** The most recent request. Precondition: !requests.empty() */
+  const RecordedRequest& last() const;
+};
+
+/**
  * A host for tests. Documents are registered explicitly or created through the document
  * host; the busy state and other editor state can be set directly.
  *
@@ -133,6 +200,10 @@ private:
  * game manager writes the user's configuration files (compilation profiles, engine
  * profiles) to the host's temporary directory, which is removed when the host is
  * destroyed.
+ *
+ * Like the editor's map windows, the host makes a logger that adds to `console` the
+ * target logger of every document it registers (logTarget()), so document messages reach
+ * the console buffer. Registered documents must be destroyed before the host.
  */
 class FakeHost : public McpHost, public DocumentHost
 {
@@ -160,6 +231,20 @@ public:
   /** If false, compileHost() returns nullptr (a host that cannot compile). */
   bool supportsCompile = true;
 
+  /** The snapshot renderer returned by snapshotRenderer(). */
+  FakeSnapshotRenderer snapshot;
+  /** If set, snapshotRenderer() returns this renderer instead of `snapshot`. */
+  SnapshotRenderer* snapshotRendererOverride = nullptr;
+  /** If false, snapshotRenderer() returns nullptr (a host that cannot render). */
+  bool supportsSnapshots = true;
+
+  /** The console buffer; the documents' messages are added to it (see logTarget()). */
+  ConsoleBuffer console;
+  /** If false, consoleBuffer() returns nullptr (a host without a console). */
+  bool supportsConsole = true;
+  /** The number of clearConsoleViews() calls. */
+  size_t clearConsoleViewsCount = 0;
+
 private:
   size_t m_nextDocumentId = 1;
   std::unique_ptr<fs::TestEnvironment> m_configEnvironment;
@@ -168,6 +253,13 @@ private:
   std::unique_ptr<mdl::GameManager> m_gameManager;
   /** Documents created by the document host, including closed ones. */
   std::vector<std::unique_ptr<ui::MapDocument>> m_ownedDocuments;
+
+  class ConsoleLogger;
+  /** The loggers that add the documents' messages to the console buffer. */
+  std::unordered_map<const ui::MapDocument*, std::unique_ptr<ConsoleLogger>>
+    m_consoleLoggers;
+  /** Serializes messages that documents log on worker threads. */
+  std::mutex m_consoleMutex;
 
 public:
   FakeHost();
@@ -198,6 +290,11 @@ public:
   DocumentHost& documentHost() override;
   mdl::GameManager& gameManager() override;
   CompileHost* compileHost() override;
+  SnapshotRenderer* snapshotRenderer() override;
+  /** A logger that adds the messages to `console` with the document and its title. */
+  Logger* logTarget(ui::MapDocument& document) override;
+  ConsoleBuffer* consoleBuffer() override;
+  void clearConsoleViews() override;
 
   // DocumentHost
   std::optional<DocumentInfo> documentToReplace() override;
@@ -213,6 +310,8 @@ public:
 
 private:
   std::optional<DocumentInfo> findDocumentInfo(const ui::MapDocument& document) const;
+  void logToConsole(
+    const ui::MapDocument& document, LogLevel level, std::string_view message);
   void processResources();
 };
 

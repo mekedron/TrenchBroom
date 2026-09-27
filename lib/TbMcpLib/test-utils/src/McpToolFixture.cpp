@@ -187,8 +187,9 @@ Json McpToolFixture::callRawAs(
       "tools/call",
       Json{{"name", tool}, {"arguments", std::move(arguments)}}));
 
-  // asynchronous tools complete in scheduled steps
-  while (!stream->response.has_value() && m_scheduler.runPending() > 0)
+  // asynchronous tools complete in scheduled steps, some of them delayed
+  while (!stream->response.has_value()
+         && (m_scheduler.runPending() > 0 || m_scheduler.advanceToNextTask()))
   {
   }
   REQUIRE(stream->response.has_value());

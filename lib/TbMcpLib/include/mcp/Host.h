@@ -48,6 +48,8 @@ class MapDocument;
 
 namespace tb::mcp
 {
+class ConsoleBuffer;
+class SnapshotRenderer;
 
 enum class BusyState
 {
@@ -256,6 +258,26 @@ public:
    * returns nullptr.
    */
   virtual Logger* logTarget(ui::MapDocument& document);
+
+  /**
+   * Renders snapshots offscreen, or nullptr if the host cannot render (the snapshot
+   * tools then fail with UNSUPPORTED_IN_HOST). The default implementation returns
+   * nullptr.
+   */
+  virtual SnapshotRenderer* snapshotRenderer();
+
+  /**
+   * The buffer of the messages the editor logged to its consoles, or nullptr if the host
+   * has no console (the console tools then fail with UNSUPPORTED_IN_HOST). The default
+   * implementation returns nullptr.
+   */
+  virtual ConsoleBuffer* consoleBuffer();
+
+  /**
+   * Clears the console views of the editor's windows (console_clear). The default
+   * implementation does nothing.
+   */
+  virtual void clearConsoleViews();
 };
 
 } // namespace tb::mcp

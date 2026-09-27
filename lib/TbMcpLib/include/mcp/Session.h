@@ -19,17 +19,36 @@
 
 #pragma once
 
+#include "mcp/AgentCamera.h"
+#include "mcp/Image.h"
 #include "mcp/Json.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace tb::mcp
 {
 class NotificationStream;
+
+/** A snapshot image kept by an agent (view_snapshot keepAs) for view_snapshot_compare. */
+struct KeptSnapshot
+{
+  std::string name;
+  /** The handle of the document it shows. */
+  std::string documentId;
+  AgentCamera camera;
+  size_t width = 0;
+  size_t height = 0;
+  /** The view arguments of view_snapshot (options, isolate, highlight). */
+  Json view = Json::object();
+  RgbaImage image;
+};
 
 /**
  * The state of one connected client. Each `initialize` creates a session.
@@ -56,6 +75,20 @@ public:
   std::weak_ptr<NotificationStream> notificationStream;
 
   std::string logLevel = "info";
+
+  /** The most agent cameras a session can have. */
+  static constexpr size_t MaxAgentCameras = 64;
+  /** The most snapshots a session keeps; keeping another drops the oldest. */
+  static constexpr size_t MaxKeptSnapshots = 8;
+
+  /**
+   * The session's named agent cameras (agent_camera_set). They are never shown as the
+   * user's camera.
+   */
+  std::map<std::string, AgentCamera> agentCameras;
+
+  /** The kept snapshots, oldest first. */
+  std::vector<KeptSnapshot> keptSnapshots;
 
   /**
    * Sends a notification over the standalone stream if the session is initialized and

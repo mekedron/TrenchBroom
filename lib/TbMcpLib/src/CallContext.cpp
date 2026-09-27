@@ -117,6 +117,14 @@ void CallContext::addImage(const std::string_view data, std::string mimeType)
   });
 }
 
+void CallContext::addText(std::string text)
+{
+  m_content.push_back(Json{
+    {"type", "text"},
+    {"text", std::move(text)},
+  });
+}
+
 const std::vector<Json>& CallContext::content() const
 {
   return m_content;
@@ -166,10 +174,10 @@ void CallContext::cancel()
   m_cancelled = true;
 }
 
-void CallContext::defer(std::function<void()> step)
+void CallContext::defer(std::function<void()> step, const std::chrono::milliseconds delay)
 {
   contract_pre(m_deferrer != nullptr);
-  m_deferrer(std::move(step));
+  m_deferrer(std::move(step), delay);
 }
 
 void CallContext::setDeferrer(Deferrer deferrer)

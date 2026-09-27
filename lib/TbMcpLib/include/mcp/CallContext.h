@@ -24,6 +24,7 @@
 #include "mcp/Json.h"
 #include "mcp/LogCapture.h"
 
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -60,7 +61,8 @@ class CallContext
 public:
   using ProgressFn =
     std::function<void(double progress, std::optional<double> total, const std::string&)>;
-  using Deferrer = std::function<void(std::function<void()>)>;
+  using Deferrer =
+    std::function<void(std::function<void()>, std::chrono::milliseconds delay)>;
 
 private:
   ServerState& m_server;
@@ -113,7 +115,12 @@ public:
    * structured result. `data` are the raw bytes of the image, e.g. a PNG file.
    */
   void addImage(std::string_view data, std::string mimeType);
-  /** The content blocks added with addImage. */
+  /**
+   * Adds a text block to the CallToolResult's `content`, after the blocks added so far,
+   * e.g. a label before an image.
+   */
+  void addText(std::string text);
+  /** The content blocks added with addImage and addText. */
   const std::vector<Json>& content() const;
 
   /** Emits `notifications/progress` if the client asked for progress. */
@@ -141,9 +148,12 @@ public:
   /**
    * For asynchronous tools: runs the given step later on the main thread, after pending
    * events (such as a cancellation) were processed. The step is dropped if the call was
-   * abandoned, e.g. because the server shut down.
+   * abandoned, e.g. because the server shut down. With a delay, the step runs after
+   * the delay instead, e.g. to wait for resources to load without blocking.
    */
-  void defer(std::function<void()> step);
+  void defer(
+    std::function<void()> step,
+    std::chrono::milliseconds delay = std::chrono::milliseconds{0});
   void setDeferrer(Deferrer deferrer);
 
   /**

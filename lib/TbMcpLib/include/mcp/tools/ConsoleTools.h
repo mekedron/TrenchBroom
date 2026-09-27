@@ -17,39 +17,21 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/Host.h"
+
+#pragma once
 
 namespace tb::mcp
 {
+class ResourceRegistry;
+class ToolRegistry;
 
-DocumentHost::~DocumentHost() = default;
+/** The URI of the console resource. */
+inline constexpr auto ConsoleResourceUri = "trenchbroom://console";
 
-CompileJob::~CompileJob() = default;
+/** Registers console_read and console_clear. */
+void registerConsoleTools(ToolRegistry& registry);
 
-CompileHost::~CompileHost() = default;
-
-McpHost::~McpHost() = default;
-
-CompileHost* McpHost::compileHost()
-{
-  return nullptr;
-}
-
-Logger* McpHost::logTarget(ui::MapDocument&)
-{
-  return nullptr;
-}
-
-SnapshotRenderer* McpHost::snapshotRenderer()
-{
-  return nullptr;
-}
-
-ConsoleBuffer* McpHost::consoleBuffer()
-{
-  return nullptr;
-}
-
-void McpHost::clearConsoleViews() {}
+/** Registers the console resource trenchbroom://console. */
+void registerConsoleResources(ResourceRegistry& registry);
 
 } // namespace tb::mcp

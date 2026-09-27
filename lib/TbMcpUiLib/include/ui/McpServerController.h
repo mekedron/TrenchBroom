@@ -45,6 +45,7 @@ struct ServerActivity;
 namespace ui
 {
 class AppController;
+class McpConsoleHook;
 class McpTcpTransport;
 class QtMcpHost;
 class QtScheduler;
@@ -85,6 +86,8 @@ private:
   AppController& m_appController;
   bool m_forceEnabled = false;
 
+  /** Collects the console messages from editor start; outlives the server. */
+  std::unique_ptr<McpConsoleHook> m_consoleHook;
   std::unique_ptr<QtScheduler> m_scheduler;
   std::unique_ptr<QtMcpHost> m_host;
   std::unique_ptr<mcp::McpServer> m_server;
@@ -145,6 +148,9 @@ public:
 
   /** The host, if the server is running. */
   QtMcpHost* host();
+
+  /** Collects the messages of the editor's consoles, also while the server is stopped. */
+  McpConsoleHook& consoleHook();
 
   /** The path of the discovery file that is written while the server listens. */
   std::filesystem::path discoveryFilePath() const;

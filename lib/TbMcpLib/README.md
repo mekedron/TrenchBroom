@@ -46,8 +46,9 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
    - `Mutation::External` for non-undoable side effects (the handler must honor
      `context.dryRun()`). Long operations use `.asyncHandler(...)` instead of `.handler(...)`:
      they report progress with `context.progress`, continue in steps scheduled with
-     `context.defer`, check `context.cancelled()` between steps, and call the completion once
-     (see `document_open`).
+     `context.defer` (optionally delayed), check `context.cancelled()` between steps, and call
+     the completion once (see `document_open`). Read-only tools may be asynchronous too; they
+     start immediately and may run while other calls run (see `view_snapshot`).
 3. Change the map only through the `mdl::` free functions (`Map_*.h`). Use
    `resolveTargets` / `withTargets` (`Targets.h`) for tools that act on "ids or the
    current selection" (`faceTargetsField` / `resolveFaceTargets` / `withFaces` for tools
@@ -71,6 +72,14 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   that creates, loads and closes documents and the `CompileHost` sub-interface that runs
   compile profiles as `CompileJob`s). The editor implements it in `TbMcpUiLib` (`QtMcpHost`,
   `McpCompileHost`); tests use `FakeHost` and `FakeCompileHost` from `TbMcpTestUtilsLib`.
+- `Snapshot` (`SnapshotRenderer`, `SnapshotRequest`), `AgentCamera`, `Image`: agent vision. The
+  core resolves agent cameras and visibility options into a request; the host's renderer
+  (`McpSnapshotRenderer` in `TbMcpUiLib`, `FakeSnapshotRenderer` in tests) draws it offscreen
+  without touching the user's views. `Image` has PNG encoding, side-by-side composition and
+  changed-pixel diffs.
+- `ConsoleBuffer`: the editor's console messages from editor start (filled by
+  `McpConsoleHook` in `TbMcpUiLib`, by `FakeHost` in tests); `console_read` reads it, and
+  every call result lists the warnings and errors logged while the call ran (`console`).
 - `CompileRuns`: the compile runs (`run:<n>`) with their jobs and logs, owned by `ServerState`.
 - `LogCapture`: records the warnings and errors the editor logs during a call or while a
   document loads.

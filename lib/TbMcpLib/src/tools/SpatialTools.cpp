@@ -26,6 +26,7 @@
 #include "mcp/ObjectIds.h"
 #include "mcp/ToolRegistry.h"
 #include "mcp/tools/GeometryUtils.h"
+#include "mcp/tools/SnapshotTools.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
@@ -627,6 +628,30 @@ std::string_view legendText(const char c)
   }
 }
 
+/** The marker color of an entity character in the plan image. */
+Color markerColor(const char c)
+{
+  switch (c)
+  {
+  case 'P':
+    return RgbaF{0.2f, 1.0f, 0.2f, 1.0f};
+  case 'M':
+    return RgbaF{1.0f, 0.2f, 0.2f, 1.0f};
+  case 'I':
+    return RgbaF{0.2f, 0.8f, 1.0f, 1.0f};
+  case 'L':
+    return RgbaF{1.0f, 0.9f, 0.2f, 1.0f};
+  default:
+    return RgbaF{0.9f, 0.9f, 0.9f, 1.0f};
+  }
+}
+
+std::optional<size_t> optionalSize(const Args& args, const std::string_view key)
+{
+  const auto value = args.getOptional<int64_t>(key);
+  return value ? std::optional{size_t(*value)} : std::nullopt;
+}
+
 template <typename F>
 void visitPlanNodes(const mdl::Node& node, const NodeFilter& filter, const F& f)
 {
@@ -656,6 +681,9 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
   const auto showEntities = args.get<bool>("showEntities");
   const auto floorDepth = args.get<double>("floorDepth");
   const auto maxEntities = size_t(args.get<int64_t>("maxEntities"));
+  const auto format = args.getOr<std::string>("format", "text");
+  const auto wantText = format != "image";
+  const auto wantImage = format != "text";
 
   auto region = args.getOptional<vm::bbox3d>("region");
   if (!region)
@@ -730,7 +758,7 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
     return !brushNode || classifyBrush(*brushNode) != BrushClass::Trigger;
   };
 
-  for (size_t row = 0; row < rows; ++row)
+  for (size_t row = 0; wantText && row < rows; ++row)
   {
     const auto y1 = topY - double(row) * *cellSize;
     const auto y0 = y1 - *cellSize;
@@ -782,6 +810,7 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
 
   auto entities = Json::array();
   auto entityCount = size_t(0);
+  auto markers = std::vector<SnapshotMarker>{};
   if (showEntities)
   {
     visitPlanNodes(map.worldNode(), filter, [&](const mdl::Node& node) {
@@ -810,6 +839,10 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
       if (entityPriority(c) > entityPriority(cell))
       {
         cell = c;
+      }
+      if (wantImage)
+      {
+        markers.push_back(SnapshotMarker{origin, markerColor(c), std::string(1, c)});
       }
 
       ++entityCount;
@@ -885,6 +918,36 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
   if (entityCount > entities.size())
   {
     result["entitiesTruncated"] = true;
+  }
+  if (!wantText)
+  {
+    result.erase("text");
+    result.erase("legend");
+  }
+
+  if (wantImage)
+  {
+    auto image = renderPlanImage(
+      context,
+      PlanImageRequest{
+        .originX = originX,
+        .originY = originY,
+        .cellSize = *cellSize,
+        .columns = columns,
+        .rows = rows,
+        .height = height,
+        .floorDepth = floorDepth,
+        .includeHidden = args.get<bool>("includeHidden"),
+        .width = optionalSize(args, "imageWidth"),
+        .imageHeight = optionalSize(args, "imageHeight"),
+        .markers = std::move(markers),
+      });
+    if (image.is_error())
+    {
+      return errorOf(image);
+    }
+    result["image"] = std::move(image.value()["image"]);
+    result["camera"] = std::move(image.value()["camera"]);
   }
   return result;
 }
@@ -1061,6 +1124,16 @@ void registerSpatialTools(ToolRegistry& registry)
         field("maxEntities", integer().min(0).max(1000).defaultsTo(100))
           .describe("Maximum number of entities listed"),
         includeHiddenField,
+        field("format", enumOf({"text", "image", "both"}).defaultsTo("text"))
+          .describe(
+            "text: the character grid; image: a top-down orthographic render of the "
+            "slice (geometry above the height is cut away, floors down to floorDepth "
+            "are visible, point entities are marked with their plan character in "
+            "the legend's colors: P green, M red, I cyan, L yellow, E white); both"),
+        field("imageWidth", integer().min(16).max(2048))
+          .describe("Image width in pixels (default: up to 16 pixels per cell)"),
+        field("imageHeight", integer().min(16).max(2048))
+          .describe("Image height in pixels (default: up to 16 pixels per cell)"),
       }))
       .output(object({
         field("text", string()).describe("The plan, rows separated by newlines"),
@@ -1074,6 +1147,9 @@ void registerSpatialTools(ToolRegistry& registry)
         field("rows", integer()),
         field("height", number()),
         field("region", box()),
+        field("image", any())
+          .describe("Image formats: {width, height, format, bytes, savedTo}"),
+        field("camera", any()).describe("Image formats: the orthographic camera used"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)

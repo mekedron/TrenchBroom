@@ -35,6 +35,7 @@
 #include "ui/ViewConstants.h"
 
 #include "kd/contracts.h"
+#include "kd/set_temp.h"
 
 #include <string>
 
@@ -42,6 +43,8 @@ namespace tb::ui
 {
 namespace
 {
+
+QMutex messageLoggedMutex;
 
 auto getForegroundBrush(const LogLevel level, const QPalette& palette)
 {
@@ -63,6 +66,8 @@ auto getForegroundBrush(const LogLevel level, const QPalette& palette)
 }
 
 } // namespace
+
+Notifier<Console&, LogLevel, std::string_view> Console::messageLoggedNotifier;
 
 Console::Console(QWidget* parent)
   : TabBookPage{parent}
@@ -88,9 +93,22 @@ void Console::doLog(const LogLevel level, const std::string_view message)
 {
   if (!message.empty())
   {
+    thread_local auto notifying = false;
+    if (!notifying)
+    {
+      auto notifyLock = QMutexLocker{&messageLoggedMutex};
+      const auto setNotifying = kdl::set_temp{notifying};
+      messageLoggedNotifier(*this, level, message);
+    }
     auto lock = QMutexLocker{&m_cacheMutex};
     m_cache.cacheMessage(level, message);
   }
+}
+
+void Console::clear()
+{
+  logCachedMessages();
+  m_textView->clear();
 }
 
 void Console::logToDebugOut(const LogLevel /* level */, const std::string& message)

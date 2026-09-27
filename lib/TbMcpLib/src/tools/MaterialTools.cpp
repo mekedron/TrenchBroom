@@ -31,6 +31,7 @@
 #include "gl/TextureBuffer.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
+#include "mcp/Image.h"
 #include "mcp/ObjectIds.h"
 #include "mcp/Pagination.h"
 #include "mcp/Targets.h"
@@ -68,7 +69,6 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
-#include <miniz.h>
 
 #include <algorithm>
 #include <cctype>
@@ -912,13 +912,6 @@ ToolResult materialReplace(CallContext& context, const Args& args)
 
 // material_preview
 
-struct RgbaImage
-{
-  size_t width = 0;
-  size_t height = 0;
-  std::vector<unsigned char> pixels;
-};
-
 Result<RgbaImage, ToolError> toRgbaImage(
   const gl::Texture& texture, const std::string& name)
 {
@@ -1025,54 +1018,6 @@ Result<gl::Texture, ToolError> reloadTexture(
   return std::move(texture).value();
 }
 
-RgbaImage downscale(const RgbaImage& image, const size_t maxSize)
-{
-  const auto longest = std::max(image.width, image.height);
-  if (longest <= maxSize)
-  {
-    return image;
-  }
-
-  const auto scale = double(maxSize) / double(longest);
-  const auto width =
-    std::max(size_t{1}, size_t(std::lround(double(image.width) * scale)));
-  const auto height =
-    std::max(size_t{1}, size_t(std::lround(double(image.height) * scale)));
-
-  auto result = RgbaImage{width, height, std::vector<unsigned char>(width * height * 4)};
-  for (size_t y = 0; y < height; ++y)
-  {
-    const auto y0 = y * image.height / height;
-    const auto y1 = std::max(y0 + 1, (y + 1) * image.height / height);
-    for (size_t x = 0; x < width; ++x)
-    {
-      const auto x0 = x * image.width / width;
-      const auto x1 = std::max(x0 + 1, (x + 1) * image.width / width);
-
-      // box filter: average of the covered source pixels
-      size_t sum[4] = {0, 0, 0, 0};
-      for (auto sy = y0; sy < y1; ++sy)
-      {
-        for (auto sx = x0; sx < x1; ++sx)
-        {
-          const auto* src = image.pixels.data() + (sy * image.width + sx) * 4;
-          for (size_t c = 0; c < 4; ++c)
-          {
-            sum[c] += src[c];
-          }
-        }
-      }
-      const auto count = (y1 - y0) * (x1 - x0);
-      auto* dst = result.pixels.data() + (y * width + x) * 4;
-      for (size_t c = 0; c < 4; ++c)
-      {
-        dst[c] = static_cast<unsigned char>((sum[c] + count / 2) / count);
-      }
-    }
-  }
-  return result;
-}
-
 std::string averageColor(const RgbaImage& image)
 {
   size_t sum[3] = {0, 0, 0};
@@ -1089,20 +1034,6 @@ std::string averageColor(const RgbaImage& image)
     (sum[0] + count / 2) / count,
     (sum[1] + count / 2) / count,
     (sum[2] + count / 2) / count);
-}
-
-std::optional<std::string> encodePng(const RgbaImage& image)
-{
-  auto size = size_t{0};
-  auto* png = tdefl_write_image_to_png_file_in_memory_ex(
-    image.pixels.data(), int(image.width), int(image.height), 4, &size, 6, MZ_FALSE);
-  if (!png)
-  {
-    return std::nullopt;
-  }
-  auto result = std::string{static_cast<const char*>(png), size};
-  mz_free(png);
-  return result;
 }
 
 ToolResult materialPreview(CallContext& context, const Args& args)

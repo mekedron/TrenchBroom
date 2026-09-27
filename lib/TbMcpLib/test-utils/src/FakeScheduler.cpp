@@ -83,6 +83,19 @@ void FakeScheduler::advance(const std::chrono::milliseconds duration)
   runPending();
 }
 
+bool FakeScheduler::advanceToNextTask()
+{
+  const auto it = std::ranges::min_element(
+    m_tasks, [](const auto& lhs, const auto& rhs) { return lhs.due < rhs.due; });
+  if (it == m_tasks.end())
+  {
+    return false;
+  }
+  m_now = std::max(m_now, it->due);
+  runPending();
+  return true;
+}
+
 size_t FakeScheduler::pendingTaskCount() const
 {
   return m_tasks.size();

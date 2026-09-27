@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-27 · Status: implemented for E1–E8; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-27 · Status: implemented for E1–E10; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint of the MCP server. It describes the current design and
 implementation. When the code and this document disagree, fix the code or update this document in the
@@ -23,6 +23,7 @@ same change.
 | Change report | Collected from `MapDocument` notifiers during the call, reduced to net created/modified/removed sets plus the selection and the issues the call introduced. |
 | Errors | Tool failures are `CallToolResult{isError:true}` with a structured `error` object (`code`, `message`, `objectIds`, `hint`). JSON-RPC errors are used only for protocol faults. |
 | Schemas | A C++ builder DSL produces both the JSON Schema that `tools/list` publishes and the validator/decoder of the call. One source of truth. |
+| Vision and console | Offscreen snapshots from agent cameras (`McpSnapshotRenderer` behind the `SnapshotRenderer` seam) with per-snapshot visibility, never touching the user's views; a bounded buffer of all console messages, `console_read`, and a `console` report in every call result. |
 | Tests | `TbMcpLibTest` (Catch2), headless over `MapDocumentFixture` with `FakeHost`, `FakeScheduler` and an in-process client (`McpToolFixture`). Qt transport, host and editor integration tests are in `TbMcpUiLibTest`. |
 
 ---
@@ -63,7 +64,12 @@ lib/TbMcpLib/
     McpServer.h             protocol engine: sessions, lifecycle, method dispatch (transport-neutral)
     ServerState.h           state shared with tools: host, scheduler, options, registries, sessions,
                             DocumentState per document, CallRunner, ServerActivity
-    Session.h               per-client state: id, version, capabilities, subscriptions, active document, streams
+    Session.h               per-client state: id, version, capabilities, subscriptions, active document, streams,
+                            named agent cameras, kept snapshots (§10.12)
+    Snapshot.h              SnapshotRequest/Scene/Options, UserView, the SnapshotRenderer interface (§10.12)
+    AgentCamera.h           AgentCamera, camera math and framing helpers, camera JSON (§10.12)
+    Image.h                 RgbaImage, PNG encoding, side-by-side composition, changed-pixel diff, downscale
+    ConsoleBuffer.h         bounded buffer of the editor's console messages (§9.1)
     HttpParser.h            incremental HTTP/1.1 request parser (Content-Length bodies only)
     HttpResponse.h          response and SSE frame serialization
     StreamableHttp.h        Streamable HTTP state machine over an abstract HttpConnection
@@ -88,6 +94,7 @@ lib/TbMcpLib/
     Resources.h             registerResources (§8)
     RegisterAll.h           registerAll(McpServer&): every register<Domain>Tools + registerResources
     tools/<Domain>Tools.h   `void register<Domain>Tools(ToolRegistry&)` plus helpers shared with resources
+                            (ConsoleTools.h also declares registerConsoleResources)
     tools/CompileUtils.h    compile presets per game family, tool path checks, profile JSON (§10.10)
     tools/CompileLog.h      compile log analysis: tasks, exit codes, errors, warnings, leaks (§10.10)
   src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
@@ -116,6 +123,8 @@ unchanged. Headers are in `include/ui/` (included as `ui/...`); it links `TbUiLi
 | `McpCompileHost.{h,cpp}` | Implements `mcp::CompileHost` with the editor's `CompilationRun` (§10.10). Owned by `QtMcpHost`. |
 | `McpPreferencePane.{h,cpp}` | "AI Agents" pane added to `PreferenceDialog` (icon `McpPreferences.svg`): enable, port, bind address, access token (required only for non-loopback binding), log to file, busy-wait timeout. |
 
+| `McpSnapshotRenderer.{h,cpp}` | Implements `mcp::SnapshotRenderer` with an offscreen GL context and framebuffer (§10.12). Owned by `QtMcpHost`, created on first use from `AppController::glManager()` and `findMapWindow` (only the user-view capture needs windows). |
+| `McpConsoleHook.{h,cpp}` | Owns the `mcp::ConsoleBuffer` and fills it from `Console::messageLoggedNotifier` (§9.1, §15). Created by `McpServerController` in its constructor, so it records from editor start whether or not the server runs, and outlives the server; `QtMcpHost::setConsoleHook` gives the host access. |
 | `McpUiIntegration.{h,cpp}` | Adds the MCP widgets to editor windows and dialogs: `addMcpStatusIndicator` (appends the indicator to the window's status bar once); `addMcpPreferencePane` (adds the pane once with `PreferenceDialog::addPane`, §15). |
 | `McpPreferences.h` | The MCP preferences, namespace `tb::McpPreferences` (below). |
 
@@ -292,11 +301,16 @@ transaction, and closes all sessions (clients must re-initialize).
 
 ### 4.2 Asynchronous tools
 
-`ToolDef::asyncHandler(fn)` with `fn(CallContext&, const Args&, ToolCompletion)` is only for
-`Mutation::External` tools. They go through the queue, and the queue waits until the call completes. The
-handler continues in steps scheduled with `CallContext::defer`, checks `CallContext::cancelled()` between
-them, and calls the completion once. `ctx.progress(progress, total, message)` emits `notifications/progress`
-when the client sent a `progressToken`.
+`ToolDef::asyncHandler(fn)` with `fn(CallContext&, const Args&, ToolCompletion)` is for `Mutation::External`
+and `Mutation::None` tools. External tools go through the queue, and the queue waits until the call
+completes. Read-only (`None`) asynchronous tools — the snapshot tools (§10.12) — start immediately, skip the
+busy wait, never open a transaction, and may run while other calls (also other asynchronous ones) run; they
+have no `ScopedLogCapture` (it would interfere with the captures of the calls running meanwhile), so their
+console messages are reported through the console buffer (§9.1). Their result is the handler's JSON, like
+a synchronous read-only call. The handler continues in steps scheduled with `CallContext::defer(step,
+delay = 0)` (a delay waits without blocking, e.g. for materials to load), checks `CallContext::cancelled()`
+between them, and calls the completion once. `ctx.progress(progress, total, message)` emits
+`notifications/progress` when the client sent a `progressToken`.
 
 - `notifications/cancelled` for a running asynchronous call sets the cancelled flag (cooperative).
 - Closing the session or **Stop agent** abandons the call with `CANCELLED` and drops its pending steps.
@@ -340,6 +354,10 @@ public:
   virtual DocumentHost& documentHost() = 0;
   virtual mdl::GameManager& gameManager() = 0;
   virtual CompileHost* compileHost();                       // default nullptr → UNSUPPORTED_IN_HOST
+  virtual Logger* logTarget(ui::MapDocument&);               // the window console, default nullptr
+  virtual SnapshotRenderer* snapshotRenderer();             // §10.12, default nullptr → UNSUPPORTED_IN_HOST
+  virtual ConsoleBuffer* consoleBuffer();                   // §9.1, default nullptr → UNSUPPORTED_IN_HOST
+  virtual void clearConsoleViews();                         // console_clear, default no-op
 };
 
 class CompileJob {  // destroying a running job terminates it without callbacks
@@ -388,8 +406,8 @@ whose `FakeCompileJob`s the test drives with `append` / `finish` (`onStart` can 
 like a test run, `startError` makes the start fail); `compileHostOverride` substitutes another compile host
 (`TbMcpUiLibTest` uses the real `McpCompileHost`), and `supportsCompile = false` simulates a host without one.
 
-Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost` (E13), the snapshot renderer (E10). A host that does not
-implement a capability maps to `UNSUPPORTED_IN_HOST`.
+Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost`
+(E13). A host that does not implement a capability maps to `UNSUPPORTED_IN_HOST`.
 
 ### 4.4 Server state
 
@@ -710,6 +728,7 @@ Mapping to MCP:
 | `trenchbroom://documents/{doc}/materials` | `materialsResource()`: collections `{path, materialCount}` and loaded materials `{name, collection, width, height}` (no usage counts, which change on every edit) | material collections changed, document loaded, material images processed |
 | `trenchbroom://games/{game}/config` | `gameConfigJson()`; `{game}` percent-encoded; listed for games of open documents | `game_set_path` |
 | `trenchbroom://compile/{run}/log` | the full log of a compile run as `text/plain` (`{run}` is e.g. `run:3`); listed once per known run | output appended, run ended |
+| `trenchbroom://console` | the newest console messages (§9.1) | new messages (250 ms coalescing), clear |
 | `trenchbroom://guide` | agent guide (`AgentGuide` raw string in `Resources.cpp`) | static |
 
 Templates are listed once per open document. `DocumentState` reports `DocumentAspect::{Info, Summary,
@@ -718,7 +737,13 @@ through `ServerState::scheduleResourceUpdate` / `scheduleDocumentUpdate`, coales
 `notifications/resources/updated` per resource and scheduler turn. Nothing is recorded while no session has
 subscriptions (the hooks run on every map change, e.g. during drags).
 
-Planned resources: `documents/{doc}/issues` (E12), `manual/{section}` (E13), `console` (E10).
+`trenchbroom://console` (`ConsoleTools.cpp`) holds the newest 200 console messages of level info or higher,
+`lastSeq`, `buffered` and `capacity`. `ServerState` watches the buffer's `messagesAddedNotifier` and
+`clearedNotifier` and sends one `resources/updated` per burst, 250 ms after the first message; nothing is
+scheduled without subscribers. Lines that start with `[AI] ` (the call log sink, §9) do not notify, so a
+client that answers notifications with calls cannot loop.
+
+Planned resources: `documents/{doc}/issues` (E12), `manual/{section}` (E13).
 
 ---
 
@@ -735,6 +760,37 @@ calls is `stale`. Sinks:
 
 The raw JSON-RPC trace is logged only at debug level.
 
+### 9.1 Editor console (`ConsoleBuffer`, `McpConsoleHook`, `ConsoleTools.cpp`)
+
+The console buffer holds every message that any `ui::Console` (the console tab of a map window) logs, from
+editor start: load errors of materials, models and entity definitions, save/export messages, the `[AI]`
+call log lines, and so on.
+
+- **Capture.** `Console::messageLoggedNotifier` (§15) fires synchronously in `Console::doLog`, which may run
+  on worker threads; the calls are serialized, and messages logged by an observer are not reported (a
+  `thread_local` guard). `McpConsoleHook` adds main-thread messages at once, so messages logged during a
+  synchronous call are in the buffer before the call returns; messages from worker threads are queued to the
+  main thread. The document is resolved from the console's window (`MapWindow::document()`); the buffer
+  stores the document pointer (only compared with open documents) and its file name.
+- **`ConsoleBuffer`** (TbMcpLib, main thread only): 10,000 messages; each gets a sequence number that is never
+  reused, also not after `clear()`; the oldest message is dropped when full.
+- **Per-call report (E10.13).** `CallRunner` remembers the last sequence number when a call starts and adds
+  the warnings and errors logged meanwhile (any document, at most 50 plus a note) to the result as
+  `console: [{seq, level, text, document | documentName}]` — also to error results and to asynchronous
+  calls; omitted when empty.
+- **`console_read`** (read-only; no default document): `minLevel` (default `info`), `text` (case-insensitive
+  substring, or an ECMAScript regex with `regex: true`), `document` (`doc:<n>`, a closed document's file name,
+  or `none`); `after` (a sequence number, typically the previous `lastSeq`), `cursor`/`limit` (1–1000, default
+  100), `newest`; pages are oldest first. Returns `{items: [{seq, level, time, text, document | documentName}],
+  total, nextCursor, lastSeq, dropped?}`; `dropped` counts messages after `after`/`cursor` that were lost to
+  the buffer limit or a clear.
+- **`console_clear`** (`Mutation::External`, honors dry run): clears the buffer and every console view
+  (`Console::clear`, §15) through `McpHost::clearConsoleViews`.
+- Without a console buffer (`host.consoleBuffer() == nullptr`) the console tools fail with
+  `UNSUPPORTED_IN_HOST`. `FakeHost` has `console`, `supportsConsole` and `clearConsoleViewsCount`; its
+  `logTarget()` is a per-document logger that adds to the buffer and is also set as the document's logger when
+  a document is added, like a map window's console.
+
 ---
 
 ## 10. Tools
@@ -748,7 +804,7 @@ The raw JSON-RPC trace is logged only at debug level.
 | `DocumentTools.cpp` | `document_new/open/save/save_as/close/revert/recent`, `map_files_list`, `document_export_map/obj`, `autosave_list` | E2 |
 | `GameTools.cpp` | `game_list`, `game_info`, `game_set_path`, `mods_get/set`, `entity_definitions_get/set/reload`, `materials_collections_get/set`, `materials_reload`, `soft_bounds_get/set` | E2 |
 | `SceneTools.cpp` | `map_summary`, `map_tree`, `object_get`, `objects_find`, `map_text_get`, `map_stats` | E3 |
-| `SpatialTools.cpp` | `objects_at_point`, `ray_pick`, `space_check`, `map_plan_view` | E3 |
+| `SpatialTools.cpp` | `objects_at_point`, `ray_pick`, `space_check`, `map_plan_view` (image form: E10) | E3, E10 |
 | `SelectionTools.cpp` | `selection_get/set/clear`, `select_all`, `select_invert`, `select_by`, `select_spatial`, `select_siblings`, `select_by_line`, `select_faces_of` | E3 |
 | `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut` | E4 |
 | `BrushEditTools.cpp` | `brush_clip`, `face_extrude`, `face_extrude_new`, `vertices_move/remove/snap`, `vertex_add`, `csg_merge/subtract/intersect/hollow` | E4 |
@@ -761,6 +817,8 @@ The raw JSON-RPC trace is logged only at debug level.
 | `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes` | E5 |
 | `EntityPropertyTools.cpp` | `entity_properties_set`, `entity_property_remove/rename`, `entity_spawnflags_set`, `entity_defaults_apply`, `entity_links_get`, `entity_link`, `entity_color_set` | E5 |
 | `CompileTools.cpp` | `compile_tools_get/set`, `compile_presets_list`, `compile_profiles_list`, `compile_profile_save/delete`, `compile_run`, `compile_status`, `compile_cancel`, `pointfile_load/unload`, `portalfile_load/unload`; the compile log resource | E7 |
+| `SnapshotTools.cpp` | `agent_camera_set/get/list/delete`, `view_snapshot`, `view_snapshots_around`, `view_snapshot_compare`, `view_snapshot_user` | E10 |
+| `ConsoleTools.cpp` | `console_read`, `console_clear`; the console resource | E10 |
 | `LayerTools.cpp` | `layers_list`, `layer_create/rename/remove/reorder`, `layer_set_state`, `objects_move_to_layer`, `visibility_set` | E9 |
 | `GroupTools.cpp` | `group_create/ungroup/rename`, `groups_merge`, `group_add_objects/remove_objects`, `group_open/close`, `linked_group_duplicate/select/separate/extract` | E9 |
 | `ClipboardTools.cpp` | `clipboard_copy/cut/paste`, `map_file_inspect`, `map_import` | E9 |
@@ -768,7 +826,7 @@ The raw JSON-RPC trace is logged only at debug level.
 Planned files: `ValidationTools.cpp` (`issues_list`,
 `issue_*`, `validators_*`, `map_check`, `engine_*`) in E12; `ActionTools.cpp` (`actions_list`,
 `action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
-`manual_section`) in E13; snapshot and console tools in E10; `Prompts.cpp` in E14.
+`manual_section`) in E13; `Prompts.cpp` in E14.
 
 `CompileTools.h` also declares `registerCompileResources`. Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
 shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
@@ -1121,6 +1179,87 @@ document's format and pasted through the `clipboard_paste` path with the same pl
 `targetLayer` (default: the current layer; source layers are flattened). The result lists the new ids, the
 missing materials, and selects the imported objects; the call is one undo step, `AI: Import Map`.
 
+### 10.12 Agent vision (E10)
+
+Agents render images of the map from their own cameras. Nothing the user sees changes: no camera, view
+filter, hidden state, selection or preference of the editor is touched, no window opens, and the calls do not
+wait for the user.
+
+**Split.** The core (`SnapshotTools.cpp`, Qt-free) resolves cameras and visibility options into a
+`SnapshotRequest` (`Snapshot.h`): an `AgentCamera`, the image size, `SnapshotOptions` (face mode, shading,
+fog, edges, entity models, bounds, classnames, entity links, leak path, grid, axes, background) and a
+`SnapshotScene` (the nodes to draw, a face filter, highlighted nodes and color, markers). The host's
+`SnapshotRenderer` draws exactly that and returns an `RgbaImage`; the core encodes PNG (miniz) or asks the
+renderer for JPEG. Tests use `FakeSnapshotRenderer` (`FakeHost::snapshot`, `snapshotRendererOverride`,
+`supportsSnapshots`), which records every request and returns an image that changes with the drawn objects.
+
+**Agent cameras** (`AgentCamera.h`): perspective (position, direction, up, fov as the editor uses it) or
+orthographic (direction, up, zoom = pixels per unit; top/front/side as in `MapView2D`). Helpers: direction
+from yaw/pitch (yaw counterclockwise from +X, pitch up positive) and back, look-at, orthographic views placed
+outside the bounds, `frame` (fit a box for the direction, fov and image aspect with a margin; orthographic:
+zoom to fit), `orbit` (target, yaw, pitch, distance), `eyeHeight` (a ray down from a point inside a room to
+the floor, then the game's eye height: Quake and Quake 2 46, Half-Life 64, Quake 3 50, other games 48; the game
+is matched by name, then by its compile tools). Framing without an image size assumes 1024×768. Named
+cameras live in the `Session` (at most 64) and are never shown as the user's camera.
+
+**Tools** (all `Mutation::None` with asynchronous handlers, §4.2; no undo steps):
+
+- `agent_camera_set/get/list/delete`: `camera` is a perspective form (`position` + `lookAt` | `direction` |
+  `yaw`/`pitch`, `fov`), an orthographic form (`view` top/front/side or xy/xz/yz, `center`, `zoom`) or a
+  helper (`frame {ids | box, margin}`, `orbit {target | ids, yaw, pitch, distance}`, `eyeHeight {point,
+  height}`).
+- `view_snapshot`: `camera` (a name or an inline camera; default: frame everything drawn from yaw 45, pitch
+  −30), `width`/`height` (default 1024×768, 16–2048), `format` png/jpeg (+`quality`; JPEG falls back to PNG
+  with a warning when the renderer cannot encode it), `saveTo` (+`overwrite`), `keepAs`, `options`
+  {faceMode, shading, fog, edges, entityModels, bounds, classnames, entityLinks, leakPath, grid, gridSize,
+  axes, background, hideTags, hideClassnames, brushes, pointEntities, brushEntities, patches, includeHidden},
+  `isolate`, `highlight {ids, color}`. Returns the image metadata, the camera, counts of drawn objects and
+  `resourcesPending`; one image content block.
+- `view_snapshots_around`: `ids` or `box`, `views` (north/east/south/west, the diagonals, `above`,
+  top/front/side, or `{label, camera}`; at most 12); a text label block before each image; progress per image.
+- `map_plan_view` `format: "image" | "both"` (default `"text"`): an orthographic camera at the slice height
+  looking down (near 0, far = `floorDepth`), up to 16 px per cell and at most 1024 px (`imageWidth`,
+  `imageHeight`), point entities as markers in the legend's colors. It stays synchronous.
+- `view_snapshot_compare`: `before` (a kept snapshot) and optional `after` (default: render now with the
+  before snapshot's camera and options), or `undoSteps` (render, undo n steps, render, redo n steps, all in one
+  step so no event loop runs in between; refused while any transaction is open, the user is busy, or fewer
+  steps exist; the result's `historyRestored` checks the modification count and both stacks), plus
+  `threshold`. Returns before | after side by side and a changed-pixel mask, with the changed pixel count,
+  ratio and bounds. Kept snapshots live in the `Session` (at most 8; the oldest is dropped with
+  `SNAPSHOT_DROPPED`).
+- `view_snapshot_user`: `view` 3d/xy/xz/yz or `listOnly`; returns the user's view image and its camera.
+
+**Visibility.** Objects hidden in the editor stay hidden unless `includeHidden`; `isolate`d ids are always
+drawn. The editor's view filters (hidden tags, entity classes, show flags of the map's `EditorContext`) are
+not applied — each snapshot has its own. Tag names are case-insensitive; object tags remove objects, face
+tags go into the face filter (a brush without visible faces is removed); unknown tags warn `UNKNOWN_TAG`.
+`hideClassnames` takes globs; `worldspawn` hides world brushes.
+
+**Slices.** Each image is rendered in its own deferred step with the scene rebuilt from ids (no node pointer
+is kept across steps); progress per image, cancellation between images. While
+`SnapshotRenderer::resourcesPending` reports loading materials or models, the call re-checks every 50 ms for
+up to 3 s, then renders anyway with a `RESOURCES_LOADING` warning. Without a renderer the tools fail with
+`UNSUPPORTED_IN_HOST`.
+
+**Renderer** (`ui::McpSnapshotRenderer`, TbMcpUiLib). It depends only on the `gl::GlManager` and the document,
+so the headless mode (E15) can reuse it; only `userViews`/`captureUserView` need the map window.
+- GL: its own `QOffscreenSurface` and `QOpenGLContext` that shares `QOpenGLContext::globalShareContext()`
+  (standalone 2.1 compatibility context without one), a `QOpenGLFramebufferObject` (depth/stencil, 4× MSAA)
+  read back with `toImage()`. Per render: make current (errors instead of assertions if GL is missing),
+  initialize the `GlManager` if needed, check the size against the GL limits, upload the document's pending
+  resources, draw, free pending VBOs and fonts, restore the previously current context.
+- Independent state: every request builds its own `ObjectRenderer`s from the scene with an MCP-owned
+  `mdl::EditorContext` that ignores the nodes' hidden state (`setIgnoreHiddenState`, §15) and a brush filter
+  that draws all faces of the listed brushes that pass the face filter; highlighted nodes go to a tinted
+  renderer set up like the editor's selection renderer. The document's `MapRenderer`, the map's
+  `EditorContext`, the selection and the cameras are never used. Entity links use a link renderer restricted
+  to the scene's entities; point files, axes and the 2D grid are drawn as in `MapViewBase`; markers are
+  handles with a label. `makeGlCamera` / `toAgentCamera` convert cameras (tested without GL).
+- User views: the typed `findChildren<MapViewBase*>()` of `MapWindow::mapView()`; the view id comes from the
+  camera axis. Capturing calls `QOpenGLWidget::grabFramebuffer()`, which repaints the view once.
+- Timing: 5,000 brushes at 1024×768 take about 180 ms for the first render (shader setup) and about 35 ms
+  after that (Mesa, Intel Iris Xe).
+
 ---
 
 ## 11. Testing
@@ -1135,12 +1274,14 @@ missing materials, and selects the imported objects; the call is one undo step, 
 | `tst_Schema`, `tst_Args`, `tst_Errors`, `tst_Pagination` | JSON Schema output, validation errors with paths, defaults, cursors, fields |
 | `tst_ToolRegistry`, `tst_ResourceRegistry`, `tst_PromptRegistry`, `tst_Resources` | listing, paging, dispatch, subscriptions, coalesced updates |
 | `tst_ObjectIds`, `tst_Targets` | id format/parse; delete→undo→same id; redo; linked-group aliasing; reload remap; target resolution |
-| `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks |
+| `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks; asynchronous read-only calls (immediate while busy, concurrent, cancel, session close, document close, no undo step) |
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
 | `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
 | `tst_GeometryUtils`, `tst_CsgUtils` | the pure model helpers over `mdl::MapFixture`: `intersectsInterior`, `owningBrushEntity`, `classifyBrush`, `isPointEntity`, `castRay`, `checkBox`, `geometryError`, `addBrushes`, `ScopedLockOverride`; hollowing with a thickness |
 | `tst_UpstreamCommandProcessor`, `tst_UpstreamMap`, `tst_UpstreamNode` | the changes to original TrenchBroom files (§15): redo stack kept after a rolled-back transaction, command names, transaction depth, `canRedoCommand`, `runtimeId` |
+| `tst_AgentCamera`, `tst_Image`, `tst_SnapshotTools` | camera math, framing, orbit, eye height over a fixture room, camera JSON; image composition and diff; the snapshot tools over `FakeSnapshotRenderer`: option handling mapped into the recorded requests (hidden tags change the scene and the image, isolate, includeHidden, highlight, face tags, 2D cameras), limits, saveTo, keepAs and compare (the undo mode leaves the history unchanged), labels, progress and cancellation, the plan image, user views, unsupported hosts, no undo steps |
+| `tst_ConsoleBuffer`, `tst_ConsoleTools` | bounds, sequence numbers, clear, notifiers; `console_read` filters, cursor, pagination, `dropped`, invalid input; `console_clear` with dry run; the console resource and its coalesced notifications; the per-call `console` report (`document_open` of a map with a missing WAD) |
 | `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
@@ -1160,7 +1301,7 @@ ToolError callExpectingError(std::string_view tool, Json args = {});
 mdl::Node* node(std::string_view id, ui::MapDocument* = nullptr);
 ```
 
-`call*` run pending scheduler tasks until an asynchronous call completes. The fixture builds on
+`call*` run pending scheduler tasks until an asynchronous call completes, advancing the clock to delayed tasks. The fixture builds on
 `lib/TbMdlLib/test-utils` (`MapFixture`, `QuakeFixtureConfig`, `TestFactory.h`, `Matchers.h`) and
 `lib/TbAppLib/test-utils/MapDocumentFixture`. Fixtures live in `lib/TbMcpLib/test/fixture/`:
 `mcp/maps/two_rooms.map` (two rooms, a corridor, a door, a trigger, a group and a custom layer; used by scene,
@@ -1184,8 +1325,18 @@ comment), and game paths in `mdl/Game/`.
 - `tst_McpUiIntegration.cpp`: status indicator and preference pane injection (this also tests
   `PreferenceDialog::addPane`).
 - `tst_UpstreamHooks.cpp`: the hooks in upstream editor classes (§15): `MapWindowManager::addMapWindow`,
-  `MapWindow::mapView`, `closeDiscardingChanges` and `compilationDialog`, `CompilationDialog::running`.
+  `MapWindow::mapView`, `closeDiscardingChanges` and `compilationDialog`, `CompilationDialog::running`,
+  `Console::messageLoggedNotifier` and `Console::clear`, `EditorContext::setIgnoreHiddenState`.
 - `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
+- `tst_McpConsoleHook.cpp`: messages of a window console reach the buffer with level and document, worker-thread
+  messages are marshalled, clearing clears the views and the buffer.
+- `tst_McpSnapshotRenderer.cpp`: camera conversion, JPEG encoding, user views without a shown window (error
+  paths); the `[gpu]` smoke test renders `two_rooms.map` with the real renderer and checks that the image is
+  not mostly background and stable, that toggling the trigger changes it, that hiding the trigger in the editor
+  does not, highlight, face filter, wireframe, flat, orthographic with grid, invalid sizes; `view_snapshot`
+  end to end through `McpToolFixture` with the real renderer (hiding the trigger tag changes the image); a
+  5,000-brush timing. The GPU tests `SKIP` when no GL context can be created; Qt's offscreen platform uses
+  GLX/EGL when a display is available, so they run under `QT_QPA_PLATFORM=offscreen` on a desktop.
 - `tst_McpCompileHost.cpp`: `McpCompileHost` with the `CmdTool` stub (`--printArgs`, `--exit`, `--crash`):
   success, failure, crash, cancel, test mode, export of unsaved changes, tool variables, copy tasks, reload,
   destroying a running job.
@@ -1229,6 +1380,12 @@ comment), and game paths in `mdl/Game/`.
   applies only its last face; `clipboard_cut` cuts objects, not faces. `map_import` does not recreate the
   source layers.
 - The bridge ignores portable mode when locating the discovery file.
+- Snapshots do not draw entity decals, group links, or group bounds and classnames of objects inside groups.
+  `view_snapshots_around` cannot save files, and `view_snapshot_compare` returns PNG only. The 2D grid is drawn
+  at the world bounds, so an orthographic camera's far plane must reach them. Capturing a user view repaints
+  it once; with the offscreen platform in tests only its error paths are covered.
+- The console buffer compares document pointers; a freed address reused by a new document could attribute old
+  messages to it. Messages logged before `McpServerController` exists (early start-up) are not recorded.
 - Compile status is derived from the runner's log text; tool message formats not listed in §10.10 are not
   classified. The editor's compilation dialog does not know about MCP runs, so the user can start a dialog
   compile of the same document meanwhile. A cancelled tool process is killed without waiting (Qt logs
@@ -1260,10 +1417,10 @@ commit buildable and tested.
   of upstream fixes in `TbMcpLibTest`, `scripts/upstream-footprint.sh`, narrowest-context helpers.
 - **E9** LayerTools, GroupTools and ClipboardTools (§10.11). `map_import` parses the file with an
   `mdl::MapReader` subclass that converts the format, filters the nodes and adds them through the paste path.
-- **E10 — agent vision and editor console.** `McpSnapshotRenderer` (TbMcpUiLib) renders `MapRenderer` into a
-  `QOpenGLFramebufferObject` with the shared GL context and returns PNG bytes, independent of any map window
-  so E15 can reuse it; agent cameras with their own render state; snapshot tools; `map_plan_view` image form;
-  `console_read`/`console_clear` and the subscribable `trenchbroom://console` resource.
+- **E10 — agent vision and editor console.** Read-only asynchronous calls and the per-call console report in
+  `CallRunner`; `ConsoleBuffer`, `McpConsoleHook` and the console tools and resource (§9.1); agent cameras,
+  `SnapshotTools` and the `map_plan_view` image form over the `SnapshotRenderer` seam, `McpSnapshotRenderer`
+  (§10.12).
 - **E11 — level-design knowledge.** Material profiles merged from knowledge notes, a cached reference-corpus
   scan of `.map` files, the current map and image analysis (edge matching for seamless tiles); `uv_check` and
   UV warnings in material tools; aspect-preserving fit; `material_fit_geometry`; model bounds per animation and
@@ -1315,8 +1472,10 @@ These are all changes to original TrenchBroom files (compared with the merge bas
 | `lib/TbMdlLib/include/mdl/CommandProcessor.h`, `src/CommandProcessor.cpp` | `undoCommandNames()`, `redoCommandNames()`, `transactionDepth()` | the undo/redo stacks and the transaction stack are private; `history_get` lists them, and the busy gate and agent transactions need the depth |
 | `lib/TbMdlLib/src/CommandProcessor.cpp` | the redo stack is cleared only when a command or transaction reaches the top-level undo stack | bug fix: a cancelled transaction (dry run, failed call, the human's cancelled gesture) cleared the redo history |
 | `lib/TbMdlLib/src/Map.cpp` | `canRedoCommand()` checks `redoCommandName()` | bug fix: it checked the undo stack |
+| `lib/TbMdlLib/include/mdl/EditorContext.h`, `src/EditorContext.cpp` | `ignoreHiddenState()` / `setIgnoreHiddenState(bool)`: when set, the group, entity, brush and patch `visible()` checks skip `Node::visible()` | the snapshot renderer draws the nodes the MCP core chose with its own `EditorContext`; the entity, group and patch renderers ask their `EditorContext` about the editor's hidden state and `visible()` is not virtual. `ObjectRenderer::setShowHiddenObjects` is no substitute: it replaces the brush filter and forces entity models on |
+| `lib/TbUiLib/include/ui/Console.h`, `src/Console.cpp` | static `messageLoggedNotifier(Console&, LogLevel, message)` fired in `doLog` (serialized, not re-entrant); `clear()` | `console_read` needs every console message with its level as it is logged; `doLog` is private, consoles receive messages directly from `LoggingHub` and `MapWindow::logger()`, and a window's load messages are flushed into its console in the `MapWindow` constructor, before outside code could attach to it. `console_clear` must clear the text view, which is private |
 
 The tests of these changes are in `TbMcpLibTest` (`tst_UpstreamCommandProcessor.cpp`, `tst_UpstreamMap.cpp`,
 `tst_UpstreamNode.cpp`) and `TbMcpUiLibTest` (`tst_UpstreamHooks.cpp`, `tst_McpUiIntegration.cpp`); no
-upstream test file is changed. The editor classes `AppController`, `LoggingHub`, `MapDocument` and the
+upstream test file is changed. The editor classes `AppController`, `LoggingHub`, `MapDocument`, `MapRenderer` and the
 preferences are unchanged; the MCP code integrates with them from the outside (§1.3, §4.3, §6.1).

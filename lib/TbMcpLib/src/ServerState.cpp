@@ -23,8 +23,10 @@
 #include "gl/MaterialManager.h"
 #include "gl/ResourceId.h"
 #include "mcp/CallRunner.h"
+#include "mcp/ConsoleBuffer.h"
 #include "mcp/JsonRpc.h"
 #include "mcp/Scheduler.h"
+#include "mcp/tools/ConsoleTools.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
 #include "mdl/Node.h"
@@ -33,12 +35,26 @@
 #include "ui/MapDocument.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace tb::mcp
 {
 namespace
 {
 constexpr auto EditorStatusUri = "trenchbroom://editor/status";
+
+/**
+ * Console messages that arrive within this time after the first one are reported with a
+ * single notification, also when they are logged by other threads.
+ */
+constexpr auto ConsoleUpdateDelay = std::chrono::milliseconds{250};
+
+/**
+ * The prefix of the call log lines that McpServerController writes to the console
+ * (formatCallLogEntryForConsole). They do not notify console subscribers, because a
+ * client that reacts to console notifications with a call would cause another one.
+ */
+constexpr auto CallLogConsolePrefix = std::string_view{"[AI] "};
 } // namespace
 
 DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
@@ -182,6 +198,13 @@ ServerState::ServerState(
         scheduleResourceUpdate(EditorStatusUri);
       }
     });
+  if (auto* console = host.consoleBuffer())
+  {
+    m_hostConnection +=
+      console->messagesAddedNotifier.connect([this]() { consoleDidChange(false); });
+    m_hostConnection +=
+      console->clearedNotifier.connect([this]() { consoleDidChange(true); });
+  }
 }
 
 ServerState::~ServerState()
@@ -443,6 +466,32 @@ void ServerState::documentAspectDidChange(
     // the editor status lists the modified flag and the selection of the documents
     scheduleResourceUpdate(EditorStatusUri);
   }
+}
+
+void ServerState::consoleDidChange(const bool cleared)
+{
+  if (m_consoleUpdateScheduled || !hasSubscriptions())
+  {
+    return;
+  }
+
+  if (!cleared)
+  {
+    const auto& messages = host.consoleBuffer()->messages();
+    if (!messages.empty() && messages.back().text.starts_with(CallLogConsolePrefix))
+    {
+      return;
+    }
+  }
+
+  m_consoleUpdateScheduled = true;
+  scheduler.postDelayed(ConsoleUpdateDelay, [this, alive = m_alive]() {
+    if (*alive)
+    {
+      m_consoleUpdateScheduled = false;
+      scheduleResourceUpdate(ConsoleResourceUri);
+    }
+  });
 }
 
 std::string ServerState::documentResourceUri(

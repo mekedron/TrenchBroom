@@ -4,6 +4,7 @@ EMBED_UTF8_MANIFEST(TbMcpLibTest)
 target_sources(TbMcpLibTest
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AgentCamera.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
@@ -13,6 +14,8 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
@@ -27,6 +30,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_HttpResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Image.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
@@ -43,6 +47,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SessionTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SnapshotTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SpatialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StreamableHttp.cpp

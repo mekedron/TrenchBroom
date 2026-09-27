@@ -125,8 +125,10 @@ public:
   ToolDef& handler(ToolHandler handler);
   /**
    * Sets an asynchronous handler for long operations that report progress and can be
-   * cancelled (spec E2.16). Only for Mutation::External tools: they wait in the call
-   * queue, and the queue waits until they complete.
+   * cancelled (spec E2.16). Only for Mutation::External and Mutation::None tools.
+   * External tools wait in the call queue, and the queue waits until they complete.
+   * Read-only (None) tools start immediately, even while the human is busy, and may run
+   * while other calls run.
    */
   ToolDef& asyncHandler(AsyncToolHandler handler);
 
@@ -168,7 +170,7 @@ private:
 public:
   /**
    * Precondition: the name is valid and not yet registered, and there is exactly one
-   * handler. Asynchronous tools are Mutation::External.
+   * handler. Asynchronous tools are Mutation::External or Mutation::None.
    */
   void add(ToolDef tool);
 

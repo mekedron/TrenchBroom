@@ -28,11 +28,15 @@
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
+#include "mdl/BrushFace.h"
+#include "mdl/BrushNode.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameManager.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
 #include "mdl/ParseGameConfig.h"
+#include "mdl/PatchNode.h"
 #include "mdl/TestUtils.h"
 #include "ui/MapDocument.h"
 
@@ -40,6 +44,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <stdexcept>
 
 namespace tb::mcp
@@ -201,6 +206,26 @@ void FakeCompileHost::jobDestroyed(FakeCompileJob& job)
   }
 }
 
+class FakeHost::ConsoleLogger : public Logger
+{
+private:
+  FakeHost& m_host;
+  const ui::MapDocument& m_document;
+
+public:
+  ConsoleLogger(FakeHost& host, const ui::MapDocument& document)
+    : m_host{host}
+    , m_document{document}
+  {
+  }
+
+private:
+  void doLog(const LogLevel level, const std::string_view message) override
+  {
+    m_host.logToConsole(m_document, level, message);
+  }
+};
+
 FakeHost::FakeHost()
   : m_configEnvironment{createConfigEnvironment()}
   , m_taskManager{createTestTaskManager()}
@@ -231,6 +256,8 @@ std::string FakeHost::addDocument(ui::MapDocument& document, std::string title)
 
   auto id = "doc:" + std::to_string(m_nextDocumentId++);
   documentList.push_back(DocumentInfo{id, &document, std::move(title), true});
+  // like a map window, which makes its console the document's logger
+  document.setTargetLogger(logTarget(document));
   documentsDidChangeNotifier();
   return id;
 }
@@ -293,6 +320,15 @@ mdl::GameManager& FakeHost::gameManager()
   return *m_gameManager;
 }
 
+SnapshotRenderer* FakeHost::snapshotRenderer()
+{
+  if (snapshotRendererOverride)
+  {
+    return snapshotRendererOverride;
+  }
+  return supportsSnapshots ? &snapshot : nullptr;
+}
+
 CompileHost* FakeHost::compileHost()
 {
   if (compileHostOverride)
@@ -300,6 +336,26 @@ CompileHost* FakeHost::compileHost()
     return compileHostOverride;
   }
   return supportsCompile ? &compile : nullptr;
+}
+
+Logger* FakeHost::logTarget(ui::MapDocument& document)
+{
+  auto& logger = m_consoleLoggers[&document];
+  if (!logger)
+  {
+    logger = std::make_unique<ConsoleLogger>(*this, document);
+  }
+  return logger.get();
+}
+
+ConsoleBuffer* FakeHost::consoleBuffer()
+{
+  return supportsConsole ? &console : nullptr;
+}
+
+void FakeHost::clearConsoleViews()
+{
+  ++clearConsoleViewsCount;
 }
 
 std::optional<DocumentInfo> FakeHost::documentToReplace()
@@ -405,11 +461,194 @@ std::optional<DocumentInfo> FakeHost::findDocumentInfo(
   return it != documentList.end() ? std::optional{*it} : std::nullopt;
 }
 
+void FakeHost::logToConsole(
+  const ui::MapDocument& document, const LogLevel level, const std::string_view message)
+{
+  const auto lock = std::lock_guard{m_consoleMutex};
+  const auto info = findDocumentInfo(document);
+  console.add(level, message, &document, info ? info->windowTitle : std::string{});
+}
+
 void FakeHost::processResources()
 {
   auto gl = gl::TestGl{};
   auto processContext = gl::ProcessContext{gl, [](auto, auto) {}};
   gl::processResourcesSync(*m_resourceManager, processContext);
+}
+
+// FakeSnapshotRenderer
+
+bool FakeSnapshotRenderer::RecordedRequest::contains(const mdl::Node& node) const
+{
+  return std::ranges::find(nodes, &node) != nodes.end();
+}
+
+bool FakeSnapshotRenderer::RecordedRequest::isHighlighted(const mdl::Node& node) const
+{
+  return std::ranges::find(highlighted, &node) != highlighted.end();
+}
+
+std::optional<std::vector<size_t>> FakeSnapshotRenderer::RecordedRequest::facesOf(
+  const mdl::Node& node) const
+{
+  const auto it = std::ranges::find_if(
+    visibleFaces, [&](const auto& entry) { return entry.first == &node; });
+  return it != visibleFaces.end() ? std::optional{it->second} : std::nullopt;
+}
+
+bool FakeSnapshotRenderer::resourcesPending(ui::MapDocument&)
+{
+  ++resourceChecks;
+  if (pendingChecks > 0)
+  {
+    --pendingChecks;
+    return true;
+  }
+  return false;
+}
+
+Result<RgbaImage> FakeSnapshotRenderer::render(
+  ui::MapDocument&, const SnapshotRequest& request)
+{
+  auto recorded = RecordedRequest{};
+  recorded.camera = request.camera;
+  recorded.width = request.width;
+  recorded.height = request.height;
+  recorded.options = request.options;
+  recorded.highlightColor = request.scene.highlightColor;
+  recorded.markers = request.scene.markers;
+  recorded.hasFaceFilter = bool(request.scene.faceFilter);
+  for (const auto* node : request.scene.nodes)
+  {
+    recorded.nodes.push_back(node);
+    if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(node))
+    {
+      auto faces = std::vector<size_t>{};
+      const auto& brushFaces = brushNode->brush().faces();
+      for (size_t i = 0; i < brushFaces.size(); ++i)
+      {
+        if (
+          !request.scene.faceFilter
+          || request.scene.faceFilter(*brushNode, brushFaces[i]))
+        {
+          faces.push_back(i);
+        }
+      }
+      recorded.visibleFaces.emplace_back(node, std::move(faces));
+    }
+  }
+  for (const auto* node : request.scene.highlighted)
+  {
+    recorded.highlighted.push_back(node);
+  }
+  requests.push_back(recorded);
+  if (onRender)
+  {
+    onRender(recorded);
+  }
+
+  if (renderError)
+  {
+    return Error{*renderError};
+  }
+
+  // a background that depends on the camera and the options
+  const auto& camera = request.camera;
+  const auto seed =
+    camera.position.x() * 3.0 + camera.position.y() * 5.0 + camera.position.z() * 7.0
+    + camera.direction.x() * 11.0 + camera.direction.y() * 13.0
+    + camera.direction.z() * 17.0 + camera.zoom * 19.0 + camera.fov * 23.0
+    + double(request.options.faceMode) * 29.0 + (request.options.grid ? 31.0 : 0.0);
+  const auto shade =
+    static_cast<unsigned char>(16 + (static_cast<long long>(std::abs(seed)) % 32));
+  auto image = makeImage(request.width, request.height, Rgba8{shade, shade, shade, 255});
+
+  const auto block = [&](const vm::vec3d& center, const Rgba8& color) {
+    if (request.width < 4 || request.height < 4)
+    {
+      return;
+    }
+    const auto x = size_t(std::abs(static_cast<long long>(center.x() + center.z() * 3.0)))
+                   % (request.width - 3);
+    const auto y =
+      size_t(std::abs(static_cast<long long>(center.y()))) % (request.height - 3);
+    for (size_t dy = 0; dy < 4; ++dy)
+    {
+      for (size_t dx = 0; dx < 4; ++dx)
+      {
+        auto* p = image.pixels.data() + ((y + dy) * request.width + x + dx) * 4;
+        std::copy(color.begin(), color.end(), p);
+      }
+    }
+  };
+
+  for (const auto* node : request.scene.nodes)
+  {
+    const auto highlighted = recorded.isHighlighted(*node);
+    auto color = Rgba8{200, 200, 200, 255};
+    if (const auto faces = recorded.facesOf(*node))
+    {
+      color = Rgba8{200, static_cast<unsigned char>(100 + faces->size() * 10), 60, 255};
+    }
+    else if (dynamic_cast<const mdl::PatchNode*>(node))
+    {
+      color = Rgba8{60, 200, 200, 255};
+    }
+    else if (const auto* entityNode = dynamic_cast<const mdl::EntityNode*>(node);
+             entityNode && !entityNode->hasChildren())
+    {
+      color = Rgba8{60, 60, 220, 255};
+    }
+    else
+    {
+      // groups and brush entities are drawn through their members
+      continue;
+    }
+    if (highlighted)
+    {
+      color = Rgba8{255, 128, 0, 255};
+    }
+    block(node->logicalBounds().center(), color);
+  }
+  for (const auto& marker : request.scene.markers)
+  {
+    block(marker.position, Rgba8{255, 255, 0, 255});
+  }
+  return image;
+}
+
+std::vector<UserView> FakeSnapshotRenderer::userViews(ui::MapDocument&)
+{
+  return userViewList;
+}
+
+Result<RgbaImage> FakeSnapshotRenderer::captureUserView(
+  ui::MapDocument&, const std::string& viewId)
+{
+  capturedViews.push_back(viewId);
+  const auto it = std::ranges::find_if(
+    captures, [&](const auto& capture) { return capture.first == viewId; });
+  if (it == captures.end())
+  {
+    return Error{"no such view: " + viewId};
+  }
+  return it->second;
+}
+
+std::optional<std::string> FakeSnapshotRenderer::encodeJpeg(
+  const RgbaImage&, const int quality)
+{
+  if (!supportsJpeg)
+  {
+    return std::nullopt;
+  }
+  return "JPEG" + std::to_string(quality);
+}
+
+const FakeSnapshotRenderer::RecordedRequest& FakeSnapshotRenderer::last() const
+{
+  assert(!requests.empty());
+  return requests.back();
 }
 
 } // namespace tb::mcp

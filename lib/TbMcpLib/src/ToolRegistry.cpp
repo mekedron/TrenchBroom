@@ -270,6 +270,8 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
              field("issuesIntroduced", array(any()))
                .describe("Validation issues introduced by the call"),
              field("warnings", array(any())),
+             field("console", array(any()))
+               .describe("Console warnings and errors logged while the call ran"),
              field("grid", number()).describe("Grid size in effect"),
            })
     .allowAdditionalProperties();
@@ -310,7 +312,7 @@ void ToolRegistry::add(ToolDef tool)
   contract_pre(isValidToolName(tool.name()));
   contract_pre(find(tool.name()) == nullptr);
   contract_pre((tool.handler() != nullptr) != (tool.asyncHandler() != nullptr));
-  contract_pre(!tool.isAsync() || tool.mutation() == Mutation::External);
+  contract_pre(!tool.isAsync() || tool.mutation() != Mutation::Map);
 
   m_tools.push_back(std::move(tool));
 }

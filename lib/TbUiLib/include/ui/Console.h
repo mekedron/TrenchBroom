@@ -23,6 +23,7 @@
 
 #include "base/Logger.h"
 #include "base/LoggerCache.h"
+#include "base/Notifier.h"
 #include "ui/TabBook.h"
 
 #include <string_view>
@@ -43,7 +44,17 @@ private:
   QMutex m_cacheMutex;
 
 public:
+  /**
+   * Fired for every message that any console logs, synchronously in doLog, which may be
+   * called on any thread. The calls are serialized. Messages logged by an observer are
+   * not reported.
+   */
+  static Notifier<Console&, LogLevel, std::string_view> messageLoggedNotifier;
+
   explicit Console(QWidget* parent = nullptr);
+
+  /** Clears the text view, like the context menu's Clear action. */
+  void clear();
 
 private:
   void doLog(LogLevel level, std::string_view message) override;

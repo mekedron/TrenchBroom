@@ -17,39 +17,21 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/Host.h"
+#include "mcp/Snapshot.h"
 
 namespace tb::mcp
 {
 
-DocumentHost::~DocumentHost() = default;
+SnapshotRenderer::~SnapshotRenderer() = default;
 
-CompileJob::~CompileJob() = default;
-
-CompileHost::~CompileHost() = default;
-
-McpHost::~McpHost() = default;
-
-CompileHost* McpHost::compileHost()
+bool SnapshotRenderer::resourcesPending(ui::MapDocument&)
 {
-  return nullptr;
+  return false;
 }
 
-Logger* McpHost::logTarget(ui::MapDocument&)
+std::optional<std::string> SnapshotRenderer::encodeJpeg(const RgbaImage&, int)
 {
-  return nullptr;
+  return std::nullopt;
 }
-
-SnapshotRenderer* McpHost::snapshotRenderer()
-{
-  return nullptr;
-}
-
-ConsoleBuffer* McpHost::consoleBuffer()
-{
-  return nullptr;
-}
-
-void McpHost::clearConsoleViews() {}
 
 } // namespace tb::mcp

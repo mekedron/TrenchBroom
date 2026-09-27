@@ -24,8 +24,10 @@
 #include "base/NotifierConnection.h"
 #include "mcp/Host.h"
 #include "ui/McpCompileHost.h"
+#include "ui/McpSnapshotRenderer.h"
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -36,6 +38,7 @@ namespace tb::ui
 class AppController;
 class MapDocument;
 class MapViewToolBox;
+class McpConsoleHook;
 class MapWindow;
 
 /**
@@ -68,6 +71,10 @@ private:
   const MapWindow* m_topMapWindow = nullptr;
   /** Runs compilations with the camera of the document's 3D view. */
   McpCompileHost m_compileHost;
+  /** Renders snapshots offscreen; created when first requested. */
+  std::unique_ptr<McpSnapshotRenderer> m_snapshotRenderer;
+  /** Collects the console messages; owned by McpServerController. */
+  McpConsoleHook* m_consoleHook = nullptr;
 
 public:
   explicit QtMcpHost(AppController& appController, QObject* parent = nullptr);
@@ -75,6 +82,12 @@ public:
 
   /** Returns the map window that shows the given document, or nullptr. */
   MapWindow* findMapWindow(const MapDocument& document) const;
+
+  /**
+   * Sets the hook whose buffer consoleBuffer() returns and whose consoles
+   * clearConsoleViews() clears. The hook must outlive the host.
+   */
+  void setConsoleHook(McpConsoleHook* consoleHook);
 
 public: // mcp::McpHost
   std::string applicationVersion() const override;
@@ -87,6 +100,9 @@ public: // mcp::McpHost
   mdl::GameManager& gameManager() override;
   mcp::CompileHost* compileHost() override;
   Logger* logTarget(MapDocument& document) override;
+  mcp::SnapshotRenderer* snapshotRenderer() override;
+  mcp::ConsoleBuffer* consoleBuffer() override;
+  void clearConsoleViews() override;
 
 public: // mcp::DocumentHost
   std::optional<mcp::DocumentInfo> documentToReplace() override;

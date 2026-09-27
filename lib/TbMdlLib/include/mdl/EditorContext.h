@@ -55,6 +55,7 @@ private:
 
   bool m_alignmentLock = true;
   bool m_uvLock = false;
+  bool m_ignoreHiddenState = false;
 
 public:
   Notifier<> editorContextDidChangeNotifier;
@@ -99,6 +100,13 @@ public:
   void setUvLock(bool uvLock);
 
 public:
+  /**
+   * Whether visible() ignores the nodes' hidden state (Node::visible()), for renderers
+   * that decide which nodes to draw themselves.
+   */
+  bool ignoreHiddenState() const;
+  void setIgnoreHiddenState(bool ignoreHiddenState);
+
   bool visible(const Node& node) const;
   bool visible(const WorldNode& worldNode) const;
   bool visible(const LayerNode& layerNode) const;

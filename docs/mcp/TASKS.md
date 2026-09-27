@@ -21,7 +21,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E7 | Compile maps | §16 | v1 | Done |
 | E8 | Minimal upstream footprint | 01 §7.7 | v1 | Done |
 | E9 | Organization, clipboard and import | §12, §13 | v1 | Done |
-| E10 | Agent vision and editor console | §17 | v1 | Not started |
+| E10 | Agent vision and editor console | §17 | v1 | Done |
 | E11 | Level-design knowledge: texturing and model-aware placement | §10, §11 | v1 | Not started |
 | E12 | Validation and engine launch | §15, §16 | MVP + v1 | Not started |
 | E13 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
@@ -266,40 +266,40 @@ The agent can check its own work visually. It renders images of the map from cam
 
 **Rendering pipeline**
 
-- [ ] E10.1 Offscreen renderer: renders the map into an offscreen framebuffer that shares GPU resources (materials, models) with the editor, on the main thread, in small time slices so the UI stays responsive. Works when no map window is focused or visible.
-- [ ] E10.2 Independent render state per snapshot: its own camera and its own visibility and render settings, so snapshots never change the user's view filters, hidden objects, selection highlight or camera.
-- [ ] E10.3 Image output as MCP image content (PNG, optionally JPEG), with size limits (default 1024×768, max 2048×2048), and an option to also save the file to disk.
+- [x] E10.1 Offscreen renderer: renders the map into an offscreen framebuffer that shares GPU resources (materials, models) with the editor, on the main thread, in small time slices so the UI stays responsive. Works when no map window is focused or visible.
+- [x] E10.2 Independent render state per snapshot: its own camera and its own visibility and render settings, so snapshots never change the user's view filters, hidden objects, selection highlight or camera.
+- [x] E10.3 Image output as MCP image content (PNG, optionally JPEG), with size limits (default 1024×768, max 2048×2048), and an option to also save the file to disk.
 
 **Agent cameras**
 
-- [ ] E10.4 `agent_camera_set` / `agent_camera_get` / `agent_camera_list`: named cameras owned by the agent session (perspective with position, look-at or angles, FOV; orthographic top/front/side with center and zoom). They are never shown as the user's camera.
-- [ ] E10.5 Framing helpers: frame given objects or a box; look from a point at a target; orbit around a target by yaw/pitch/distance; place the camera at a player's eye height inside a room (per-game height from the agent guide).
+- [x] E10.4 `agent_camera_set` / `agent_camera_get` / `agent_camera_list`: named cameras owned by the agent session (perspective with position, look-at or angles, FOV; orthographic top/front/side with center and zoom). They are never shown as the user's camera.
+- [x] E10.5 Framing helpers: frame given objects or a box; look from a point at a target; orbit around a target by yaw/pitch/distance; place the camera at a player's eye height inside a room (per-game height from the agent guide).
 
 **Snapshot tools**
 
-- [ ] E10.6 `view_snapshot`: render from an agent camera or inline camera, 3D or 2D (XY/XZ/YZ), with per-snapshot options:
+- [x] E10.6 `view_snapshot`: render from an agent camera or inline camera, 3D or 2D (XY/XZ/YZ), with per-snapshot options:
     - face mode (textured, flat, wireframe), shading, fog, edges;
     - show/hide by smart tag (e.g. triggers, clip, skip, hint), by entity class, point entities, entity models, brush entities, patches;
     - include hidden layers/objects or not; isolate given objects;
     - highlight given objects in a color; draw bounding boxes, classnames, entity links, the leak path of a loaded point file, the grid and axes.
-- [ ] E10.7 `view_snapshots_around`: several images in one call (e.g. 4 sides + top) around objects or a region, returned together, with a small label per image.
-- [ ] E10.8 `map_plan_view` image form: top-down orthographic render of a region at a height slice, with entities marked; complements the text form from E3.
-- [ ] E10.9 `view_snapshot_compare`: render the same camera before and after a change (using undo history or two named states) and return both images side by side, plus a changed-pixel mask.
-- [ ] E10.10 `view_snapshot_user`: capture what the user currently sees in a given editor view (read-only; nothing changes).
+- [x] E10.7 `view_snapshots_around`: several images in one call (e.g. 4 sides + top) around objects or a region, returned together, with a small label per image.
+- [x] E10.8 `map_plan_view` image form: top-down orthographic render of a region at a height slice, with entities marked; complements the text form from E3.
+- [x] E10.9 `view_snapshot_compare`: render the same camera before and after a change (using undo history or two named states) and return both images side by side, plus a changed-pixel mask.
+- [x] E10.10 `view_snapshot_user`: capture what the user currently sees in a given editor view (read-only; nothing changes).
 
 **Editor console**
 
-- [ ] E10.11 `console_read`: returns console messages (all messages the editor logs, not only those caused by agent calls) with level (debug, info, warning, error), time, text and the document they belong to; filters by minimum level, text pattern and document; a cursor so the agent can fetch only messages newer than the last read; paginated. Messages are kept in a bounded in-memory buffer from editor start.
-- [ ] E10.12 Console resource `trenchbroom://console`, subscribable: the agent is notified when new messages arrive, with coalescing so a burst of messages sends one notification.
-- [ ] E10.13 Call results report console errors and warnings logged while the call ran (e.g. a failed texture load during `document_open`).
-- [ ] E10.14 `console_clear` clears the agent-visible buffer and the editor's console view.
+- [x] E10.11 `console_read`: returns console messages (all messages the editor logs, not only those caused by agent calls) with level (debug, info, warning, error), time, text and the document they belong to; filters by minimum level, text pattern and document; a cursor so the agent can fetch only messages newer than the last read; paginated. Messages are kept in a bounded in-memory buffer from editor start.
+- [x] E10.12 Console resource `trenchbroom://console`, subscribable: the agent is notified when new messages arrive, with coalescing so a burst of messages sends one notification.
+- [x] E10.13 Call results report console errors and warnings logged while the call ran (e.g. a failed texture load during `document_open`).
+- [x] E10.14 `console_clear` clears the agent-visible buffer and the editor's console view.
 
 **Quality and safety**
 
-- [ ] E10.15 Snapshots are read-only calls: they never enter the undo history and skip the busy wait for user interaction.
-- [ ] E10.16 Performance: a 1024×768 snapshot of a map with up to 5,000 brushes renders in under 500 ms; long multi-image calls report progress and can be cancelled.
-- [ ] E10.17 Tests: unit tests for camera math, framing and option handling with a fake renderer; a GPU smoke test that renders the sample map to an image and checks it is not empty and that toggling "triggers" changes the image (skipped when no GL context is available).
-- [ ] E10.18 Headless readiness: the offscreen renderer does not depend on a map window, so the E15 headless mode can reuse it.
+- [x] E10.15 Snapshots are read-only calls: they never enter the undo history and skip the busy wait for user interaction.
+- [x] E10.16 Performance: a 1024×768 snapshot of a map with up to 5,000 brushes renders in under 500 ms; long multi-image calls report progress and can be cancelled.
+- [x] E10.17 Tests: unit tests for camera math, framing and option handling with a fake renderer; a GPU smoke test that renders the sample map to an image and checks it is not empty and that toggling "triggers" changes the image (skipped when no GL context is available).
+- [x] E10.18 Headless readiness: the offscreen renderer does not depend on a map window, so the E15 headless mode can reuse it.
 
 **Done when:** an agent builds a room, takes a snapshot from inside at eye height and from above, and compares the images with and without triggers — while the user keeps editing in the same editor with no visible effect on their views. The agent reads a material loading error from the console without the user copying it.
 

@@ -24,6 +24,7 @@
 #include "mcp/tools/BrushEditTools.h"
 #include "mcp/tools/ClipboardTools.h"
 #include "mcp/tools/CompileTools.h"
+#include "mcp/tools/ConsoleTools.h"
 #include "mcp/tools/DocumentTools.h"
 #include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/EntityCreateTools.h"
@@ -38,6 +39,7 @@
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
+#include "mcp/tools/SnapshotTools.h"
 #include "mcp/tools/SpatialTools.h"
 #include "mcp/tools/TagTools.h"
 #include "mcp/tools/TransformTools.h"
@@ -69,8 +71,11 @@ void registerAll(McpServer& server)
   registerGroupTools(server.tools());
   registerClipboardTools(server.tools());
   registerCompileTools(server.tools());
+  registerSnapshotTools(server.tools());
+  registerConsoleTools(server.tools());
   registerResources(server);
   registerCompileResources(server.resources());
+  registerConsoleResources(server.resources());
 }
 
 } // namespace tb::mcp

@@ -116,7 +116,7 @@ public:
 
   /**
    * Calls a tool and returns the full CallToolResult. Runs pending scheduler tasks until
-   * an asynchronous tool has completed.
+   * an asynchronous tool has completed, advancing the clock to delayed tasks as needed.
    */
   Json callRaw(std::string_view tool, Json arguments = Json::object());
   Json callRawAs(const std::string& sessionId, std::string_view tool, Json arguments);

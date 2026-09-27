@@ -184,6 +184,16 @@ void EditorContext::setUvLock(const bool uvLock)
   m_uvLock = uvLock;
 }
 
+bool EditorContext::ignoreHiddenState() const
+{
+  return m_ignoreHiddenState;
+}
+
+void EditorContext::setIgnoreHiddenState(const bool ignoreHiddenState)
+{
+  m_ignoreHiddenState = ignoreHiddenState;
+}
+
 bool EditorContext::visible(const Node& node) const
 {
   return node.accept(kdl::overload(
@@ -215,7 +225,7 @@ bool EditorContext::visible(const GroupNode& groupNode) const
   {
     return false;
   }
-  return groupNode.visible();
+  return m_ignoreHiddenState || groupNode.visible();
 }
 
 bool EditorContext::visible(const EntityNode& entityNode) const
@@ -230,7 +240,7 @@ bool EditorContext::visible(const EntityNode& entityNode) const
     return anyChildVisible(entityNode);
   }
 
-  if (!entityNode.visible())
+  if (!m_ignoreHiddenState && !entityNode.visible())
   {
     return false;
   }
@@ -276,7 +286,7 @@ bool EditorContext::visible(const BrushNode& brushNode) const
     return false;
   }
 
-  return brushNode.visible();
+  return m_ignoreHiddenState || brushNode.visible();
 }
 
 bool EditorContext::visible(const BrushNode& brushNode, const BrushFace& face) const
@@ -301,7 +311,7 @@ bool EditorContext::visible(const PatchNode& patchNode) const
     return false;
   }
 
-  return patchNode.visible();
+  return m_ignoreHiddenState || patchNode.visible();
 }
 
 bool EditorContext::anyChildVisible(const Node& node) const

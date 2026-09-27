@@ -4,17 +4,20 @@ add_library(TbMcpLib STATIC)
 
 target_sources(TbMcpLib
   PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AgentCamera.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ChangeCollector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompileRuns.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ConsoleBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Endpoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Errors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Image.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonVm.cpp
@@ -31,6 +34,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ServerState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Session.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Snapshot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/SseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StreamableHttp.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
@@ -40,6 +44,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
@@ -60,6 +65,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SceneTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SnapshotTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpatialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TagTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
@@ -71,16 +77,19 @@ target_sources(TbMcpLib
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
     FILES
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Args.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/AgentCamera.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallContext.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallRunner.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ChangeCollector.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CompileRuns.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ConsoleBuffer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Endpoint.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Errors.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Host.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/HttpParser.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/HttpResponse.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Image.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Json.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonRpc.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonVm.h
@@ -97,6 +106,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Schema.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ServerState.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Session.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Snapshot.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/SseParser.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/StreamableHttp.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
@@ -106,6 +116,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileUtils.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ConsoleTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CsgUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
@@ -122,6 +133,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SnapshotTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpatialTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TagTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TransformTools.h

@@ -18,17 +18,33 @@
  */
 
 #include <QStandardPaths>
+#include <QTest>
+#include <QTextEdit>
 
 #include "McpUiTestUtils.h"
 #include "fs/TestEnvironment.h"
+#include "mdl/BrushBuilder.h"
+#include "mdl/BrushNode.h"
+#include "mdl/EditorContext.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
+#include "mdl/Group.h"
+#include "mdl/GroupNode.h"
 #include "mdl/Map.h"
+#include "mdl/MapFormat.h"
+#include "mdl/VisibilityState.h"
 #include "ui/AppControllerFixture.h"
 #include "ui/CompilationDialog.h"
+#include "ui/Console.h"
 #include "ui/MapDocument.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
 #include "ui/SwitchableMapViewContainer.h"
+
+#include <string>
+#include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -159,6 +175,110 @@ TEST_CASE("CompilationDialog hooks")
     CHECK(!dialog.running());
 
     closeAllMapWindows(appController);
+  }
+}
+
+TEST_CASE("Console hooks")
+{
+  auto console = Console{};
+
+  SECTION("messageLoggedNotifier")
+  {
+    struct Message
+    {
+      Console* console;
+      LogLevel level;
+      std::string text;
+      std::thread::id thread;
+    };
+    auto messages = std::vector<Message>{};
+    auto connection = Console::messageLoggedNotifier.connect(
+      [&](Console& source, const LogLevel level, const std::string_view text) {
+        messages.push_back(
+          {&source, level, std::string{text}, std::this_thread::get_id()});
+        // messages logged by an observer are not reported (and do not deadlock)
+        source.debug() << "logged by the observer";
+      });
+
+    SECTION("reports every message synchronously with its level")
+    {
+      console.warn() << "a warning";
+      console.info() << "some info";
+      console.info() << "";
+
+      REQUIRE(messages.size() == 2);
+      CHECK(messages[0].console == &console);
+      CHECK(messages[0].level == LogLevel::Warn);
+      CHECK(messages[0].text == "a warning");
+      CHECK(messages[1].level == LogLevel::Info);
+      CHECK(messages[1].text == "some info");
+    }
+
+    SECTION("reports messages on the logging thread")
+    {
+      auto thread = std::thread{[&]() { console.error() << "from a worker"; }};
+      const auto workerId = thread.get_id();
+      thread.join();
+
+      REQUIRE(messages.size() == 1);
+      CHECK(messages[0].text == "from a worker");
+      CHECK(messages[0].level == LogLevel::Error);
+      CHECK(messages[0].thread == workerId);
+    }
+  }
+
+  SECTION("clear")
+  {
+    auto* textView = console.findChild<QTextEdit*>();
+    REQUIRE(textView);
+
+    console.info() << "first";
+    REQUIRE(QTest::qWaitFor([&]() { return !textView->toPlainText().isEmpty(); }));
+
+    // also drops the messages that were not shown yet
+    console.info() << "second";
+    console.clear();
+    CHECK(textView->toPlainText().isEmpty());
+
+    QTest::qWait(100);
+    CHECK(textView->toPlainText().isEmpty());
+  }
+}
+
+TEST_CASE("EditorContext hooks")
+{
+  SECTION("setIgnoreHiddenState")
+  {
+    // The snapshot renderer draws the objects that the MCP core chose, even if they are
+    // hidden in the editor
+    const auto worldBounds = vm::bbox3d{8192.0};
+    const auto builder = mdl::BrushBuilder{mdl::MapFormat::Standard, worldBounds};
+
+    auto groupNode = mdl::GroupNode{mdl::Group{"group"}};
+    auto* brushNode =
+      new mdl::BrushNode{builder.createCube(32.0, "material") | kdl::value()};
+    groupNode.addChild(brushNode);
+
+    auto entityNode = mdl::EntityNode{mdl::Entity{{{"classname", "info_null"}}}};
+
+    groupNode.setVisibilityState(mdl::VisibilityState::Hidden);
+    entityNode.setVisibilityState(mdl::VisibilityState::Hidden);
+
+    auto editorContext = mdl::EditorContext{};
+    CHECK(!editorContext.ignoreHiddenState());
+    CHECK(!editorContext.visible(groupNode));
+    CHECK(!editorContext.visible(*brushNode));
+    CHECK(!editorContext.visible(entityNode));
+
+    editorContext.setIgnoreHiddenState(true);
+    CHECK(editorContext.ignoreHiddenState());
+    CHECK(editorContext.visible(groupNode));
+    CHECK(editorContext.visible(*brushNode));
+    CHECK(editorContext.visible(entityNode));
+
+    // Other filters still apply
+    editorContext.setShowBrushes(false);
+    CHECK(!editorContext.visible(*brushNode));
   }
 }
 

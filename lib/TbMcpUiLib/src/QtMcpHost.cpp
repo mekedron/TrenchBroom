@@ -32,6 +32,7 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
+#include "ui/McpConsoleHook.h"
 #include "ui/RecentDocuments.h"
 #include "ui/SwitchableMapViewContainer.h"
 
@@ -142,6 +143,11 @@ MapWindow* QtMcpHost::findMapWindow(const MapDocument& document) const
   return it != mapWindows.end() ? *it : nullptr;
 }
 
+void QtMcpHost::setConsoleHook(McpConsoleHook* consoleHook)
+{
+  m_consoleHook = consoleHook;
+}
+
 std::string QtMcpHost::applicationVersion() const
 {
   return getBuildVersion().toStdString();
@@ -247,6 +253,30 @@ Logger* QtMcpHost::logTarget(MapDocument& document)
 {
   const auto* mapWindow = findMapWindow(document);
   return mapWindow ? &mapWindow->logger() : nullptr;
+}
+
+mcp::SnapshotRenderer* QtMcpHost::snapshotRenderer()
+{
+  if (!m_snapshotRenderer)
+  {
+    m_snapshotRenderer = std::make_unique<McpSnapshotRenderer>(
+      m_appController.glManager(),
+      [this](const MapDocument& document) { return findMapWindow(document); });
+  }
+  return m_snapshotRenderer.get();
+}
+
+mcp::ConsoleBuffer* QtMcpHost::consoleBuffer()
+{
+  return m_consoleHook ? &m_consoleHook->buffer() : nullptr;
+}
+
+void QtMcpHost::clearConsoleViews()
+{
+  if (m_consoleHook)
+  {
+    m_consoleHook->clearConsoleViews();
+  }
 }
 
 std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()

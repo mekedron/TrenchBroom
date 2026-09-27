@@ -65,6 +65,12 @@ public:
    */
   void advance(std::chrono::milliseconds duration);
 
+  /**
+   * Advances the clock to the earliest delayed task and runs every task that is due
+   * then. Returns false if no task is scheduled.
+   */
+  bool advanceToNextTask();
+
   size_t pendingTaskCount() const;
 };
 

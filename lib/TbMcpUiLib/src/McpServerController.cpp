@@ -36,6 +36,7 @@
 #include "ui/GetVersion.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
+#include "ui/McpConsoleHook.h"
 #include "ui/McpPreferencePane.h"
 #include "ui/McpPreferences.h"
 #include "ui/McpStatusIndicator.h"
@@ -130,6 +131,7 @@ QString formatMcpActivity(const mcp::ServerActivity& activity, const size_t clie
 McpServerController::McpServerController(AppController& appController, QObject* parent)
   : QObject{parent}
   , m_appController{appController}
+  , m_consoleHook{std::make_unique<McpConsoleHook>()}
 {
   auto& prefs = PreferenceManager::instance();
   m_notifierConnection += prefs.preferenceDidChangeNotifier.connect(
@@ -217,6 +219,11 @@ mcp::McpServer* McpServerController::server()
 QtMcpHost* McpServerController::host()
 {
   return m_host.get();
+}
+
+McpConsoleHook& McpServerController::consoleHook()
+{
+  return *m_consoleHook;
 }
 
 std::filesystem::path McpServerController::discoveryFilePath() const
@@ -318,6 +325,7 @@ void McpServerController::start(const Settings& settings)
 
   m_scheduler = std::make_unique<QtScheduler>();
   m_host = std::make_unique<QtMcpHost>(m_appController);
+  m_host->setConsoleHook(m_consoleHook.get());
   m_server = std::make_unique<mcp::McpServer>(
     *m_host,
     *m_scheduler,

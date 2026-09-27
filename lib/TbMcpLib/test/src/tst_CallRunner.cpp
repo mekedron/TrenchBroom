@@ -108,8 +108,35 @@ void asyncSteps(CallContext& context, const Args& args, ToolCompletion completio
   });
 }
 
+/** A read-only asynchronous call: waits 100 ms, then completes in a second step. */
+void asyncRead(CallContext& context, const Args&, ToolCompletion completion)
+{
+  context.defer(
+    [&context, completion]() {
+      if (context.cancelled())
+      {
+        completion(makeError(ErrorCode::Cancelled, "cancelled"));
+        return;
+      }
+      context.defer([&context, completion]() {
+        context.addText("label");
+        completion(Json{
+          {"steps", 2},
+          {"document",
+           context.hasDocument() ? Json(context.documentInfo().id) : Json(nullptr)}});
+      });
+    },
+    100ms);
+}
+
 void registerTestTools(McpServer& server)
 {
+  server.tools().add(ToolDef{"test_async_read"}
+                       .title("Async Read")
+                       .mutation(Mutation::None)
+                       .documentUse(DocumentUse::Optional)
+                       .asyncHandler(asyncRead));
+
   server.tools().add(ToolDef{"test_set_message"}
                        .title("Set Message")
                        .input(object({field("message", string()).required()}))
@@ -572,6 +599,108 @@ TEST_CASE("CallRunner")
       CHECK(error.code == ErrorCode::InternalError);
       // the queue continues
       fixture.call("test_add_entity");
+    }
+  }
+
+  SECTION("asynchronous read-only calls")
+  {
+    const auto structured = [](const auto& stream) {
+      return (*stream->response)["result"]["structuredContent"];
+    };
+
+    SECTION("run immediately, even while the human is busy, and return their result")
+    {
+      fixture.host().busy = BusyState::Busy;
+      auto queued =
+        fixture.post(fixture.sessionId(), callRequest(600, "test_add_entity"));
+      auto stream =
+        fixture.post(fixture.sessionId(), callRequest(601, "test_async_read"));
+      CHECK(!stream->response.has_value());
+
+      // the first step waits for its delay
+      fixture.scheduler().runPending();
+      CHECK(!stream->response.has_value());
+
+      fixture.scheduler().advance(100ms);
+      REQUIRE(stream->response.has_value());
+      CHECK(structured(stream)["steps"] == 2);
+      CHECK(structured(stream)["document"] == fixture.documentId(document));
+      CHECK(!structured(stream).contains("ok"));
+      const auto& content = (*stream->response)["result"]["content"];
+      REQUIRE(content.size() == 2);
+      CHECK(content[1] == Json{{"type", "text"}, {"text", "label"}});
+
+      // the modifying call still waits for the human
+      CHECK(!queued->response.has_value());
+      CHECK(fixture.server().activity().state == ServerActivity::State::WaitingForUser);
+      fixture.host().busy = BusyState::Idle;
+      fixture.scheduler().advance(50ms);
+      REQUIRE(queued->response.has_value());
+    }
+
+    SECTION("run while an asynchronous modifying call runs")
+    {
+      auto modifying = fixture.post(fixture.sessionId(), callRequest(610, "test_async"));
+      auto reading =
+        fixture.post(fixture.sessionId(), callRequest(611, "test_async_read"));
+      fixture.scheduler().advance(100ms);
+
+      REQUIRE(modifying->response.has_value());
+      REQUIRE(reading->response.has_value());
+      CHECK(structured(modifying)["ok"] == true);
+      CHECK(structured(reading)["steps"] == 2);
+    }
+
+    SECTION("several run at the same time")
+    {
+      auto first = fixture.post(fixture.sessionId(), callRequest(620, "test_async_read"));
+      auto second =
+        fixture.post(fixture.sessionId(), callRequest(621, "test_async_read"));
+      fixture.scheduler().advance(100ms);
+      REQUIRE(first->response.has_value());
+      REQUIRE(second->response.has_value());
+      CHECK(fixture.server().activity().state == ServerActivity::State::Idle);
+    }
+
+    SECTION("can be cancelled between steps")
+    {
+      auto stream =
+        fixture.post(fixture.sessionId(), callRequest(630, "test_async_read"));
+      fixture.post(
+        fixture.sessionId(),
+        jsonrpc::makeNotification("notifications/cancelled", Json{{"requestId", 630}}));
+      fixture.scheduler().advance(100ms);
+
+      REQUIRE(stream->response.has_value());
+      CHECK(structured(stream)["error"]["code"] == "CANCELLED");
+    }
+
+    SECTION("are abandoned when the session closes")
+    {
+      auto stream =
+        fixture.post(fixture.sessionId(), callRequest(640, "test_async_read"));
+      fixture.server().deleteSession(fixture.sessionId());
+
+      REQUIRE(stream->response.has_value());
+      CHECK(structured(stream)["error"]["code"] == "CANCELLED");
+      fixture.scheduler().advance(100ms);
+    }
+
+    SECTION("fail when the document is closed meanwhile")
+    {
+      auto stream =
+        fixture.post(fixture.sessionId(), callRequest(650, "test_async_read"));
+      fixture.host().removeDocument(document);
+      fixture.scheduler().advance(100ms);
+
+      REQUIRE(stream->response.has_value());
+      CHECK(structured(stream)["error"]["code"] == "DOCUMENT_NOT_FOUND");
+    }
+
+    SECTION("create no undo step")
+    {
+      fixture.call("test_async_read");
+      CHECK(!map.canUndoCommand());
     }
   }
 

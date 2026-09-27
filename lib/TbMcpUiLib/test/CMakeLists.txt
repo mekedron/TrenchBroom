@@ -8,7 +8,9 @@ target_sources(TbMcpUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompileHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpConsoleHook.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServerController.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpSnapshotRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpTcpTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpUiIntegration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QtMcpHost.cpp
@@ -19,6 +21,12 @@ target_sources(TbMcpUiLibTest
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
+
+# The snapshot renderer tests load shaders and fonts from the editor's resources and
+# render the MCP sample maps
+target_compile_definitions(TbMcpUiLibTest PRIVATE
+  MCP_TEST_RESOURCE_DIR="${TB_RESOURCE_DIR}"
+  MCP_TEST_MAPS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../TbMcpLib/test/fixture/mcp/maps")
 
 target_link_libraries(TbMcpUiLibTest PRIVATE
   CompilerConfig

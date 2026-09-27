@@ -23,6 +23,7 @@
 #include "mcp/Json.h"
 
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -60,9 +61,13 @@ Json makeCallToolResult(
   const std::vector<Json>& additionalContent = {});
 
 /**
- * Runs tool calls. Read-only calls run immediately. Modifying calls go through one FIFO
- * queue shared by all sessions, wait while the human is busy (spec X13), and run in a
+ * Runs tool calls. Read-only calls run immediately; asynchronous read-only calls (e.g.
+ * snapshots) may run while other calls run. Modifying calls go through one FIFO queue
+ * shared by all sessions, wait while the human is busy (spec X13), and run in a
  * transaction (Mutation::Map) that is rolled back on failure or dry run.
+ *
+ * If the host has a console buffer, every result lists the console warnings and errors
+ * that the editor logged while the call ran (`console`).
  */
 class CallRunner
 {
@@ -79,7 +84,10 @@ private:
   ServerState& m_server;
   std::deque<PendingCall> m_queue;
   bool m_running = false;
+  /** The running asynchronous modifying call; the queue waits for it. */
   std::unique_ptr<AsyncCall> m_asyncCall;
+  /** The running asynchronous read-only calls. */
+  std::vector<std::unique_ptr<AsyncCall>> m_readOnlyCalls;
   bool m_startingAsync = false;
   bool m_pollScheduled = false;
   /** Invalidates scheduled polls when the runner is destroyed. */
@@ -114,13 +122,23 @@ private:
   Json execute(const CallRequest& request);
 
   /**
-   * Starts an asynchronous call. Returns true if the call is still running; it then
-   * resumes the queue when it completes.
+   * Starts an asynchronous call. Returns true if the call is still running; a modifying
+   * call then resumes the queue when it completes.
    */
-  bool startAsync(CallRequest request);
-  /** Completes the running asynchronous call and resumes the queue. */
-  void completeAsync(ToolResult result);
+  bool startAsync(CallRequest request, bool readOnly);
+  /** Completes the given running asynchronous call; a modifying call resumes the queue.
+   */
+  void completeAsync(AsyncCall& call, ToolResult result);
+  AsyncCall* findAsyncCall(const std::string& sessionId, const Json& requestId);
   void finish(const CallRequest& request, Json result);
+
+  /** The sequence number of the last console message, or 0 without a console. */
+  uint64_t consoleSeq() const;
+  /**
+   * The console warnings and errors logged after the given sequence number, or null if
+   * there are none.
+   */
+  Json consoleReport(uint64_t seq) const;
 };
 
 } // namespace tb::mcp

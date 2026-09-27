@@ -148,6 +148,41 @@ Compiling
   the entities near its ends and where it leaves the map; close the gap there and
   compile again. portalfile_load shows the portals written by vis.
 
+Looking at your work
+- Check what you built with images. view_snapshot renders the map offscreen from your
+  own camera and returns a PNG; it never moves the user's camera or changes their view
+  filters, hidden objects or selection, and it does not wait for the user.
+- Without a camera, view_snapshot frames the whole map from above at an angle. Name
+  cameras with agent_camera_set: a perspective camera from 'position' plus 'lookAt',
+  'direction' or 'yaw' / 'pitch'; an orthographic 'view' (top, front, side) with
+  'center' and 'zoom'; or a helper: 'frame' (ids or a box), 'orbit' (target, yaw,
+  pitch, distance) or 'eyeHeight' (a point inside a room: the camera stands on the
+  floor below at the player's eye height). Eye heights above the floor: Quake and
+  Quake 2 46 (player 56 tall, 32 wide), Half-Life 64 (player 72 x 32), Quake 3 50
+  (player 56 x 30), other games 48.
+- Options per snapshot: faceMode (textured, flat, wireframe), shading, fog, edges,
+  hideTags (e.g. ["trigger", "clip"]), hideClassnames, pointEntities, brushEntities,
+  patches, entityModels, includeHidden, isolate (only these ids), highlight (ids in a
+  color), bounds, classnames, entityLinks, leakPath, grid, axes. Wireframe with
+  hideTags shows inside rooms from outside.
+- view_snapshots_around renders several labelled views around objects or a box (e.g.
+  north, east, south, west, above). map_plan_view {"format": "image"} draws a top-down
+  plan of a height slice with entities marked.
+- To see what a change did, keep a snapshot ({"keepAs": "before"}), change the map, then
+  call view_snapshot_compare {"before": "before"}; or compare with the state before the
+  last undo steps: {"undoSteps": 1}. It returns both images side by side and a mask of
+  the changed pixels.
+- view_snapshot_user captures what the user currently sees in one of their views and
+  returns that view's camera.
+
+Editor console
+- console_read returns the messages the editor logs (material, model and definition
+  load errors, compile and export messages, ...), with level, time and document. Pass
+  the returned 'lastSeq' as 'after' to fetch only newer messages; filter with minLevel,
+  text (or a regex) and document. Subscribe to trenchbroom://console to be notified of
+  new messages. console_clear clears the buffer and the editor's console views.
+- Every call result lists under 'console' the warnings and errors logged while it ran.
+
 Results
 - Modifying calls return 'changes' (created / modified / removed ids), 'selection',
   'issuesIntroduced', 'warnings' and the grid size in effect.
