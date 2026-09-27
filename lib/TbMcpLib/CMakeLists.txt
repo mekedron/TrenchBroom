@@ -51,6 +51,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EngineTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityCreateTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityModelTools.cpp
@@ -66,6 +67,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ManifestTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MapCheckTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialKnowledge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialKnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialTools.cpp
@@ -139,6 +141,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ConsoleTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CsgUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EngineTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityModelTools.h
@@ -152,6 +155,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/LayerTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ManifestTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MapCheckTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialKnowledge.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialKnowledgeTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h

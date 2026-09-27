@@ -55,7 +55,8 @@ auto arguments(const mdl::GameEngineProfile& profile, const el::VariableStore& v
 Result<void> launchGameEngineProfile(
   const mdl::GameEngineProfile& profile,
   const el::VariableStore& variables,
-  const std::optional<std::filesystem::path>& logFilePath)
+  const std::optional<std::filesystem::path>& logFilePath,
+  int64_t* processId)
 {
   const auto workDir = pathAsQString(profile.path.parent_path());
   return arguments(profile, variables) | kdl::and_then([&](const auto& engineArguments) {
@@ -93,9 +94,14 @@ Result<void> launchGameEngineProfile(
              process.setArguments(engineArguments);
            }
 
-           if (!process.startDetached())
+           auto pid = qint64{0};
+           if (!process.startDetached(&pid))
            {
              return Result<void>{Error{process.errorString().toStdString()}};
+           }
+           if (processId)
+           {
+             *processId = int64_t(pid);
            }
 
            return Result<void>{};

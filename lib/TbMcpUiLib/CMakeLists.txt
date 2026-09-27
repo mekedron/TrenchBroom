@@ -4,6 +4,7 @@ target_sources(TbMcpUiLib
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpCompileHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpConsoleHook.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpEngineHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpPreferencePane.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServerController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpSnapshotRenderer.cpp
@@ -18,6 +19,7 @@ target_sources(TbMcpUiLib
     FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpCompileHost.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpConsoleHook.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpEngineHost.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpPreferencePane.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpPreferences.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpServerController.h

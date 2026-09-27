@@ -24,7 +24,9 @@
 #include "mcp/Snapshot.h"
 #include "mdl/CompilationProfile.h"
 #include "mdl/EnvironmentConfig.h"
+#include "mdl/GameEngineProfile.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -124,6 +126,42 @@ public:
 private:
   friend class FakeCompileJob;
   void jobDestroyed(FakeCompileJob& job);
+};
+
+/**
+ * Records the engine launches instead of starting processes. engineParameters replaces
+ * ${MAP_BASE_NAME} with the base name of the document's map file and keeps everything
+ * else, so tests can see that the parameters were interpolated.
+ */
+class FakeEngineHost : public EngineHost
+{
+public:
+  struct Launch
+  {
+    ui::MapDocument* document = nullptr;
+    mdl::GameEngineProfile profile;
+    /** The parameter spec that was passed, or nullopt for the profile's. */
+    std::optional<std::string> parameterSpec;
+    /** The interpolated parameters. */
+    std::string parameters;
+    int64_t processId = 0;
+  };
+
+  /** Every launch so far, in order. */
+  std::vector<Launch> launches;
+  /** If set, launchEngine fails with this message. */
+  std::optional<std::string> startError;
+  /** If set, engineParameters (and therefore launchEngine) fails with this message. */
+  std::optional<std::string> parametersError;
+  /** The process id of the next launch; incremented by each launch. */
+  int64_t nextProcessId = 4242;
+
+  Result<std::string> engineParameters(
+    ui::MapDocument& document, const std::string& parameterSpec) override;
+  Result<int64_t> launchEngine(
+    ui::MapDocument& document,
+    const mdl::GameEngineProfile& profile,
+    std::optional<std::string> parameterSpec) override;
 };
 
 /**
@@ -231,6 +269,11 @@ public:
   /** If false, compileHost() returns nullptr (a host that cannot compile). */
   bool supportsCompile = true;
 
+  /** The engine host returned by engineHost(). */
+  FakeEngineHost engine;
+  /** If false, engineHost() returns nullptr (a host that cannot launch engines). */
+  bool supportsEngine = true;
+
   /** The snapshot renderer returned by snapshotRenderer(). */
   FakeSnapshotRenderer snapshot;
   /** If set, snapshotRenderer() returns this renderer instead of `snapshot`. */
@@ -296,6 +339,7 @@ public:
   DocumentHost& documentHost() override;
   mdl::GameManager& gameManager() override;
   CompileHost* compileHost() override;
+  EngineHost* engineHost() override;
   SnapshotRenderer* snapshotRenderer() override;
   /** A logger that adds the messages to `console` with the document and its title. */
   Logger* logTarget(ui::MapDocument& document) override;

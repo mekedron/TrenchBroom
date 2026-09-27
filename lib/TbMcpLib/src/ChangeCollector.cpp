@@ -238,6 +238,7 @@ ChangeCollector::ChangeCollector(
 {
   if (placement)
   {
+    m_disabledValidators = placement->disabledValidators;
     m_placement =
       std::make_unique<PlacementTracker>(document.map(), ids, std::move(*placement));
   }
@@ -332,6 +333,10 @@ ChangeReport ChangeCollector::finish()
       {
         auto name = validatorName(validators, issue->type());
         auto code = issueCode(name);
+        if (m_disabledValidators.contains(code))
+        {
+          continue;
+        }
         report.issuesIntroduced.push_back(
           IntroducedIssue{id, std::move(name), issue->description(), std::move(code)});
       }

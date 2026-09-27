@@ -21,7 +21,9 @@
 #include <QTest>
 #include <QTextEdit>
 
+#include "CmdTool.h"
 #include "McpUiTestUtils.h"
+#include "el/VariableStore.h"
 #include "fs/TestEnvironment.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
@@ -29,6 +31,7 @@
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
+#include "mdl/GameEngineProfile.h"
 #include "mdl/Group.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
@@ -37,11 +40,15 @@
 #include "ui/AppControllerFixture.h"
 #include "ui/CompilationDialog.h"
 #include "ui/Console.h"
+#include "ui/LaunchGameEngine.h"
 #include "ui/MapDocument.h"
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
 #include "ui/SwitchableMapViewContainer.h"
 
+#include <cstdint>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -279,6 +286,37 @@ TEST_CASE("EditorContext hooks")
     // Other filters still apply
     editorContext.setShowBrushes(false);
     CHECK(!editorContext.visible(*brushNode));
+  }
+}
+
+TEST_CASE("LaunchGameEngine hooks")
+{
+  SECTION("launchGameEngineProfile reports the process id")
+  {
+    auto env = fs::TestEnvironment{};
+    const auto logFile = env.dir() / "engine.log";
+    const auto profile = mdl::GameEngineProfile{
+      .id = "engine-id",
+      .name = "CmdTool",
+      .path = CMD_TOOL_PATH,
+      .parameterSpec = "--printArgs hook",
+    };
+
+    auto processId = int64_t{0};
+    CHECK(
+      launchGameEngineProfile(profile, el::VariableTable{}, logFile, &processId)
+      == Result<void>{});
+    CHECK(processId > 0);
+
+    // wait for CmdTool to finish
+    CHECK(QTest::qWaitFor(
+      [&]() {
+        auto stream = std::ifstream{logFile};
+        auto buffer = std::stringstream{};
+        buffer << stream.rdbuf();
+        return buffer.str() == "hook\n";
+      },
+      10000));
   }
 }
 

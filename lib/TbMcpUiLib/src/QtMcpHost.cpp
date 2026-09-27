@@ -250,6 +250,11 @@ mcp::CompileHost* QtMcpHost::compileHost()
   return &m_compileHost;
 }
 
+mcp::EngineHost* QtMcpHost::engineHost()
+{
+  return &m_engineHost;
+}
+
 Logger* QtMcpHost::logTarget(MapDocument& document)
 {
   const auto* mapWindow = findMapWindow(document);

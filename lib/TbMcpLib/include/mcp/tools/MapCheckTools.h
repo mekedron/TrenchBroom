@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2025 Kristian Duske
+ Copyright (C) 2026 Nikita Rabykin
 
  This file is part of TrenchBroom.
 
@@ -19,32 +19,15 @@
 
 #pragma once
 
-#include "base/Result.h"
-
-#include <cstdint>
-#include <filesystem>
-#include <optional>
-
-namespace tb
+namespace tb::mcp
 {
-namespace el
-{
-class VariableStore;
-}
+class ToolRegistry;
 
-namespace mdl
-{
-struct GameEngineProfile;
-}
+/**
+ * Registers map_check: agent-oriented checks beyond the editor's validators (entities
+ * in walls or floating, a missing player start, broken entity links, missing materials,
+ * entities outside rooms), each finding with a suggested fix.
+ */
+void registerMapCheckTools(ToolRegistry& registry);
 
-namespace ui
-{
-
-Result<void> launchGameEngineProfile(
-  const mdl::GameEngineProfile& profile,
-  const el::VariableStore& variables,
-  const std::optional<std::filesystem::path>& logFilePath = std::nullopt,
-  int64_t* processId = nullptr);
-
-} // namespace ui
-} // namespace tb
+} // namespace tb::mcp

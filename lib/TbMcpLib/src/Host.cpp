@@ -28,9 +28,16 @@ CompileJob::~CompileJob() = default;
 
 CompileHost::~CompileHost() = default;
 
+EngineHost::~EngineHost() = default;
+
 McpHost::~McpHost() = default;
 
 CompileHost* McpHost::compileHost()
+{
+  return nullptr;
+}
+
+EngineHost* McpHost::engineHost()
 {
   return nullptr;
 }

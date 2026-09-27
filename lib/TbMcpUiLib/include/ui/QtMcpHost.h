@@ -24,6 +24,7 @@
 #include "base/NotifierConnection.h"
 #include "mcp/Host.h"
 #include "ui/McpCompileHost.h"
+#include "ui/McpEngineHost.h"
 #include "ui/McpSnapshotRenderer.h"
 
 #include <filesystem>
@@ -71,6 +72,8 @@ private:
   const MapWindow* m_topMapWindow = nullptr;
   /** Runs compilations with the camera of the document's 3D view. */
   McpCompileHost m_compileHost;
+  /** Launches game engines. */
+  McpEngineHost m_engineHost;
   /** Renders snapshots offscreen; created when first requested. */
   std::unique_ptr<McpSnapshotRenderer> m_snapshotRenderer;
   /** Collects the console messages; owned by McpServerController. */
@@ -99,6 +102,7 @@ public: // mcp::McpHost
   mcp::DocumentHost& documentHost() override;
   mdl::GameManager& gameManager() override;
   mcp::CompileHost* compileHost() override;
+  mcp::EngineHost* engineHost() override;
   Logger* logTarget(MapDocument& document) override;
   mcp::SnapshotRenderer* snapshotRenderer() override;
   mcp::ConsoleBuffer* consoleBuffer() override;

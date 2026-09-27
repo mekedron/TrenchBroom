@@ -471,10 +471,15 @@ void ServerState::documentAspectDidChange(
   {
     scheduleDocumentUpdate(document, aspect);
   }
+  if (aspect == DocumentAspect::Summary)
+  {
+    // the issues change with the objects and the entity definitions
+    scheduleDocumentUpdate(document, DocumentAspect::Issues);
+  }
 
   if (
     aspect != DocumentAspect::Summary && aspect != DocumentAspect::EntityDefinitions
-    && aspect != DocumentAspect::Materials)
+    && aspect != DocumentAspect::Materials && aspect != DocumentAspect::Issues)
   {
     // the editor status lists the modified flag and the selection of the documents
     scheduleResourceUpdate(EditorStatusUri);
@@ -523,6 +528,8 @@ std::string ServerState::documentResourceUri(
       return "entity-definitions";
     case DocumentAspect::Materials:
       return "materials";
+    case DocumentAspect::Issues:
+      return "issues";
     case DocumentAspect::Status:
       break;
     }

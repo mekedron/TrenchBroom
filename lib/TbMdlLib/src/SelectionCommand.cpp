@@ -144,7 +144,11 @@ void doSelectNodes(const std::vector<Node*>& nodes, Map& map)
       if (!node->selected() /* && m_editorContext->selectable(node) remove check to allow issue objects to be selected */)
       {
         node->select();
-        selected.push_back(node);
+        // nodes that cannot be selected, such as the world, stay unselected
+        if (node->selected())
+        {
+          selected.push_back(node);
+        }
       }
     }
   }

@@ -20,6 +20,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityCreateTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityModelTools.cpp
@@ -40,6 +41,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ManifestTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapCheckTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapManifest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledgeTools.cpp
@@ -71,6 +73,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamLoadAssimpModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamMap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamNode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamQuickFixes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvCheck.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvWarnings.cpp

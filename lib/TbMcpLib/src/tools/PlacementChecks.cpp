@@ -530,6 +530,37 @@ std::vector<std::string> mcpIssueCodes()
   };
 }
 
+std::vector<McpCheck> mcpChecks()
+{
+  return {
+    {std::string{ZFightingCode}, "Z-fighting", {std::string{ZFightingCode}}},
+    {std::string{EntityOutsideHullCode},
+     "Entity outside the hull",
+     {std::string{EntityOutsideHullCode}}},
+    {std::string{ModelPlacementCheck},
+     "Model placement",
+     {"MODEL_BELOW_FLOOR",
+      "MODEL_FLOATING",
+      "MODEL_PENETRATES_BRUSHES",
+      "MODEL_NO_FLOOR"}},
+    {std::string{UvDistortionCode},
+     "Texture distortion",
+     {std::string{UvDistortionCode}}},
+  };
+}
+
+std::string mcpCheckOfCode(const std::string_view code)
+{
+  for (const auto& check : mcpChecks())
+  {
+    if (std::ranges::find(check.codes, code) != check.codes.end())
+    {
+      return check.name;
+    }
+  }
+  return std::string{code};
+}
+
 bool isToolMaterial(const std::string_view materialName)
 {
   static const auto exact = std::set<std::string, std::less<>>{
@@ -925,8 +956,8 @@ void PlacementTracker::snapshotLeaks()
 {
   auto* cache = m_options.cache;
   if (
-    !cache || cache->leakChecksDisabled || m_leaksBefore || m_leakBeforeTried
-    || m_changed)
+    !cache || cache->leakChecksDisabled || !enabled(EntityOutsideHullCode)
+    || m_leaksBefore || m_leakBeforeTried || m_changed)
   {
     return;
   }
@@ -961,6 +992,11 @@ void PlacementTracker::snapshotLeaks()
       "leak prediction took {} ms",
       std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()));
   }
+}
+
+bool PlacementTracker::enabled(const std::string_view check) const
+{
+  return !m_options.disabledValidators.contains(std::string{check});
 }
 
 void PlacementTracker::disableLeakChecks(const std::string& reason)
@@ -1023,19 +1059,22 @@ void PlacementTracker::snapshot(const std::vector<mdl::Node*>& nodes)
     addEntity(entityNode);
   }
 
-  if (!brushes.empty())
+  if (!brushes.empty() && enabled(ZFightingCode))
   {
     for (const auto& issue : zFightingIssues(findZFighting(m_map, &brushes), m_ids))
     {
       m_zBefore.insert(issue.signature);
     }
+  }
+  if (!brushes.empty() && enabled(UvDistortionCode))
+  {
     for (const auto& issue :
          uvDistortionIssues(facesOf(uvBrushes), m_map, knowledge(), m_ids))
     {
       m_uvBefore.insert(issue.signature);
     }
   }
-  if (!entities.empty())
+  if (!entities.empty() && enabled(ModelPlacementCheck))
   {
     for (const auto& issue : modelPlacementIssues(m_map, m_ids, entities, loader()))
     {
@@ -1101,7 +1140,7 @@ PlacementReport PlacementTracker::finish(
   };
 
   // z-fighting
-  if (!brushes.empty())
+  if (!brushes.empty() && enabled(ZFightingCode))
   {
     for (auto& issue : zFightingIssues(findZFighting(m_map, &brushes), m_ids))
     {
@@ -1113,6 +1152,7 @@ PlacementReport PlacementTracker::finish(
   }
 
   // model placement
+  if (enabled(ModelPlacementCheck))
   {
     auto entities = std::vector<mdl::EntityNode*>{};
     auto direct = std::unordered_set<std::string>{m_entitiesSnapshotted};
@@ -1168,7 +1208,7 @@ PlacementReport PlacementTracker::finish(
   }
 
   // texture distortion
-  if (!uvBrushes.empty())
+  if (!uvBrushes.empty() && enabled(UvDistortionCode))
   {
     for (auto& issue : uvDistortionIssues(facesOf(uvBrushes), m_map, knowledge(), m_ids))
     {
@@ -1191,7 +1231,9 @@ PlacementReport PlacementTracker::finish(
     }
     return false;
   };
-  if (cache && !cache->leakChecksDisabled && leakRelevant())
+  if (
+    cache && !cache->leakChecksDisabled && enabled(EntityOutsideHullCode)
+    && leakRelevant())
   {
     const auto start = std::chrono::steady_clock::now();
     const auto leaks = predictLeaks(m_map);

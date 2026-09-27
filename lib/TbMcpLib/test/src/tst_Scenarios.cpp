@@ -710,4 +710,87 @@ TEST_CASE("Scenario E12")
   }));
 }
 
+TEST_CASE("Scenario S2")
+{
+  // Open a map with problems, report every issue, apply the fixes that resolve them and
+  // list what remains with reasons. The fixes are named undo steps.
+  auto fixture = McpToolFixture{};
+  fixture.load(
+    getFixtureRoot() / "test" / "mcp" / "maps" / "issues.map",
+    {.mapFormat = mdl::MapFormat::Standard, .gameInfo = mdl::QuakeGameInfo});
+  fixture.call(
+    "entity_definitions_set",
+    {{"type", "external"},
+     {"path", (getFixtureRoot() / "test" / "mcp" / "models.fgd").string()}});
+
+  // every issue has a type, an object and an explanation
+  const auto before = fixture.call("issues_list");
+  const auto total = before["total"].get<size_t>();
+  REQUIRE(total >= 10);
+  for (const auto& item : before["items"])
+  {
+    CHECK(!item["type"].get<std::string>().empty());
+    CHECK(!item["objectId"].get<std::string>().empty());
+    CHECK(!item["description"].get<std::string>().empty());
+  }
+
+  // fix every issue that has exactly one fix, one call per code; deleting entities
+  // because the definition file lacks their class is not safe
+  auto codes = std::vector<std::string>{};
+  for (const auto& item : before["items"])
+  {
+    const auto code = item["code"].get<std::string>();
+    if (
+      item["fixes"].size() == 1 && code != "MISSING_ENTITY_DEFINITION"
+      && std::ranges::find(codes, code) == codes.end())
+    {
+      codes.push_back(code);
+    }
+  }
+  REQUIRE(codes.size() >= 8);
+
+  auto removed = std::vector<std::string>{};
+  auto modified = std::vector<std::string>{};
+  for (const auto& code : codes)
+  {
+    const auto result = fixture.call("issue_fix", Json{{"codes", {code}}});
+    INFO(code);
+    CHECK(result["result"]["fixedCount"].get<size_t>() > 0);
+    CHECK(result["result"]["notFixedCount"] == 0);
+    CHECK(result["undoStep"] == "AI: Fix Issues");
+    // the agent can report every object it deleted or changed
+    for (const auto& id : result["changes"]["removed"])
+    {
+      removed.push_back(id.get<std::string>());
+    }
+    for (const auto& id : result["changes"]["modified"])
+    {
+      modified.push_back(id.get<std::string>());
+    }
+  }
+  CHECK(!removed.empty());
+  CHECK(!modified.empty());
+
+  // the issue count dropped; the remaining issues are listed with reasons
+  const auto after = fixture.call("issues_list");
+  CHECK(after["total"].get<size_t>() < total);
+  REQUIRE(after["total"].get<size_t>() > 0);
+  for (const auto& item : after["items"])
+  {
+    CHECK((item["fixes"].empty() || item["code"] == "MISSING_ENTITY_DEFINITION"));
+    CHECK(!item["description"].get<std::string>().empty());
+  }
+  CHECK(after["counts"].contains("Z_FIGHTING"));
+
+  const auto remaining = fixture.call("issue_fix", Json{{"codes", {"Z_FIGHTING"}}});
+  CHECK(remaining["result"]["fixedCount"] == 0);
+  CHECK(!remaining["result"]["notFixed"][0]["reason"].get<std::string>().empty());
+
+  // one undo step per fix call
+  const auto history = fixture.call("history_get");
+  const auto fixSteps = std::ranges::count_if(
+    history["undo"], [](const auto& step) { return step["name"] == "AI: Fix Issues"; });
+  CHECK(size_t(fixSteps) == codes.size());
+}
+
 } // namespace tb::mcp

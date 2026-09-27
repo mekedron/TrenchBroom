@@ -29,6 +29,7 @@
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
+#include "mcp/tools/ValidationTools.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
 #include "tools/ToolUtils.h"
@@ -186,6 +187,13 @@ Compiling
 - On a leak, compile_status names the point file: pointfile_load returns the leak path,
   the entities near its ends and where it leaves the map; close the gap there and
   compile again. portalfile_load shows the portals written by vis.
+- engine_profiles_list shows the game's engine profiles (path, parameters, whether the
+  engine is executable). engine_profile_save adds one, e.g. {"name": "Quakespasm",
+  "path": "/opt/quakespasm/quakespasm", "parameters": "+map ${MAP_BASE_NAME}"}.
+- After a successful compile_run, engine_launch {"profile": "Quakespasm"} starts the
+  game with the map and returns at once with the process id. "parameters" overrides
+  the profile's for one launch. The engine loads the last compiled .bsp, so compile
+  again after changes.
 
 Looking at your work
 - Check what you built with images. view_snapshot renders the map offscreen from your
@@ -248,6 +256,29 @@ Spaces and placement
   notes and your cameras ("saveCameras": "all") in <map>.mcp.json next to the map (for a
   new map it is written on the first save). Start work on a map with
   map_manifest_get {"restoreCameras": true}.
+
+Checking and fixing the map
+- issues_list lists every problem with an id, code, object, explanation and the names of
+  its fixes; subscribe to trenchbroom://documents/{doc}/issues to follow them.
+- issue_fix applies fixes in one undo step: {"codes": ["EMPTY_BRUSH_ENTITY"]}, {"issues":
+  [ids]} or {"ids": [objects]}; 'fix' chooses when an issue has several (e.g. Delete
+  Property or Replace " with '). The change report lists what was deleted or
+  changed; 'notFixed' explains every issue left. Fixes such as Delete Objects remove
+  objects: fix by code only when that is what you want, and never delete entities just
+  because the definition file lacks their class. MCP fixes: "Apply Suggested Move"
+  (MODEL_* issues with a suggested move) and "Apply Suggested UV Fix". Z_FIGHTING and
+  ENTITY_OUTSIDE_HULL need your own edits.
+- Before compiling or handing a map over, run map_check: entities in walls or floating,
+  a missing player start, broken or missing links, missing materials and entities
+  outside rooms. Fix errors first (ENTITY_IN_SOLID, MISSING_PLAYER_START,
+  ENTITY_OUTSIDE_HULL), then warnings. Each finding's suggestedFix is a ready call (tool
+  and args): check that it makes sense, call it, then run map_check again with the same
+  'checks'. {"checks": ["links", "materials"]} skips the slower space analysis; 'ids'
+  checks only what you just built.
+- issue_hide / issue_show hide editor issues as the Issues view does. validators_list /
+  validators_set turn validators and the MCP checks off for the document, e.g.
+  ENTITY_OUTSIDE_HULL while the map is not sealed yet; turned-off checks are not
+  reported after each call either.
 
 Editor console
 - console_read returns the messages the editor logs (material, model and definition
@@ -412,6 +443,24 @@ void registerResources(McpServer& server)
       return result;
     }),
     documentLister(DocumentAspect::Materials, "materials", "Materials"),
+  });
+
+  resources.addTemplate(ResourceTemplateDef{
+    "trenchbroom://documents/{doc}/issues",
+    "issues",
+    "Issues",
+    "The current problems of an open document, as issues_list returns them without "
+    "filters: the editor validators' issues (hidden ones excluded) and the MCP checks "
+    "(z-fighting, entities outside the hull, model placement, texture distortion), "
+    "with total, counts per code and at most 200 items; validators turned off with "
+    "validators_set are skipped ({doc} is a handle such as doc:1). Subscribe to get "
+    "notified when objects change, issues are hidden or shown, or validators are "
+    "turned on or off.",
+    "application/json",
+    documentReader([](ServerState& state, const DocumentInfo& document, Session&) {
+      return issuesResource(state, document);
+    }),
+    documentLister(DocumentAspect::Issues, "issues", "Issues"),
   });
 
   resources.addTemplate(ResourceTemplateDef{

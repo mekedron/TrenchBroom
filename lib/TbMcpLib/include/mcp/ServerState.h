@@ -91,6 +91,11 @@ enum class DocumentAspect
    */
   Materials,
   /**
+   * trenchbroom://documents/{doc}/issues: objects were added, removed or changed, entity
+   * definitions changed, issues were hidden or shown, or validators turned on or off.
+   */
+  Issues,
+  /**
    * Only trenchbroom://editor/status: the grid changed. (Info and selection changes
    * update the editor status, too.)
    */
@@ -110,6 +115,12 @@ public:
   PlacementCache placement;
   /** The map manifest, written next to the map when it is saved. */
   ManifestStore manifest;
+  /**
+   * The validators turned off with validators_set: editor validator codes (e.g.
+   * EMPTY_PROPERTY_VALUE) and MCP check names (e.g. Z_FIGHTING). Their issues are
+   * neither listed nor reported per call.
+   */
+  std::set<std::string> disabledValidators;
 
 private:
   NotifierConnection m_notifierConnection;

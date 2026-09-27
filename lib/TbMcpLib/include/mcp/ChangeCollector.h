@@ -26,6 +26,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -148,6 +149,8 @@ private:
   bool m_selectionChanged = false;
   bool m_contextChanged = false;
   std::unique_ptr<PlacementTracker> m_placement;
+  /** Editor validator codes whose issues are not reported (validators_set). */
+  std::set<std::string> m_disabledValidators;
 
   NotifierConnection m_notifierConnection;
 

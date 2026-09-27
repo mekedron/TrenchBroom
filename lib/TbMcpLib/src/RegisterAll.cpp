@@ -26,6 +26,7 @@
 #include "mcp/tools/CompileTools.h"
 #include "mcp/tools/ConsoleTools.h"
 #include "mcp/tools/DocumentTools.h"
+#include "mcp/tools/EngineTools.h"
 #include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/EntityCreateTools.h"
 #include "mcp/tools/EntityModelTools.h"
@@ -37,6 +38,7 @@
 #include "mcp/tools/HistoryTools.h"
 #include "mcp/tools/LayerTools.h"
 #include "mcp/tools/ManifestTools.h"
+#include "mcp/tools/MapCheckTools.h"
 #include "mcp/tools/MaterialKnowledgeTools.h"
 #include "mcp/tools/MaterialTools.h"
 #include "mcp/tools/PickTools.h"
@@ -82,10 +84,12 @@ void registerAll(McpServer& server)
   registerGroupTools(server.tools());
   registerClipboardTools(server.tools());
   registerCompileTools(server.tools());
+  registerEngineTools(server.tools());
   registerSnapshotTools(server.tools());
   registerPickTools(server.tools());
   registerManifestTools(server.tools());
   registerValidationTools(server.tools());
+  registerMapCheckTools(server.tools());
   registerConsoleTools(server.tools());
   registerResources(server);
   registerCompileResources(server.resources());

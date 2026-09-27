@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -65,6 +66,27 @@ inline constexpr auto UvDistortionCode = std::string_view{"UV_ASPECT_DISTORTION"
 
 /** The codes of the MCP checks, for schemas and filters. */
 std::vector<std::string> mcpIssueCodes();
+
+/** The name of the model placement check, which reports the four MODEL_* codes. */
+inline constexpr auto ModelPlacementCheck = std::string_view{"MODEL_PLACEMENT"};
+
+/**
+ * An MCP check as a validator (validators_list / validators_set): its name, a title
+ * and the issue codes it reports.
+ */
+struct McpCheck
+{
+  std::string name;
+  std::string title;
+  std::vector<std::string> codes;
+};
+
+/** The MCP checks: Z_FIGHTING, ENTITY_OUTSIDE_HULL, MODEL_PLACEMENT,
+ * UV_ASPECT_DISTORTION. */
+std::vector<McpCheck> mcpChecks();
+
+/** The name of the MCP check that reports the given code (the code itself if unknown). */
+std::string mcpCheckOfCode(std::string_view code);
 
 /** A problem found by an MCP check. */
 struct McpIssue
@@ -218,6 +240,12 @@ struct PlacementTrackerOptions
   std::optional<std::filesystem::path> knowledgeDirectory;
   /** The call is a dry run: its results are not cached. */
   bool dryRun = false;
+  /**
+   * The validators turned off for the document (validators_set): editor validator codes
+   * and MCP check names. Their issues are not reported and turned-off MCP checks are
+   * not run.
+   */
+  std::set<std::string> disabledValidators = {};
 };
 
 /** The placement problems a call introduced. */
@@ -303,6 +331,7 @@ private:
   void snapshot(const std::vector<mdl::Node*>& nodes);
   void snapshotLeaks();
   void disableLeakChecks(const std::string& reason);
+  bool enabled(std::string_view check) const;
   EntityModelLoader& loader();
   MaterialKnowledge& knowledge();
 };

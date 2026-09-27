@@ -56,6 +56,9 @@ IssueQuickFix makeMoveBrushesToWorldQuickFix()
 
             deselectAll(map);
             reparentNodes(map, nodesToReparent);
+            // reparenting removes the entities that became empty
+            std::erase_if(
+              affectedNodes, [](const auto* node) { return node->parent() == nullptr; });
             selectNodes(map, affectedNodes);
           }};
 }

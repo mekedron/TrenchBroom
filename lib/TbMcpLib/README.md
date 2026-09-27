@@ -70,9 +70,11 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `Pagination`: cursors, limits and field selection for list tools.
 - `CallLog`: the ring buffer behind `session_log` plus sinks (console, JSONL file).
 - `Host`: the editor as seen by the server (`McpHost`, with the `DocumentHost` sub-interface
-  that creates, loads and closes documents and the `CompileHost` sub-interface that runs
-  compile profiles as `CompileJob`s). The editor implements it in `TbMcpUiLib` (`QtMcpHost`,
-  `McpCompileHost`); tests use `FakeHost` and `FakeCompileHost` from `TbMcpTestUtilsLib`.
+  that creates, loads and closes documents, the `CompileHost` sub-interface that runs
+  compile profiles as `CompileJob`s and the `EngineHost` sub-interface that launches game
+  engines). The editor implements it in `TbMcpUiLib` (`QtMcpHost`, `McpCompileHost`,
+  `McpEngineHost`); tests use `FakeHost`, `FakeCompileHost` and `FakeEngineHost` from
+  `TbMcpTestUtilsLib`.
 - `Snapshot` (`SnapshotRenderer`, `SnapshotRequest`), `AgentCamera`, `Image`: agent vision. The
   core resolves agent cameras and visibility options into a request; the host's renderer
   (`McpSnapshotRenderer` in `TbMcpUiLib`, `FakeSnapshotRenderer` in tests) draws it offscreen
@@ -108,7 +110,12 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   free spots, walking and leak prediction behind `spaces_list`, `surroundings`, `free_spots`, `walkable_plan`.
 - `tools/PlacementChecks` (public header, tested directly): z-fighting and the per-call placement tracker that adds
   the MCP checks (z-fighting, entities outside the hull, model placement, UV distortion) to `issuesIntroduced`;
-  `issues_list` reports them with the editor validators' issues.
+  `issues_list` reports them with the editor validators' issues, `issue_fix` applies the editor's quick fixes
+  and the MCP checks' fixes, and `validators_set` turns validators and checks off per document
+  (`DocumentState::disabledValidators`).
+- `tools/MapCheckTools`: `map_check`, the agent-oriented checks (entities in walls or floating, player start, entity
+  links, missing materials, entities outside rooms) with a suggested fix per finding, built on `PlacementChecks`,
+  `EntityModelUtils` and `SpaceAnalysis`.
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type
   descriptions, value validation with X14 warnings, flag lookup by name, `resolveEntities` /
   `withEntities` for tools that act on entities including worldspawn).

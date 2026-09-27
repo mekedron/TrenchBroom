@@ -10,6 +10,7 @@ target_sources(TbMcpUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompileHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpConsoleHook.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpEngineHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpServerController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpSnapshotRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpTcpTransport.cpp

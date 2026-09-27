@@ -523,7 +523,10 @@ Json CallRunner::execute(const CallRequest& request)
       *mapDocument,
       documentState->ids,
       PlacementTrackerOptions{
-        &documentState->placement, m_server.host.knowledgeDirectory(), dryRun});
+        &documentState->placement,
+        m_server.host.knowledgeDirectory(),
+        dryRun,
+        documentState->disabledValidators});
   }
 
   m_server.setActivity(ServerActivity::State::Running, tool->title());

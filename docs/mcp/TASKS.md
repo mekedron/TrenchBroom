@@ -24,7 +24,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E10 | Agent vision and editor console | §17 | v1 | Done |
 | E11 | Level-design knowledge: texturing and model-aware placement | §10, §11 | v1 | Done |
 | E12 | Spatial understanding: picking, rooms, free spots, placement checks | §5, §15, §17 | v1 | Done |
-| E13 | Validation and engine launch | §15, §16 | MVP + v1 | In progress |
+| E13 | Validation and engine launch | §15, §16 | MVP + v1 | Done |
 | E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
 | E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Not started |
 | E16 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
@@ -336,7 +336,7 @@ Goal: the agent textures surfaces the way an experienced designer of that game w
 - [x] E11.13 Tests: corpus scan and profile merging on fixture maps; image tile detection on fixture textures; every `uv_check` finding; aspect-preserving fit; model bounds per animation and the placement warnings (e.g. a sitting model whose feet go below the floor).
 - [x] E11.14 Agent guide: how to texture with profiles (check the profile, prefer the typical scale, adjust geometry for panels, run `uv_check`, look at a snapshot).
 
-`map_check` belongs to E13 and does not exist yet: the placement checks are available as `entity_placement_check` and the texturing checks as `uv_check`; `map_check` reuses `checkModelPlacement` and `checkUv`.
+The placement checks are also available as `entity_placement_check` and the texturing checks as `uv_check`; `map_check` (E13) reuses the model placement checks.
 
 **Done when:** after scanning a folder of reference maps, `material_usage` reports a panel and a tiling material correctly; `uv_check` finds a stretched texture and a fractional panel repeat on a fixture map; aspect-preserving fit works; placing a sitting character whose model reaches below the floor produces a warning.
 
@@ -384,11 +384,11 @@ Goal: the agent moves from "I see a problem in the picture" to "I know the objec
 Goal: the agent can find and fix problems in a map and start the game with it.
 
 - [x] E13.1 `issues_list` (types, include hidden, objects, available fixes).
-- [ ] E13.2 `issue_fix` (single and bulk), `issue_hide`, `issue_show`.
-- [ ] E13.3 `validators_list`, `validators_set`.
-- [ ] E13.4 `map_check`: agent-oriented checks: entities in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms.
-- [ ] E13.5 `engine_profiles_list`, `engine_profile_save`, `engine_launch`.
-- [ ] E13.6 Resource: issues (subscribable).
+- [x] E13.2 `issue_fix` (single and bulk), `issue_hide`, `issue_show`.
+- [x] E13.3 `validators_list`, `validators_set`.
+- [x] E13.4 `map_check`: agent-oriented checks: entities in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms.
+- [x] E13.5 `engine_profiles_list`, `engine_profile_save`, `engine_launch`.
+- [x] E13.6 Resource: issues (subscribable).
 
 **Done when:** scenario S2 passes; tests cover every quick fix and the agent-oriented checks.
 

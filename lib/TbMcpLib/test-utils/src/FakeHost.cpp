@@ -190,6 +190,49 @@ Result<std::unique_ptr<CompileJob>> FakeCompileHost::startCompile(
   return std::unique_ptr<CompileJob>{std::move(job)};
 }
 
+Result<std::string> FakeEngineHost::engineParameters(
+  ui::MapDocument& document, const std::string& parameterSpec)
+{
+  if (parametersError)
+  {
+    return Error{*parametersError};
+  }
+
+  const auto variable = std::string{"${MAP_BASE_NAME}"};
+  const auto baseName = document.map().path().stem().string();
+  auto result = parameterSpec;
+  for (auto pos = result.find(variable); pos != std::string::npos;
+       pos = result.find(variable, pos + baseName.size()))
+  {
+    result.replace(pos, variable.size(), baseName);
+  }
+  return result;
+}
+
+Result<int64_t> FakeEngineHost::launchEngine(
+  ui::MapDocument& document,
+  const mdl::GameEngineProfile& profile,
+  std::optional<std::string> parameterSpec)
+{
+  if (startError)
+  {
+    return Error{*startError};
+  }
+
+  return engineParameters(document, parameterSpec.value_or(profile.parameterSpec))
+         | kdl::transform([&](auto parameters) {
+             const auto processId = nextProcessId++;
+             launches.push_back(Launch{
+               &document,
+               profile,
+               std::move(parameterSpec),
+               std::move(parameters),
+               processId,
+             });
+             return processId;
+           });
+}
+
 FakeCompileJob* FakeCompileHost::lastJob()
 {
   return started.empty() ? nullptr : started.back().job;
@@ -337,6 +380,11 @@ CompileHost* FakeHost::compileHost()
     return compileHostOverride;
   }
   return supportsCompile ? &compile : nullptr;
+}
+
+EngineHost* FakeHost::engineHost()
+{
+  return supportsEngine ? &engine : nullptr;
 }
 
 Logger* FakeHost::logTarget(ui::MapDocument& document)

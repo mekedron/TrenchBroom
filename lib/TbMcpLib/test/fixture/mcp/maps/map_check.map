@@ -1,0 +1,183 @@
+// Game: Quake
+// Format: Standard
+// One sealed room (x 0..512, y 0..384, z 0..192) with the problems map_check finds.
+// There is no player start.
+// entity 0
+{
+"classname" "worldspawn"
+"message" "MCP sample: map_check findings"
+// brush 0: floor
+{
+( -16 -16 -16 ) ( -16 -15 -16 ) ( -16 -16 -15 ) floor_tile 0 0 0 1 1
+( -16 -16 -16 ) ( -16 -16 -15 ) ( -15 -16 -16 ) floor_tile 0 0 0 1 1
+( -16 -16 -16 ) ( -15 -16 -16 ) ( -16 -15 -16 ) floor_tile 0 0 0 1 1
+( 528 400 0 ) ( 528 401 0 ) ( 529 400 0 ) floor_tile 0 0 0 1 1
+( 528 400 0 ) ( 529 400 0 ) ( 528 400 1 ) floor_tile 0 0 0 1 1
+( 528 400 0 ) ( 528 400 1 ) ( 528 401 0 ) floor_tile 0 0 0 1 1
+}
+// brush 1: ceiling
+{
+( -16 -16 192 ) ( -16 -15 192 ) ( -16 -16 193 ) wall_old_b 0 0 0 1 1
+( -16 -16 192 ) ( -16 -16 193 ) ( -15 -16 192 ) wall_old_b 0 0 0 1 1
+( -16 -16 192 ) ( -15 -16 192 ) ( -16 -15 192 ) wall_old_b 0 0 0 1 1
+( 528 400 208 ) ( 528 401 208 ) ( 529 400 208 ) wall_old_b 0 0 0 1 1
+( 528 400 208 ) ( 529 400 208 ) ( 528 400 209 ) wall_old_b 0 0 0 1 1
+( 528 400 208 ) ( 528 400 209 ) ( 528 401 208 ) wall_old_b 0 0 0 1 1
+}
+// brush 2: west wall
+{
+( -16 0 0 ) ( -16 1 0 ) ( -16 0 1 ) wall_old_a 0 0 0 1 1
+( -16 0 0 ) ( -16 0 1 ) ( -15 0 0 ) wall_old_a 0 0 0 1 1
+( -16 0 0 ) ( -15 0 0 ) ( -16 1 0 ) wall_old_a 0 0 0 1 1
+( 0 384 192 ) ( 0 385 192 ) ( 1 384 192 ) wall_old_a 0 0 0 1 1
+( 0 384 192 ) ( 1 384 192 ) ( 0 384 193 ) wall_old_a 0 0 0 1 1
+( 0 384 192 ) ( 0 384 193 ) ( 0 385 192 ) wall_old_a 0 0 0 1 1
+}
+// brush 3: east wall
+{
+( 512 0 0 ) ( 512 1 0 ) ( 512 0 1 ) wall_old_a 0 0 0 1 1
+( 512 0 0 ) ( 512 0 1 ) ( 513 0 0 ) wall_old_a 0 0 0 1 1
+( 512 0 0 ) ( 513 0 0 ) ( 512 1 0 ) wall_old_a 0 0 0 1 1
+( 528 384 192 ) ( 528 385 192 ) ( 529 384 192 ) wall_old_a 0 0 0 1 1
+( 528 384 192 ) ( 529 384 192 ) ( 528 384 193 ) wall_old_a 0 0 0 1 1
+( 528 384 192 ) ( 528 384 193 ) ( 528 385 192 ) wall_old_a 0 0 0 1 1
+}
+// brush 4: south wall
+{
+( -16 -16 0 ) ( -16 -15 0 ) ( -16 -16 1 ) wall_old_a 0 0 0 1 1
+( -16 -16 0 ) ( -16 -16 1 ) ( -15 -16 0 ) wall_old_a 0 0 0 1 1
+( -16 -16 0 ) ( -15 -16 0 ) ( -16 -15 0 ) wall_old_a 0 0 0 1 1
+( 528 0 192 ) ( 528 1 192 ) ( 529 0 192 ) wall_old_a 0 0 0 1 1
+( 528 0 192 ) ( 529 0 192 ) ( 528 0 193 ) wall_old_a 0 0 0 1 1
+( 528 0 192 ) ( 528 0 193 ) ( 528 1 192 ) wall_old_a 0 0 0 1 1
+}
+// brush 5: north wall
+{
+( -16 384 0 ) ( -16 385 0 ) ( -16 384 1 ) wall_old_a 0 0 0 1 1
+( -16 384 0 ) ( -16 384 1 ) ( -15 384 0 ) wall_old_a 0 0 0 1 1
+( -16 384 0 ) ( -15 384 0 ) ( -16 385 0 ) wall_old_a 0 0 0 1 1
+( 528 400 192 ) ( 528 401 192 ) ( 529 400 192 ) wall_old_a 0 0 0 1 1
+( 528 400 192 ) ( 529 400 192 ) ( 528 400 193 ) wall_old_a 0 0 0 1 1
+( 528 400 192 ) ( 528 400 193 ) ( 528 401 192 ) wall_old_a 0 0 0 1 1
+}
+// brush 6: a thick pillar against the north wall; its west face has a missing material
+{
+( 320 256 0 ) ( 320 257 0 ) ( 320 256 1 ) wall_old_x 0 0 0 1 1
+( 320 256 0 ) ( 320 256 1 ) ( 321 256 0 ) wall_old_c 0 0 0 1 1
+( 320 256 0 ) ( 321 256 0 ) ( 320 257 0 ) wall_old_c 0 0 0 1 1
+( 448 384 192 ) ( 448 385 192 ) ( 449 384 192 ) wall_old_c 0 0 0 1 1
+( 448 384 192 ) ( 449 384 192 ) ( 448 384 193 ) wall_old_c 0 0 0 1 1
+( 448 384 192 ) ( 448 384 193 ) ( 448 385 192 ) wall_old_c 0 0 0 1 1
+}
+}
+// entity 1: an ogre stuck in the east wall
+{
+"classname" "monster_ogre"
+"origin" "520 96 24"
+}
+// entity 2: a soldier floating 100 units above the floor
+{
+"classname" "monster_army"
+"origin" "128 96 124"
+}
+// entity 3: a dog standing on the floor (no findings)
+{
+"classname" "monster_dog"
+"origin" "128 288 24"
+}
+// entity 4: a flying scrag (no findings)
+{
+"classname" "monster_wizard"
+"origin" "400 96 124"
+}
+// entity 5: a trigger whose target does not exist
+{
+"classname" "trigger_once"
+"target" "nothing_here"
+// brush 0
+{
+( 32 32 0 ) ( 32 33 0 ) ( 32 32 1 ) wall_old_c 0 0 0 1 1
+( 32 32 0 ) ( 32 32 1 ) ( 33 32 0 ) wall_old_c 0 0 0 1 1
+( 32 32 0 ) ( 33 32 0 ) ( 32 33 0 ) wall_old_c 0 0 0 1 1
+( 64 64 64 ) ( 64 65 64 ) ( 65 64 64 ) wall_old_c 0 0 0 1 1
+( 64 64 64 ) ( 65 64 64 ) ( 64 64 65 ) wall_old_c 0 0 0 1 1
+( 64 64 64 ) ( 64 64 65 ) ( 64 65 64 ) wall_old_c 0 0 0 1 1
+}
+}
+// entity 6: button -> relay1 -> door2 (no findings)
+{
+"classname" "func_button"
+"target" "relay1"
+// brush 0
+{
+( 0 160 32 ) ( 0 161 32 ) ( 0 160 33 ) wall_old_c 0 0 0 1 1
+( 0 160 32 ) ( 0 160 33 ) ( 1 160 32 ) wall_old_c 0 0 0 1 1
+( 0 160 32 ) ( 1 160 32 ) ( 0 161 32 ) wall_old_c 0 0 0 1 1
+( 8 192 64 ) ( 8 193 64 ) ( 9 192 64 ) wall_old_c 0 0 0 1 1
+( 8 192 64 ) ( 9 192 64 ) ( 8 192 65 ) wall_old_c 0 0 0 1 1
+( 8 192 64 ) ( 8 192 65 ) ( 8 193 64 ) wall_old_c 0 0 0 1 1
+}
+}
+// entity 7
+{
+"classname" "trigger_relay"
+"targetname" "relay1"
+"target" "door2"
+"origin" "64 176 64"
+}
+// entity 8
+{
+"classname" "func_door"
+"targetname" "door2"
+"angle" "90"
+// brush 0
+{
+( 240 0 0 ) ( 240 1 0 ) ( 240 0 1 ) wall_old_c 0 0 0 1 1
+( 240 0 0 ) ( 240 0 1 ) ( 241 0 0 ) wall_old_c 0 0 0 1 1
+( 240 0 0 ) ( 241 0 0 ) ( 240 1 0 ) wall_old_c 0 0 0 1 1
+( 256 64 112 ) ( 256 65 112 ) ( 257 64 112 ) wall_old_c 0 0 0 1 1
+( 256 64 112 ) ( 257 64 112 ) ( 256 64 113 ) wall_old_c 0 0 0 1 1
+( 256 64 112 ) ( 256 64 113 ) ( 256 65 112 ) wall_old_c 0 0 0 1 1
+}
+}
+// entity 9: a door with a name that nothing triggers
+{
+"classname" "func_door"
+"targetname" "door_lonely"
+"angle" "90"
+// brush 0
+{
+( 272 0 0 ) ( 272 1 0 ) ( 272 0 1 ) wall_old_c 0 0 0 1 1
+( 272 0 0 ) ( 272 0 1 ) ( 273 0 0 ) wall_old_c 0 0 0 1 1
+( 272 0 0 ) ( 273 0 0 ) ( 272 1 0 ) wall_old_c 0 0 0 1 1
+( 288 64 112 ) ( 288 65 112 ) ( 289 64 112 ) wall_old_c 0 0 0 1 1
+( 288 64 112 ) ( 289 64 112 ) ( 288 64 113 ) wall_old_c 0 0 0 1 1
+( 288 64 112 ) ( 288 64 113 ) ( 288 65 112 ) wall_old_c 0 0 0 1 1
+}
+}
+// entity 10: a relay without a name
+{
+"classname" "trigger_relay"
+"target" "door2"
+"origin" "96 176 64"
+}
+// entity 11: a light inside the pillar
+{
+"classname" "light"
+"origin" "384 320 96"
+}
+// entity 12: a light in the room (no findings)
+{
+"classname" "light"
+"origin" "256 192 160"
+}
+// entity 13: health outside the room
+{
+"classname" "item_health"
+"origin" "-200 192 24"
+}
+// entity 14: an info_null inside the west wall (no findings)
+{
+"classname" "info_null"
+"origin" "-8 96 96"
+}

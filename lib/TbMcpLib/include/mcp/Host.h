@@ -23,6 +23,7 @@
 #include "base/Result.h"
 #include "mcp/LogCapture.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -36,6 +37,7 @@ namespace mdl
 {
 class GameManager;
 struct CompilationProfile;
+struct GameEngineProfile;
 struct GameInfo;
 enum class MapFormat;
 } // namespace mdl
@@ -184,6 +186,35 @@ public:
 };
 
 /**
+ * Launches game engines like the editor's Launch Engine dialog. Implemented by the editor
+ * (ui::McpEngineHost); tests use FakeEngineHost.
+ */
+class EngineHost
+{
+public:
+  virtual ~EngineHost();
+
+  /**
+   * Interpolates an engine parameter spec with the editor's launch variables of the
+   * given document (MAP_BASE_NAME, GAME_DIR_PATH, MODS, the game's compilation tool
+   * names, ...), as the Launch Engine dialog does. Fails if the spec is malformed or
+   * refers to an unknown variable.
+   */
+  virtual Result<std::string> engineParameters(
+    ui::MapDocument& document, const std::string& parameterSpec) = 0;
+
+  /**
+   * Starts the engine of the given profile detached from the editor, in the folder of
+   * the engine executable, with the given parameter spec (default: the profile's)
+   * interpolated like engineParameters does. Returns the id of the started process.
+   */
+  virtual Result<int64_t> launchEngine(
+    ui::MapDocument& document,
+    const mdl::GameEngineProfile& profile,
+    std::optional<std::string> parameterSpec) = 0;
+};
+
+/**
  * The editor as seen by the MCP server. Implemented by ui::QtMcpHost in the editor and by
  * FakeHost in tests. All functions are called on the thread that owns the server.
  *
@@ -251,6 +282,12 @@ public:
    * with UNSUPPORTED_IN_HOST). The default implementation returns nullptr.
    */
   virtual CompileHost* compileHost();
+
+  /**
+   * Launches game engines, or nullptr if the host cannot launch them (engine_launch then
+   * fails with UNSUPPORTED_IN_HOST). The default implementation returns nullptr.
+   */
+  virtual EngineHost* engineHost();
 
   /**
    * Returns the logger that receives the document's messages outside of a log capture

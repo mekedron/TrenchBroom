@@ -19,11 +19,24 @@
 
 #pragma once
 
+#include "mcp/Json.h"
+
 namespace tb::mcp
 {
+class ServerState;
 class ToolRegistry;
+struct DocumentInfo;
 
-/** Registers issues_list. */
+/**
+ * Registers issues_list, issue_fix, issue_hide, issue_show, validators_list and
+ * validators_set.
+ */
 void registerValidationTools(ToolRegistry& registry);
+
+/**
+ * The content of trenchbroom://documents/{doc}/issues: the issues issues_list returns
+ * without filters (hidden issues and turned-off validators excluded), at most 200 items.
+ */
+Json issuesResource(ServerState& state, const DocumentInfo& document);
 
 } // namespace tb::mcp
