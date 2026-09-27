@@ -223,13 +223,24 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   `space_check` one unit above the floor.
 - Items and props: `dropToFloor` onto floors and furniture.
 
+## Checking and fixing the map
+
+- `map_check` *(untested)* runs the agent checks: entities in walls or floating, a missing
+  player start, broken links, missing materials, entities outside rooms — each finding with a
+  suggested fix.
+- `issue_fix` *(untested)* applies quick fixes by issue id, code or object (one undo step);
+  `issue_hide` / `issue_show` *(untested)* hide accepted issues; `validators_set` *(untested)*
+  turns checks off for a document.
+- Run `map_check` before every compile.
+
 ## Compile and test
 
 - `compile_run {"preset":"normal"}` then `compile_status`; the compiled map is copied into the
   game's `maps` folder. The compile log is `<map dir>/compile/<map>.log`.
 - Leak: `pointfile_load` → the path starts at the entity that is outside; move it inside and
   compile again; `pointfile_unload` afterwards.
-- Launch the game with the map and its console logging on (command in the game skill),
+- Launch the game with the map and its console logging on (command in the game skill, or
+  `engine_launch` *(untested)* with a configured engine profile, which returns the process id),
   then read the log for errors, missing assets and stuck NPCs.
 - Stop the game by its exact process name (`kill $(pgrep -x <name>)`) — never `pkill -f`, it
   matches the shell running the command. Ask before restarting the game while the user is
