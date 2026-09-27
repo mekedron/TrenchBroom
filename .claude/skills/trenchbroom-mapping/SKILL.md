@@ -68,11 +68,36 @@ in one picture.
   `view_snapshot {"keepAs":"before"}` … change … `view_snapshot_compare {"before":"before"}`;
   the changed-pixel mask shows exactly what moved.
 - What the user is looking at: `view_snapshot_user` (returns their camera too).
+- From picture to object: every snapshot has a `snapshotId`; `view_pick {"snapshotId":..,"pixels":[[x,y],..]}`
+  *(untested)* returns the object, face id, group, layer, hit point and normal under each pixel —
+  no need to search by region.
+- Annotated snapshots *(untested)*: `"annotations"` with labels (id, classname or group name,
+  size), a coordinate grid on floors and walls, a compass, and a player box for scale.
 - The editor preview differs from the game: models show their default pose, not a scripted
   one, and render modes such as transparency are ignored. Judge poses and transparency in
   the game.
 - `console_read {"minLevel":"warning"}` shows material, model and definition load problems;
   every call result also lists the warnings it caused under `console`.
+
+## Understanding the space
+
+Think in rooms, not brushes:
+
+- `spaces_list` *(untested)* — enclosed rooms with stable `space:` ids, bounds, floor and ceiling
+  heights, area, openings (doorways, windows, doors) and neighbours, and whether each is sealed.
+- `surroundings {"point":[..]}` *(untested)* — the room of a point, distances to the walls (with
+  their faces), floor, ceiling and nearby objects, as data and a sentence. Use it to look around
+  without rendering.
+- `free_spots` *(untested)* — free positions for a box of a given size on the floor, against a
+  wall (with the wall normal and face id — for posters, machines, lights) or on the ceiling.
+- `walkable_plan` *(untested)* — where a player can really walk and reach, as text and image.
+- Keep the map's structure in its manifest *(untested)*: `map_manifest_set` stores spaces and
+  their purpose, key points, notes and cameras in `<map>.mcp.json` next to the map;
+  `map_manifest_get` restores them in a later session.
+- Every modifying call reports the problems it introduced in `issuesIntroduced` *(untested)*:
+  `Z_FIGHTING`, `ENTITY_OUTSIDE_HULL` (with the nearest gap), model placement and
+  `UV_ASPECT_DISTORTION`. Fix them right away; `issues_list` *(untested)* shows all of them plus
+  the editor's own checks.
 
 ## Units and proportions
 
