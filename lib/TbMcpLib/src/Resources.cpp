@@ -220,6 +220,9 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
   "typical" (typical scale, justified per face), "fit" (whole repeats) or "world"
   (world-aligned at the typical scale, continuous across brushes): no UV math in scripts.
 - Smart tags: `tags_list`, `tag_apply` (e.g. turn a brush into a trigger), `tag_remove`.
+- Own textures (WAD games): `materials_pack` turns PNG, TGA or BMP images into a WAD3
+  (sizes multiples of 16 or "resize", names up to 15 characters, { names transparent) and
+  "addToMap": true adds it to the map's WAD list; `wad_list` lists a WAD's textures.
 
 ## Checking, compiling, testing
 - `map_check`: entities in walls or floating, monsters that the engine spawns stuck or
@@ -236,6 +239,10 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
   {"preset": "full", "toolArgs": {"rad": "-ambient 0.1 0.1 0.1"}}, without saving a
   profile. On a leak, `pointfile_load` returns the path and where it leaves the map;
   close the gap, compile again, `pointfile_unload`.
+- `bsp_preview` renders the compiled BSP (Half-Life, Quake) with its lightmaps from your
+  cameras, without the game. Read each image's 'findings' and light statistics
+  (darkFraction, overexposedFraction, per 3x3 region) and pass "regions" (boxes or
+  "spaces") to catch pitch-black or washed-out rooms; fix the lights and compile again.
 - `engine_profiles_list`, `engine_profile_save`, `engine_launch` start the game with the
   last compiled map. `console_read` shows the editor's log.
 
@@ -260,7 +267,8 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
   reconnect; keep cameras in the manifest (`map_manifest_set` {"saveCameras": "all"}) and
   restore them with `map_manifest_get` {"restoreCameras": true}.
 - The editor preview is not the game: models show their default pose, render modes
-  (transparency, invisible triggers) and light are not shown. Judge them in the game.
+  (transparency, invisible triggers) and light are not shown. `bsp_preview` shows the
+  compiled light and render modes; judge models and effects in the game.
 - Hidden objects and tags (`visibility_set`, `view_options_set`, hidden layers) are still
   compiled; only layers with omitFromExport are left out.
 - `brush_create_box` faces are 0 -x, 1 -y, 2 -z, 3 +z, 4 +y, 5 +x (faces are sorted by

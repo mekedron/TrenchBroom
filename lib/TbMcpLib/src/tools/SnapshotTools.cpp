@@ -748,15 +748,6 @@ Result<ResolvedScene, ToolError> buildScene(
 
 using BoundsProvider = std::function<std::optional<vm::bbox3d>()>;
 
-struct ResolvedCamera
-{
-  AgentCamera camera;
-  /** The name of the agent camera, if one was used. */
-  std::optional<std::string> name;
-  /** Details of eye height placement, if used. */
-  Json placement = nullptr;
-};
-
 Result<vm::bbox3d, ToolError> boundsOfIds(
   CallContext& context, const std::vector<std::string>& idList)
 {
@@ -876,7 +867,8 @@ Result<ResolvedCamera, ToolError> resolveCameraSpec(
   const Json& spec,
   const size_t width,
   const size_t height,
-  const BoundsProvider& defaultBounds)
+  const BoundsProvider& defaultBounds,
+  const CameraFloor* cameraFloor = nullptr)
 {
   const auto has = [&](const char* key) { return findMember(spec, key) != nullptr; };
   const auto helpers = int(has("frame")) + int(has("orbit")) + int(has("eyeHeight"));
@@ -1036,13 +1028,14 @@ Result<ResolvedCamera, ToolError> resolveCameraSpec(
         "eyeHeight places the camera; do not pass position.",
         "Pass eyeHeight.point inside the room.");
     }
-    if (!context.hasDocument())
+    if (!cameraFloor && !context.hasDocument())
     {
       return noDocumentError("Eye height placement");
     }
     const auto& eye = spec["eyeHeight"];
     const auto point = *vec3FromJson(eye["point"]);
-    const auto floor = findFloor(context.map(), point);
+    const auto floor =
+      cameraFloor ? cameraFloor->findFloor(point) : findFloor(context.map(), point);
     if (!floor)
     {
       return makeError(
@@ -1051,7 +1044,9 @@ Result<ResolvedCamera, ToolError> resolveCameraSpec(
           "There is no floor below ({}, {}, {}).", point.x(), point.y(), point.z()),
         "Pass a point inside a room, above its floor (space_check reports the floor).");
     }
-    const auto player = playerSize(context.map().gameInfo().gameConfig);
+    const auto player = cameraFloor
+                          ? PlayerSize{cameraFloor->game, cameraFloor->eyeHeight}
+                          : playerSize(context.map().gameInfo().gameConfig);
     const auto eyeHeight = eye.value("height", player.eyeHeight);
     const auto position = vm::vec3d{point.x(), point.y(), *floor + eyeHeight};
     auto direction = specDirection(spec, position);
@@ -1133,7 +1128,8 @@ Result<ResolvedCamera, ToolError> resolveCameraArg(
   const Json& arg,
   const size_t width,
   const size_t height,
-  const BoundsProvider& defaultBounds)
+  const BoundsProvider& defaultBounds,
+  const CameraFloor* cameraFloor = nullptr)
 {
   if (arg.is_string())
   {
@@ -1147,7 +1143,12 @@ Result<ResolvedCamera, ToolError> resolveCameraArg(
     return ResolvedCamera{it->second, name};
   }
   return resolveCameraSpec(
-    context, arg.is_object() ? arg : Json::object(), width, height, defaultBounds);
+    context,
+    arg.is_object() ? arg : Json::object(),
+    width,
+    height,
+    defaultBounds,
+    cameraFloor);
 }
 
 // Image output
@@ -2393,6 +2394,22 @@ void viewSnapshotUser(CallContext& context, const Args& args, ToolCompletion com
 }
 
 } // namespace
+
+Schema cameraArgumentSchema()
+{
+  return cameraArgSchema();
+}
+
+Result<ResolvedCamera, ToolError> resolveCameraArgument(
+  CallContext& context,
+  const Json& arg,
+  const size_t width,
+  const size_t height,
+  const std::function<std::optional<vm::bbox3d>()>& defaultBounds,
+  const CameraFloor* cameraFloor)
+{
+  return resolveCameraArg(context, arg, width, height, defaultBounds, cameraFloor);
+}
 
 bool SnapshotVisibility::drawsNode(const mdl::Node& node) const
 {

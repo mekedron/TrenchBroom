@@ -154,6 +154,10 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `tools/PreferenceCatalog`, `PreferenceTools`: when upstream adds a preference to `prefs/Preferences.h`, add an entry
   to `editorPreferences()` (`tst_PreferenceTools` fails until you do); host-only preferences come from
   `PreferenceHost`.
+- `tools/BspFile`, `tools/BspRender`, `BspTools` (public headers, tested directly): compiled Quake and Half-Life
+  maps read into memory, their lightmaps and light statistics, and the CPU rasterizer of `bsp_preview`, which runs
+  on a worker thread and needs no OpenGL. `tools/WadFile`, `WadTools`: mip textures, WAD2/WAD3 files, colour
+  quantization and resampling behind `materials_pack` and `wad_list`.
 - `tools/Manual`, `KnowledgeTools`: the user manual from `McpHost::manualPath()` (the generated `manual/index.html`;
   fixture in `test/fixture/mcp/manual/`), `manual_search`, `manual_section` and the manual resources.
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type

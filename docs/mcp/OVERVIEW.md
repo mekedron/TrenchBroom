@@ -11,7 +11,7 @@ The agent works in the live editor window next to you. Every edit it makes shows
 
 | | |
 |---|---|
-| Tools | 204, in 37 groups |
+| Tools | 207, in 37 groups |
 | Prompts | 9 ready-made tasks (block out a level, lighting pass, texture pass, fix all issues, compile and debug, …) |
 | Resources | 12, several of them subscribable (editor status, selection, issues, console, compile log, …) |
 | Editor coverage | 98.7% of the editor's menu and shortcut actions are reachable (390 of 395; the missing 5 are debug-only) |
@@ -35,7 +35,7 @@ The agent works in the live editor window next to you. Every edit it makes shows
 
 **Catching problems early.** Every call that changes the map reports what it broke: z-fighting, entities outside the sealed hull (a leak before you compile), models stuck in walls or floating, stretched textures. `map_check`, the editor's issue list and its quick fixes are available too.
 
-**Compile and play.** Built-in compile presets for Half-Life (VHLT/sdHLT), Quake and Quake 2 (ericw-tools), and Quake 3 (q3map2). They run in the background, parse errors and leaks, and report the path of the compiled `.bsp`. Point files show where a leak is. Game engine profiles launch the game.
+**Compile and play.** Built-in compile presets for Half-Life (VHLT/sdHLT), Quake and Quake 2 (ericw-tools), and Quake 3 (q3map2). They run in the background, parse errors and leaks, and report the path of the compiled `.bsp`. Point files show where a leak is. `bsp_preview` renders the compiled map with its lightmaps from the agent's cameras and reports rooms that are pitch black or washed out, without starting the game; `materials_pack` turns images into a Half-Life WAD. Game engine profiles launch the game.
 
 **Everything else.** Layers, groups and linked groups; clipboard; importing parts of other maps; the editor console; your camera and view options; preferences; the user manual; and any editor action by name.
 

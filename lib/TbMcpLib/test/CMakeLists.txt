@@ -11,6 +11,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BackgroundDocuments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BridgeSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BspTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BulkCreateTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
@@ -94,6 +95,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvWarnings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ValidationTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_WadTools.cpp
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)

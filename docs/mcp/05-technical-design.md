@@ -48,7 +48,7 @@ app/TrenchBroomMcp ──► TbMcpLib (BridgeSession, SseParser, JsonRpc) + TbVe
 ### 1.2 `lib/TbMcpLib`
 
 A `STATIC` library like `lib/TbAppLib`: `FILE_SET headers` with `BASE_DIRS include`, `PRIVATE CompilerConfig
-PrecompileStdHeaders fmt::fmt-header-only miniz` (miniz writes the PNG images of `material_preview`), `PUBLIC nlohmann_json::nlohmann_json KdLib TbAppLib TbBaseLib
+PrecompileStdHeaders fmt::fmt-header-only miniz TbImgLib` (miniz writes the PNG images of `material_preview`; TbImgLib decodes the images of `materials_pack`), `PUBLIC nlohmann_json::nlohmann_json KdLib TbAppLib TbBaseLib
 TbMdlLib VmLib`, plus `add_subdirectory(test-utils)` and `add_subdirectory(test)`.
 
 ```
@@ -113,6 +113,9 @@ lib/TbMcpLib/
     tools/ActionCatalog.h   the MCP classification of every editor action: invoke, dialog or refuse, semantic tools (§10.9)
     tools/PreferenceCatalog.h  the editor's static preferences with categories and constraints, game preferences (§10.15)
     tools/Manual.h          the user manual parser: sections, Markdown text, shortcut references (§10.16)
+    tools/WadFile.h         mip textures, WAD2/WAD3 reading and writing, quantization, resampling (§10.17)
+    tools/BspFile.h         compiled maps (BSP 29/30): faces, textures, lightmaps, entities, light statistics (§10.17)
+    tools/BspRender.h       the CPU rasterizer of bsp_preview with per-image light statistics (§10.17)
   src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
   test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/)
   test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture
@@ -1135,6 +1138,8 @@ call log lines, and so on.
 | `ActionTools.cpp` | `actions_list`, `action_invoke` | E14 |
 | `PreferenceTools.cpp` | `preferences_get`, `preferences_set` | E14 |
 | `KnowledgeTools.cpp` | `manual_search`, `manual_section`; the manual resources | E14 |
+| `BspTools.cpp` | `bsp_preview` | E17 |
+| `WadTools.cpp` | `materials_pack`, `wad_list` | E17 |
 
 The prompts are in `src/Prompts.cpp` (§8).
 
@@ -2227,6 +2232,74 @@ exact-title bonuses) and returns `id, title, level, path, score, snippets, uri`.
 breaks, with the subsections and the parent, previous and next sections. Without a manual the tools fail with
 `UNSUPPORTED_IN_HOST`; an unreadable file is `IO_ERROR`.
 
+### 10.17 Compiled maps and WADs (E17)
+
+**`bsp_preview`** (`BspTools.cpp`, `Mutation::None`, asynchronous, `DocumentUse::Optional`) renders a compiled map as
+the game lights it, without starting the game and without an OpenGL context: nothing of the user's views is used.
+
+- *Reading* (`BspFile.h`): BSP 29 (Quake) and BSP 30 (Half-Life); other formats (`IBSP` of Quake 2 and 3, `BSP2`,
+  `VBSP`) fail with `UNSUPPORTED` naming the format. Faces get their plane (flipped for back sides), vertices from the
+  surfedges, texinfo axes and flags, light styles and lightmap offset; the lightmap extents are computed like the
+  engines (`floor(min / 16)`, `ceil(max / 16)`, one luxel per 16 texels). The entity lump is parsed for worldspawn's
+  `wad` list, brush entity models (`model` "*n" with `origin`, `rendermode`, `renderamt`) and the player start.
+- *Path*: `path`, else the newest of `<map>.bsp` next to the map, in `compile/` and in `<game>/<mod>/maps/`.
+  `BSP_OUTDATED` warns when the map file is newer than the BSP.
+- *Textures*: embedded mip textures first, then the WADs of `wads` (absolute paths) and of worldspawn's list. A
+  listed WAD is taken as an absolute path if it exists, else its file name is looked up case-insensitively next to
+  the BSP, in its two parent folders, in the document's game folder and its mods and, for `<mod>/maps/*.bsp`, in the
+  sibling mods. Missing textures are drawn as a magenta checkerboard (`TEXTURES_MISSING`). Quake textures use the
+  game's palette from the document's game file system, else `gfx/palette.lmp` next to the BSP (else gray levels and
+  `PALETTE_NOT_FOUND`).
+- *Cameras*: `camera` or `views` (at most 8, each `{label, camera}`) take the forms of `view_snapshot`
+  (`resolveCameraArgument` and `cameraArgumentSchema` in `SnapshotTools.h`); `eyeHeight` stands on the BSP's floor
+  (`bspFloorBelow`, a ray against the upward faces of the drawn models) at 64 (Half-Life) or 46 (Quake) units, and
+  `frame` without ids frames the world model. Without a camera the view is the player's at the first
+  `info_player_start` (or deathmatch / coop start): origin + 28 (Half-Life) or + 22 (Quake), looking along its angle.
+- *Renderer* (`BspRender.h`, `renderBsp`): runs on a worker thread; the call polls it every 20 ms in deferred steps,
+  reports progress per image and sets a cancel flag that the renderer checks every 256 faces. It projects with
+  `ImageProjection` (the camera of `view_snapshot`), culls back faces like the game, clips at the near plane and
+  rasterizes with a z-buffer and perspective-correct texture coordinates. The mip level comes from the texel
+  footprint of the pixel; `{` textures discard index 255. Brush entities with render modes 1, 2, 3 and 5 are blended
+  back to front with `renderamt` (5 additive); `trigger_*` entities and invisible render modes are skipped. Lit colour
+  = texture × light / 255 (Quake × 2 for its overbright range), then × `brightness` and ^(1 / `gamma`); the light is
+  the bilinear lightmap sample summed over the chosen styles. Sky faces are drawn in a flat sky colour (`hideSky`
+  leaves them out); liquids (`!`, `*`, Half-Life `water`) are drawn unlit; a BSP without light data is drawn fully
+  lit like the engines do (`NO_LIGHT_DATA`). `shading`: `lit`, `fullbright` or `lightmap`.
+- *Light styles*: `initial` (style 0, the animated styles 1–31 and the switchable styles of lights whose `style`
+  entities do not all start off, spawnflag 1), `base` (style 0), `all`, or a list of styles (0 always included).
+- *Statistics*: per image and per 3×3 region of it, over the pixels of lit surfaces: coverage, mean light (the
+  luminance of the light, 0–255), mean brightness of the drawn colour, and the fractions below 16 (pitch black), below
+  48 (dim) and at or above 250 (saturated, or a clipped colour); sky and liquid pixels are counted apart. `findings`
+  turn them into sentences (half of the surfaces pitch black, 60% dim, 20% saturated, a covered region that is 80%
+  black or 50% saturated). `world` and `regions` (named boxes or the manifest's spaces with bounds) give the same
+  fractions over the luxels of the drawn faces whose world position lies inside the face (8 units tolerance) and the
+  box, independent of any camera; `unlitFaces` counts lightmapped faces without light data.
+- *Output*: one PNG per view (a text label before each image when there are several), `saveTo` (several views get
+  `-1`, `-2`, … before the extension; `overwrite`), and `bsp`, `textures` (embedded, from WADs, missing, the WADs
+  with their resolved paths), `world`, `regions`, `thresholds` and `views` with camera, light, regions and findings.
+  A 1024×768 view of a 3,700-face Half-Life map takes about 1 s in a debug build, loading included.
+
+**`materials_pack`** (`WadTools.cpp`, `Mutation::External`, `DocumentUse::Optional`) builds a Half-Life WAD3 from
+PNG, TGA or BMP files (`img::decodeImage`). `images` are paths or `{path, name}`; names default to the file name
+and must be 1–15 printable ASCII characters without spaces, quotes or slashes, unique case-insensitively. Sizes must
+be multiples of 16 (the error names the nearest valid size); `resize` `nearest` (ties round up), `up` or `down`
+resamples (box filter when shrinking, bilinear when enlarging, in premultiplied alpha). Sides above 4096 are refused,
+above 512 warn `TEXTURE_LARGE`. `makeMipTexture` (`WadFile.h`) quantizes each image to its own palette: the exact
+colours if there are at most 256 (255 for `{` textures), else median cut (splitting the box with the largest range ×
+√count at the weighted median) refined by up to four k-means passes, depending on the work; the four mip levels are
+2×2 box filtered from the resampled image and mapped to the nearest palette entry. In `{` textures, pixels with alpha
+below 128 and pure blue become index 255 = (0, 0, 255), and a mip pixel is transparent unless two of its four source
+pixels are opaque. Transparent pixels in other names warn `ALPHA_IGNORED`. The file is written through a temporary file
+and a rename; `merge` keeps the other Half-Life textures of an existing WAD3 (same names are replaced), `overwrite`
+replaces it, otherwise an existing file is `FILE_EXISTS`. `addToMap` appends the WAD's absolute path to the document's
+WAD property unless it is already listed (same path, or a relative entry with the same file name, which reports
+`hint` to run `materials_reload`); the change is one undo step `AI: Pack Materials`. The result reports per texture
+the size, source size, colours of the source and used, transparent pixels and the mean colour error.
+
+**`wad_list`** (read-only, no document) lists a WAD2 or WAD3 directory: name, type (miptex, picture, palette, font,
+other), size, and width, height and `masked` for textures; `filter` is a case-insensitive glob, `offset` and `limit`
+page.
+
 ---
 
 ## 11. Testing
@@ -2278,6 +2351,8 @@ tiles (every node reachable, one node per column); `spaces_list` (also `EDGE_ONL
 | `tst_ActionTools` | `actions_list` and `action_invoke` over `FakeActionHost`: filters, pagination, labels, disabled, unknown and ambiguous actions, `DIALOG_REQUIRED` and `openDialog`, `ACTION_REFUSED`, the active tool kept, dry run, `UNSUPPORTED_IN_HOST` |
 | `tst_PreferenceTools` | the catalog against every path in `prefs/Preferences.h`; `preferences_get` filters, types and value forms; `preferences_set` success, type, range and allowed-value errors, read-only and locked preferences, unknown paths with suggestions, atomicity, reset, dry run, shortcut conflicts, game and host preferences |
 | `tst_KnowledgeTools` | the manual parser on a pandoc-like fixture (sections, Markdown, entities, wrapped script arguments), reference resolution with and without an action host and with `shortcuts.js`, search ranking, section paging and neighbours, the manual resources, no manual |
+| `tst_BspTools` | a BSP 30 floor with a half-dark lightmap written by the test: parsing (faces, extents, texture coordinates, containment, player start, floor), unsupported formats, bilinear light, luxel statistics with boxes, light style sets; the renderer (lit, fullbright, lightmap, brightness, gamma, back-face culling, sky and `hideSky`, missing textures); `bsp_preview` (statistics and findings per region, the player start camera, `eyeHeight` on the BSP floor, several views saved, regions, textures from a WAD found by the file name of a Windows path, a Quake BSP with and without `gfx/palette.lmp`, no light data, agent cameras by name, errors) |
+| `tst_WadTools` | `makeMipTexture` (exact palettes, quantized gradients, masked pixels), WAD3 round trips, the editor's `loadHlMipTexture` on written textures, names, resampling; `materials_pack` (textures and `wad_list`, sizes and `resize`, names, merge and overwrite, dry run, `addToMap` once, errors); `wad_list` on the fixture WAD (limit, filter, not a WAD) |
 | `tst_MapManifest`, `tst_ManifestTools` | manifest JSON round trips and invalid files; `map_manifest_get/set` merge, replace and remove, cameras saved and restored in a new session, an unsaved map's manifest written on `document_save_as`, dry run, invalid input; `disabledValidators` round trip, written by `validators_set`, restored when the map is opened again, kept by other manifest changes, pending for an unsaved map |
 | `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities; E12's acceptance scenario on `spaces.map` (pick the chair in a snapshot, both spaces with their doorway, a wall spot for a poster with the face id, z-fighting and an entity outside the hull reported by the calls that caused them); S2 on `issues.map` (every issue with type, object and explanation; the codes with one fix fixed one call each with the deleted and changed objects reported; fewer issues afterwards and the rest listed with reasons; one `AI: Fix Issues` undo step per call) |
 
@@ -2383,6 +2458,9 @@ findings), and game paths in `mdl/Game/`.
 ## 12. Current limitations
 
 - `Last-Event-ID` replay is not supported.
+- `bsp_preview` reads Quake and Half-Life BSPs only (no Quake 2 / 3 `IBSP`, no `BSP2`); it approximates the
+  engines' light (no gamma tables, no dynamic lights, models or sprites, style values at full strength) and ignores
+  visibility data, so hidden areas are drawn too. `materials_pack` writes WAD3 only and does not dither.
 - Loading a document is synchronous and cannot be interrupted; only the steps around it honor cancellation.
 - `selection_get` cursors are keyed to the modification count, so a selection-only change does not mark a page
   `stale`. A failed "tall" selector brush is only logged by the editor.

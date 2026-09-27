@@ -19,13 +19,19 @@
 
 #pragma once
 
+#include "mcp/AgentCamera.h"
 #include "mcp/Errors.h"
 #include "mcp/Json.h"
+#include "mcp/Schema.h"
 #include "mcp/Snapshot.h"
+
+#include "vm/bbox.h"
+#include "vm/vec.h"
 
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -49,6 +55,44 @@ class ToolRegistry;
  * view_snapshot_user).
  */
 void registerSnapshotTools(ToolRegistry& registry);
+
+/** A camera argument resolved to an agent camera. */
+struct ResolvedCamera
+{
+  AgentCamera camera;
+  /** The name of the agent camera, if one was used. */
+  std::optional<std::string> name;
+  /** Details of eye height placement, if used. */
+  Json placement = nullptr;
+};
+
+/**
+ * How `eyeHeight` cameras find the floor and the eye height when the scene is not the
+ * document's map (e.g. a compiled BSP).
+ */
+struct CameraFloor
+{
+  std::function<std::optional<double>(const vm::vec3d&)> findFloor;
+  double eyeHeight = 0.0;
+  /** The game family reported with the placement. */
+  std::string game;
+};
+
+/** The schema of a camera argument: an agent camera name or an inline camera. */
+schema::Schema cameraArgumentSchema();
+
+/**
+ * Resolves a camera argument like view_snapshot: an agent camera name, an inline camera
+ * (perspective, orthographic, frame, orbit, eyeHeight) or null (frame the default
+ * bounds). `cameraFloor` replaces the document's map for eyeHeight placement.
+ */
+Result<ResolvedCamera, ToolError> resolveCameraArgument(
+  CallContext& context,
+  const Json& arg,
+  size_t width,
+  size_t height,
+  const std::function<std::optional<vm::bbox3d>()>& defaultBounds,
+  const CameraFloor* cameraFloor = nullptr);
 
 /** The top-down image of map_plan_view (format "image" or "both"). */
 struct PlanImageRequest

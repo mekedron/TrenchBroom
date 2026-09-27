@@ -49,6 +49,9 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ActionCatalog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ActionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BspFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BspRender.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BspTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileTools.cpp
@@ -101,6 +104,8 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/UvTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ValidationTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ViewTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/WadFile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/WadTools.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -150,6 +155,9 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ActionCatalog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ActionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BspFile.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BspRender.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BspTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ClipboardTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileTools.h
@@ -196,6 +204,8 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/UvTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ValidationTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ViewTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/WadFile.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/WadTools.h
 )
 
 target_link_libraries(TbMcpLib
@@ -204,6 +214,7 @@ target_link_libraries(TbMcpLib
     PrecompileStdHeaders
     fmt::fmt-header-only
     miniz
+    TbImgLib
   PUBLIC
     nlohmann_json::nlohmann_json
     KdLib

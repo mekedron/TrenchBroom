@@ -472,7 +472,7 @@ Goal: remove the workarounds an agent needed while building a large Half-Life ma
 
 **Preview and assets**
 
-- [ ] E17.8 `bsp_preview`: render a compiled BSP with its lightmaps (and textures from the BSP or WADs) from agent cameras, without starting the game.
-- [ ] E17.9 `materials_pack`: build a WAD from images (palette, mip levels, transparent `{` textures).
+- [x] E17.8 `bsp_preview`: render a compiled BSP with its lightmaps (and textures from the BSP or WADs) from agent cameras, without starting the game.
+- [x] E17.9 `materials_pack`: build a WAD from images (palette, mip levels, transparent `{` textures).
 - [ ] E17.10 `game_capture`: render frames inside the running game from given cameras (copy of the BSP with cameras, launch, collect labelled frames).
 

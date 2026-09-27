@@ -24,6 +24,7 @@
 #include "mcp/Resources.h"
 #include "mcp/tools/ActionTools.h"
 #include "mcp/tools/BrushEditTools.h"
+#include "mcp/tools/BspTools.h"
 #include "mcp/tools/ClipboardTools.h"
 #include "mcp/tools/CompileTools.h"
 #include "mcp/tools/ConsoleTools.h"
@@ -57,6 +58,7 @@
 #include "mcp/tools/UvTools.h"
 #include "mcp/tools/ValidationTools.h"
 #include "mcp/tools/ViewTools.h"
+#include "mcp/tools/WadTools.h"
 
 namespace tb::mcp
 {
@@ -76,6 +78,7 @@ void registerAll(McpServer& server)
   registerBrushEditTools(server.tools());
   registerViewTools(server.tools());
   registerMaterialTools(server.tools());
+  registerWadTools(server.tools());
   registerFaceTools(server.tools());
   registerTagTools(server.tools());
   registerMaterialKnowledgeTools(server.tools());
@@ -90,6 +93,7 @@ void registerAll(McpServer& server)
   registerCompileTools(server.tools());
   registerEngineTools(server.tools());
   registerSnapshotTools(server.tools());
+  registerBspTools(server.tools());
   registerPickTools(server.tools());
   registerManifestTools(server.tools());
   registerValidationTools(server.tools());
