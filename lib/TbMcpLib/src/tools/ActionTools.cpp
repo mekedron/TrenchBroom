@@ -55,6 +55,10 @@ Json toJsonOrNull(const std::optional<std::string>& value)
 
 Result<ActionHost*, ToolError> actionHostOf(CallContext& context)
 {
+  if (auto error = backgroundDocumentError(context.documentInfo(), "Editor actions"))
+  {
+    return std::move(*error);
+  }
   if (auto* actionHost = context.host().actionHost())
   {
     return actionHost;

@@ -77,6 +77,12 @@ texturing, fixing, compiling, explaining and cleaning up a map.
   'document' fail with ACTIVE_DOCUMENT_CLOSED, listing the open documents; call
   `document_activate`. `document_close` and `document_revert` only act on the document
   named by 'document' or on your active document, never on the focused window.
+- For prefabs or experiments that should not disturb the user, create or open the map
+  with "window": false (`document_new`, `document_open`). It becomes your active document
+  and works with all tools, including `view_snapshot`, but has no user views or actions
+  (DOCUMENT_IN_BACKGROUND). Save it with `document_save_as`: unsaved background documents
+  are discarded when the editor quits. `document_show` hands it to the user in a window,
+  keeping its ids and undo history.
 
 ## Player dimensions
 Used by the eyeHeight camera helper, the "player" annotation, `spaces_list` cells (half
@@ -110,7 +116,9 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
    `brush_create_hull`. Put rooms into layers (`layer_create`) and multi-brush objects into
    named groups (`group_create`). Repeats (column rings, spiral stairs, rows):
    `objects_array` (its count includes the original). Use "dryRun": true when unsure.
-   Save after each step.
+   Save after each step. Generated geometry (hundreds of boxes, shapes and hulls):
+   `brushes_create` in one call, with materials per brush or per face, groups, brush
+   entities and "uv" alignment, instead of writing a map file for `map_import`.
 5. Placement: `spaces_list`, `surroundings`, `free_spots` (floor, wall, ceiling spots with
    an 'origin' for point entities), `space_check` for a box, `ray_pick`. On large maps
    (e.g. under a tall sky) the space analysis coarsens its cells (CELL_SIZE_ENLARGED):
@@ -118,7 +126,8 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
 6. Entities: `entity_classes_list`, `entity_class_describe` (size, model, properties,
    spawnflags), then `entity_create_point` with "dropToFloor": true, or
    `entity_create_brush` from brushes. `entity_spawnflags_set` sets flags by name,
-   `entity_link` connects target and targetname.
+   `entity_link` connects target and targetname. Many at once: `entities_create` (items
+   with properties, dropToFloor, and links by ref that generate target names).
 7. Look: `view_snapshot` with agent cameras (`agent_camera_set`), `view_snapshots_around`,
    `view_pick` (what a pixel shows), `view_snapshot_compare` (what a change did).
 8. Texture: `material_usage`, `material_apply`, `uv_align` {"operation": "typical"}, then
@@ -140,8 +149,15 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
   (warnings and errors the editor logged meanwhile). Fix introduced issues right away.
 - Id lists longer than 50 are cut ("detail": "ids", the default); 'truncatedLists' then
   gives the totals, counts per kind and a 'listsId' for `result_list_get`. For bulk edits
-  (`map_import`, `objects_delete` of hundreds of objects) pass "detail": "summary" (counts
-  and 5 ids per list); "full" returns every id.
+  (`map_import`, `brushes_create`, `objects_delete` of hundreds of objects) pass "detail":
+  "summary" (counts and 5 ids per list); "full" returns every id. With "summary" or a cut
+  issue list, 'issuesSummary' counts the introduced issues per code and source with a few
+  examples.
+- Bulk work whose checks make no sense yet (entities imported before the shell that
+  encloses them): pass "checks": "defer" on the calls, or `transaction_begin` {"checks":
+  "defer"}. Deferring calls report no issues; the next call without "defer" (or
+  `checks_report`, or `transaction_commit`) reports the issues of the whole series at
+  once. Prefer this to turning validators off with `validators_set`.
 - Errors carry a code, a message, the object ids and a hint. Lists are paginated: pass
   'nextCursor' as 'cursor'.
 - While the user drags or has a dialog open, modifying calls wait.
@@ -186,7 +202,11 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
   `material_replace`, set the material of new brushes with `material_set_current`.
 - Align with `uv_align` (typical, fit, justify, resetToWorld, …), `uv_nudge`,
   `face_attributes_set` and `face_attributes_copy`. Panels fit whole:
-  `material_fit_geometry` gives the face size. Never distort the aspect.
+  `material_fit_geometry` gives the face size. Never distort the aspect. `uv_align` takes
+  whole groups, entities and layers ('ids': ["layer:5"]) in one undo step.
+- `map_import`, `clipboard_paste` and `brushes_create` align the new faces with "uv":
+  "typical" (typical scale, justified per face), "fit" (whole repeats) or "world"
+  (world-aligned at the typical scale, continuous across brushes): no UV math in scripts.
 - Smart tags: `tags_list`, `tag_apply` (e.g. turn a brush into a trigger), `tag_remove`.
 
 ## Checking, compiling, testing
@@ -210,7 +230,8 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
 - `opening_cut` without ids cuts every editable brush in the box; list the wall brushes
   of both rooms to protect other objects.
 - A point entity outside the sealed hull makes the map leak (ENTITY_OUTSIDE_HULL); while
-  the blockout is still open, `validators_set` can turn that check off.
+  the blockout is still open, defer the checks ("checks": "defer") until the shell is
+  in place; `validators_set` turns the check off for good.
 - A transaction belongs to the session that opened it: closing the session rolls it back,
   and after a reconnect the new session gets TRANSACTION_ACTIVE until the old one closes.
 - A never-saved map cannot compile; unsaved changes of a saved map are compiled. The

@@ -337,6 +337,11 @@ document of its session (`ServerState::targetDocument`, resolved by `CallRunner`
   switch silently to another document. Tools with `DocumentUse::Optional` (e.g. `compile_status` with a run
   handle) run without a document instead and carry an `ACTIVE_DOCUMENT_CLOSED` warning. `activeDocumentId` keeps the closed handle until the session chooses
   another document (handles are never reused).
+- **Background documents.** `document_new` / `document_open` with `window: false` create or load a document
+  without a map window (`DocumentInfo::background`). It becomes the caller's active document, never replaces or
+  closes another document, is never focused and is never the focus fallback (with only background documents open, a
+  session without an active document gets `NO_DOCUMENT`). `document_show` gives it a window with the same handle,
+  ids and undo history (§10.3).
 - **No replacing.** In single-window mode (`DocumentHost::documentToReplace`), `document_new` and
   `document_open` fail with `DOCUMENT_IN_USE` when the document they would replace is another session's active
   document.
@@ -404,14 +409,18 @@ for minutes.
 ```cpp
 namespace tb::mcp {
 enum class BusyState { Idle, Busy };
-struct DocumentInfo { std::string id; ui::MapDocument* document; std::string windowTitle; bool focused; };
+struct DocumentInfo { std::string id; ui::MapDocument* document; std::string windowTitle; bool focused;
+                      bool background; };
 struct OpenedDocument { DocumentInfo document; std::vector<LogMessage> messages; };
 
 class DocumentHost {
   virtual std::optional<DocumentInfo> documentToReplace() = 0;  // single-window mode, else nullopt
-  virtual Result<OpenedDocument> createDocument(const mdl::GameInfo&, mdl::MapFormat) = 0;
+  // background: kept by the host without a window, never replaces a document, not focused
+  virtual Result<OpenedDocument> createDocument(const mdl::GameInfo&, mdl::MapFormat, bool background) = 0;
   virtual Result<OpenedDocument> loadDocument(const mdl::GameInfo&, mdl::MapFormat /*Unknown = detect*/,
-                                              const std::filesystem::path&) = 0;
+                                              const std::filesystem::path&, bool background) = 0;
+  // background document → new window; same handle, no documentWillClose
+  virtual Result<void> showDocument(ui::MapDocument&) = 0;
   virtual void closeDocument(ui::MapDocument&) = 0;  // no questions; object stays alive until the event loop
   virtual std::vector<std::filesystem::path> recentDocuments() = 0;
 };
@@ -505,6 +514,15 @@ game's `gamePathPreference` directly (Qt-free; open documents react through thei
   place. `closeDocument` calls `MapWindow::closeDiscardingChanges` (§15). Agent-created documents do not
   close the welcome window. `isCompileRunning` asks the window's compilation dialog
   (`MapWindow::compilationDialog()`, `CompilationDialog::running()`, §15).
+- Owns the background documents (`BackgroundDocument`: the document and a logger that adds its messages to the
+  console buffer, queued to the main thread for worker threads; `logTarget` returns it). They are listed with
+  the window documents in opening order (by handle), are always `Idle` for the busy gate, and are autosaved by a 1 s host timer
+  (`triggerAutosave()`, as `MapWindow` does) and once more before they are destroyed. `showDocument` creates their
+  window with `MapWindowManager::createMapWindow` (`setCreateMapWindow` is a test seam that registers an unshown
+  window). `closeDocument` fires `documentWillCloseNotifier` at once and destroys the document on the next event
+  loop turn (`QTimer::singleShot(0)`). `~QtMcpHost` destroys the remaining ones without a prompt, discarding
+  unsaved changes; `McpServerController` is destroyed before the `AppController`, so this happens while the GL and
+  resource managers still exist.
 
 `QtMcpHost::knowledgeDirectory()` is `mcp-knowledge` in the user data folder; `FakeHost` uses
 `mcp-knowledge` in its temporary directory (`knowledgeDir`, nullopt simulates a host without one).
@@ -529,7 +547,8 @@ process id from `nextProcessId`) instead of starting processes; its `engineParam
 `${MAP_BASE_NAME}`. `startError` and `parametersError` simulate failures, and `supportsEngine = false` simulates a
 host without one.
 
-`FakeHost` has `view` (`FakeViewHost`: four views, linked 2D cameras like `CameraLinkHelper`, `hasWindow`,
+`FakeHost::addDocument(document, title, background)` registers a document; its `showDocument` fires
+`documentWasLoadedNotifier` like a new window. `FakeHost` has `view` (`FakeViewHost`: four views, linked 2D cameras like `CameraLinkHelper`, `hasWindow`,
 recorded calls), `action` (`FakeActionHost`: `actionList`, recorded invocations, simulated failures; `actionHostOverride`
 substitutes the real host in `TbMcpUiLibTest`), `preference` (`FakePreferenceHost`) and `manualFile`; `supportsViews`,
 `supportsActions` and `supportsPreferences` simulate hosts without them. A host that does not implement a capability
@@ -651,7 +670,11 @@ call rolls back only itself. `transaction_commit` → `commitTransaction()`, `tr
 - The call runner merges the change report of every successful, non-dry-run call made while the transaction
   is open (net: created then removed drops out, created then modified stays created), keyed by the
   document state and the transaction; `transaction_commit` reports these net `changes` and names the step
-  in `undoStep`. Issues introduced are reported by each call, not again on commit.
+  in `undoStep`. Issues introduced are reported by each call, not again on commit, unless the calls
+  deferred their checks (below).
+- `transaction_begin {checks: "defer"}` (`AgentTransaction::deferChecks`) makes `defer` the default `checks`
+  mode of the session's calls inside the transaction (§6.3, deferred checks); `transaction_commit` and
+  `transaction_rollback` report, so the commit reports the issues of the whole transaction.
 - Session DELETE, disconnect, **Stop agent**, or closing the document → rollback.
 - The status bar shows "AI transaction open: <name>". Human edits made meanwhile become part of the agent
   transaction; the manual section (E15.5) documents this.
@@ -749,6 +772,41 @@ When any list was cut, the envelope gets
 The selection itself is not kept (`selection_get` lists it). Importing a 2,000-brush map with `map_import` returns
 20 KB instead of 58 KB by default and 7 KB with `summary`; deleting it with `objects_delete` 2.4 KB instead of 31 KB
 (1.1 KB with `summary`).
+
+**Issue summary.** With `detail: "summary"` (and any introduced issues) or whenever `issuesIntroduced` was cut, the
+envelope gets `issuesSummary` (`issuesSummaryJson`, `ChangeCollector.h`):
+
+```json
+"issuesSummary": {"total": 245, "bySource": {"editor": 125, "mcp": 120},
+  "byCode": [{"code": "ENTITY_OUTSIDE_HULL", "source": "mcp", "count": 120,
+              "examples": [{"objectId": "entity:12", "description": "..."}, {...}]}, ...]}
+```
+
+`byCode` is ordered by count and has at most two examples per code.
+
+**Deferred checks.** Every `Mutation::Map` tool takes `checks: "report" | "defer"` (injected, no default in the
+schema). Bulk work often creates objects whose checks make no sense yet (entities imported before the shell that
+encloses them report `ENTITY_OUTSIDE_HULL` each). The effective mode is the argument, else `defer` inside a
+transaction of the session begun with `checks: "defer"` (except for `transaction_commit` / `transaction_rollback`),
+else `report`. The session's series lives in `DocumentState::deferredChecks[sessionId]` (`DeferredChecks`: one
+`ChangeCollector` with placement tracking, and the number of calls):
+
+- A non-dry-run call with `defer` starts the series (its collector is attached before the call's transaction) or
+  continues it. The call's own collector runs without issue checks (`ChangeCollector(..., collectIssues = false)`
+  snapshots and computes no issues, and has no `PlacementTracker`), so the call reports its changes, an empty
+  `issuesIntroduced` and `checks: {deferred: true, calls: n}`.
+- A successful non-dry-run call with `report` while a series is open ends it: its own checks are skipped too, and
+  after its commit the series collector's `finish()` reports the issues introduced by the whole series (net: objects
+  created and removed within the series drop out; modified objects are compared with their state before the series)
+  as the call's `issuesIntroduced` / `issuesSummary`, plus `checks: {deferredCalls, changes: {created, modified,
+  removed}}` (net counts of the whole series, the reporting call included). `checks_report`
+  (`ValidationTools.cpp`, a `Mutation::Map` tool that changes nothing) ends a series without another edit.
+- Dry runs neither start nor end a series; with `report` they check their own changes as before. A failed call
+  that would have started a series drops it; a failed call in a running series leaves it open.
+- Closing the session (`ServerState::closeSession`) or reloading the document drops the series.
+
+The series collector observes the document between calls, so edits of other sessions and of the user made
+meanwhile count as part of the series.
 
 ### 6.4 Selection independence (X7): select, act, restore
 
@@ -874,7 +932,8 @@ void registerGeometryTools(ToolRegistry& registry)
   was closed, `Required` tools fail with `ACTIVE_DOCUMENT_CLOSED` and `Optional` tools run without a document
   with a warning of the same code (§3.7).
 - Injected parameters: `document?` for `DocumentUse != None`; `dryRun? = false` for `Map`/`External`;
-  `detail? = "summary"|"ids"|"full"` (default `"ids"`) for `Map` (§6.3, response size);
+  `detail? = "summary"|"ids"|"full"` (default `"ids"`) and `checks? = "report"|"defer"` for `Map` (§6.3, response
+  size, deferred checks);
   for `.paginated()`: `cursor?`, `limit? = 100 (1..1000)`, `fields?`, `detail? = "summary"|"full"`.
 - `CallContext`: `server() host() session() tool() hasDocument() documentInfo() document() map()
   documentState() ids() dryRun() warn() warnings() addImage() progress() setUndoStep() loggedProblems()
@@ -1033,12 +1092,12 @@ call log lines, and so on.
 |---|---|---|
 | `SessionTools.cpp` | `editor_status`, `document_list`, `document_activate`, `session_log`, `result_list_get` | E1 |
 | `HistoryTools.cpp` | `history_get`, `undo`, `redo`, `transaction_begin/commit/rollback` | E1 |
-| `DocumentTools.cpp` | `document_new/open/save/save_as/close/revert/recent`, `map_files_list`, `document_export_map/obj`, `autosave_list` | E2 |
+| `DocumentTools.cpp` | `document_new/open/save/save_as/close/revert/recent/show`, `map_files_list`, `document_export_map/obj`, `autosave_list` | E2 |
 | `GameTools.cpp` | `game_list`, `game_info`, `game_set_path`, `mods_get/set`, `entity_definitions_get/set/reload`, `materials_collections_get/set`, `materials_reload`, `soft_bounds_get/set` | E2 |
 | `SceneTools.cpp` | `map_summary`, `map_tree`, `object_get`, `objects_find`, `map_text_get`, `map_stats` | E3 |
 | `SpatialTools.cpp` | `objects_at_point`, `ray_pick`, `space_check`, `map_plan_view` (image form: E10) | E3, E10 |
 | `SelectionTools.cpp` | `selection_get/set/clear`, `select_all`, `select_invert`, `select_by`, `select_spatial`, `select_siblings`, `select_by_line`, `select_faces_of` | E3 |
-| `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut` | E4 |
+| `GeometryTools.cpp` | `brush_create_box/shape/hull`, `room_create`, `opening_cut`, `brushes_create` | E4 |
 | `BrushEditTools.cpp` | `brush_clip`, `face_extrude`, `face_extrude_new`, `vertices_move/remove/snap`, `vertex_add`, `csg_merge/subtract/intersect/hollow` | E4 |
 | `TransformTools.cpp` | `objects_move/rotate/scale/shear/flip/duplicate/delete/array`, `command_repeat`, `command_repeat_clear` | E4 |
 | `ViewTools.cpp` | `grid_get/set`, `camera_get/set/focus/step_pointfile`, `view_options_get/set`, `view_layout_set` | E4, E14 |
@@ -1046,7 +1105,7 @@ call log lines, and so on.
 | `FaceTools.cpp` | `face_attributes_get/set/copy`, `uv_align`, `uv_nudge` | E6 |
 | `TagTools.cpp` | `tags_list`, `tag_apply`, `tag_remove` | E6 |
 | `EntityClassTools.cpp` | `entity_classes_list`, `entity_class_describe`, `entity_model_info` | E5 |
-| `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes` | E5 |
+| `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes`, `entities_create` | E5 |
 | `EntityPropertyTools.cpp` | `entity_properties_set`, `entity_property_remove/rename`, `entity_spawnflags_set`, `entity_defaults_apply`, `entity_links_get`, `entity_link`, `entity_color_set` | E5 |
 | `CompileTools.cpp` | `compile_tools_get/set`, `compile_presets_list`, `compile_profiles_list`, `compile_profile_save/delete`, `compile_run`, `compile_status`, `compile_cancel`, `pointfile_load/unload`, `portalfile_load/unload`; the compile log resource | E7 |
 | `SnapshotTools.cpp` | `agent_camera_set/get/list/delete`, `view_snapshot`, `view_snapshots_around`, `view_snapshot_compare`, `view_snapshot_user` | E10 |
@@ -1060,7 +1119,7 @@ call log lines, and so on.
 | `PickTools.cpp` | `view_pick` | E12 |
 | `SpaceTools.cpp` | `spaces_list`, `surroundings`, `free_spots`, `walkable_plan` | E12 |
 | `ManifestTools.cpp` | `map_manifest_get`, `map_manifest_set` | E12 |
-| `ValidationTools.cpp` | `issues_list`, `issue_fix`, `issue_hide`, `issue_show`, `validators_list`, `validators_set`; `issuesResource()` for the issues resource | E12 (E13.1), E13 |
+| `ValidationTools.cpp` | `issues_list`, `issue_fix`, `issue_hide`, `issue_show`, `validators_list`, `validators_set`, `checks_report`; `issuesResource()` for the issues resource | E12 (E13.1), E13 |
 | `MapCheckTools.cpp` | `map_check` | E13 |
 | `EngineTools.cpp` | `engine_profiles_list`, `engine_profile_save`, `engine_launch` | E13 |
 | `ActionTools.cpp` | `actions_list`, `action_invoke` | E14 |
@@ -1084,7 +1143,8 @@ reads the call's logged problems or changes the selection for the call. No helpe
 
 - **`ToolUtils.{h,cpp}`**: game lookup (`findGame`, `gameNames`, `unknownGameError`, `gamePath`,
   `isGamePathValid`), ISO times, `absolutePathArgument` (`INVALID_ARGUMENT` for relative paths),
-  `toJson(LogMessage...)`, percent-encoding, `pathExists`.
+  `toJson(LogMessage...)`, percent-encoding, `pathExists`, `ItemErrors` (the problems of the items of a bulk tool,
+  each with its index, reported together as one `INVALID_ARGUMENT` with `details.errors`).
 - **`NodeJson.{h,cpp}`**: `nodeSummary` (`{id, kind, label, bounds, layer, classname | name | materials,
   entity}`; every list item that describes an object uses it), `nodeState`, `faceJson` (every face),
   `nodeLabel`, `nodeMaterials`, tag names, `layerIdOf`, `groupIdOf`.
@@ -1098,7 +1158,8 @@ reads the call's logged problems or changes the selection for the call. No helpe
   and `geometryOperationFailed` (it reads the logged problems).
 - **`EntityUtils.{h,cpp}`**: definition lookup, property type names and definition JSON, color ranges, flag
   lookup by name, bit (`bit8`) or value, value validation (`checkPropertyValue`, `validateProperty`,
-  `warnUnknownClassname`), entity targeting (`resolveEntities` over `mdl::Map` and `IdRegistry`;
+  `warnUnknownClassname`), property values from JSON (`propertiesFromJson`, `propertyValueFromJson`,
+  `formatPropertyNumber`, `containsQuote`), entity targeting (`resolveEntities` over `mdl::Map` and `IdRegistry`;
   `withEntities`). `validateProperty` and `warnUnknownClassname` take `CallContext` because they warn,
   `withEntities` because it selects through `withTargets`.
 - **`AssetUtils.{h,cpp}`** (header in `include/mcp/tools/`): `createGameFileSystem` (the game path, the
@@ -1133,6 +1194,19 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   game's `initialMap` template for the format (or null) and the ids of the objects the new map starts with
   (`initialObjects`, e.g. the single default brush), with an `INITIAL_OBJECTS` warning, so that agents delete
   them before building at the origin.
+- **Background documents.** `window: false` on `document_new` / `document_open` makes a document owned by the
+  host without a map window (§4.3); the tool descriptions warn that it is discarded unsaved when the editor quits
+  or the MCP server stops. Its messages go to the console buffer; it is autosaved; it is not a recent document
+  until `document_show` creates its window (the `MapWindow` constructor fires `documentWasLoaded`, which adds the
+  file). It works with all tools, including `view_snapshot`, `view_pick`, saving, reverting and compiling (the
+  compile camera falls back to a default). The user-view tools (`camera_*`, `view_layout_set`,
+  `view_snapshot_user`) and the action tools fail with `DOCUMENT_IN_BACKGROUND`, whose hint names `view_snapshot`
+  and `document_show`. `document_show` (External, default: the session's active document, no focus fallback)
+  returns `{document, alreadyShown}`; it refuses in single-window mode while a window is open (`OPERATION_FAILED`)
+  and while an agent transaction is open (`TRANSACTION_ACTIVE`). `IdRegistry`, `DocumentState` and
+  `McpCompileJob` ignore a `documentWasLoaded` that keeps the `Map` object (a new window only notifies), so ids,
+  deferred checks and compile runs survive it. Background documents outlive the sessions and Stop agent; any
+  session can close them.
 - `document_open` reads game and format from the header comments; explicit `game` / `format` override them;
   a missing format is detected by the loader (`formatSource: "detected"`). An already open file is returned
   with `alreadyOpen: true`. `loadMessages` lists warnings and errors logged while loading.
@@ -1203,6 +1277,20 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   `POINTS_INSIDE_HULL` for unused points.
 - `room_create`: floor and ceiling span the outer footprint, west/east walls the outer depth, south/north
   walls fit between them; the result names each brush by role.
+- **`brushes_create`** builds many brushes in one call (at most 5,000 items): boxes `{min, max}`, shapes `{shape,
+  min, max, ...}` through the same `shapeParameters` / `buildShape` as `brush_create_shape`, and hulls `{points}`
+  with the checks of `brush_create_hull`. Materials: the item's `material`, else the call's, else the current
+  material; `faces` (call-level, merged with the item's) sets the material by the face normal's main axis (`top`,
+  `bottom`, `north` +y, `south` -y, `east` +x, `west` -x; `sides` for the non-horizontal faces without their own).
+  Every item is built before anything is added; all problems are collected with their item index (`ItemErrors`)
+  and returned as one `INVALID_ARGUMENT`. The node tree is `layer` (default: the open group or current layer) →
+  one new group per group name (item `group`, default the call's `group`; `""` keeps an item out) → one brush
+  entity per used `brushEntities` key (`{classname, properties}`; properties via `propertiesFromJson`, the game's
+  default properties like the editor; an entity must stay in one group) → brushes, added with one `mdl::addNodes`
+  and selected. Warnings are aggregated per call (`UNKNOWN_MATERIAL` lists the names, `IGNORED_ARGUMENT` the item
+  indices, `POINTS_INSIDE_HULL` a count, `UNUSED_BRUSH_ENTITY`). The result lists the brush ids in item order,
+  `brushesPerItem` only if some item made more or less than one brush, `groups` and `entities` by name and key,
+  `bounds`, and `uv` when `uv` aligns the new faces (§10.11).
 - `opening_cut` subtracts the opening from each target with `Brush::subtract`, re-applies the wall's own face
   attributes (subtract copies the cutter's attributes to coplanar faces), and uses `material` or the wall's
   most used material inside the opening. Any invalid fragment fails the call. Without ids it cuts every
@@ -1302,6 +1390,17 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   `dropUsing: "auto" | "model" | "definition"`; `auto` rests the current animation's model bottom on the floor
   when the model loads and uses the definition bounds otherwise.
 - `entity_move_brushes` to `world` is the editor's Make Structural (smart tags such as detail are turned off).
+- **`entities_create`** creates many point entities (at most 5,000 items) in one call. Each item is validated first
+  (classname, properties, a brush entity class, `angle` given twice, the world bounds, `dropToFloor` with the bounds
+  and floor rays of `entity_create_point`, duplicate `ref`s, link targets); all problems come back together with
+  their item index. Entities are built as `mdl::Entity`s (the definition's defaults when the game sets default
+  properties, then the properties, `applyDefaults`, removals and the origin) and added with one `mdl::addNodes` to
+  `layer` (default: the open group or current layer), optionally inside a new group, then selected. `links:
+  [{to, key = "target", targetKey = "targetname"}]` point at another item's `ref` or at an existing entity (which
+  must have the target key); a missing target name is generated from the ref or the classname, unique among the
+  map's values of that key. Property problems, unknown classes, overlaps with brushes and entities outside the world
+  bounds become one aggregated warning per code (at most 10 ids each); model placement is left to the per-call MCP
+  checks (`issuesIntroduced`). `ids[i]` is the entity of `items[i]`; `refs` maps refs to ids.
 - `entity_links_get` without ids lists the whole map. `entity_link` reuses the target's name or generates
   `<classname>_<n>`, unique among all link values. `entity_color_set` converts to the property's color range
   from the definition and defaults to the class's first color property, else `_color`.
@@ -1352,7 +1451,11 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   uses the editor's trim-sheet fit), `autoFit`, `reset` (`resetAll` with the game's default UV attributes),
   `resetToWorld` (`resetAllToParaxial`), `flip` (scale × -1) and `rotate90` (rotation ± 90), the latter four
   as in `UvEditor`, and `typical` (below). `policy` is the editor's best/next/prev. Arguments of other operations are
-  `IGNORED_ARGUMENT` warnings; fit with repeats needs a loaded material (`MATERIAL_NOT_LOADED`).
+  `IGNORED_ARGUMENT` warnings; fit with repeats needs a loaded material (`MATERIAL_NOT_LOADED`). Like every face
+  tool it takes face, brush, group, entity and layer ids (`faceTargetsField`; a layer stands for the faces of all
+  its brushes), so a whole building is aligned in one call and one undo step. Operations computed per face (center,
+  fit, typical, and the per-face updates of `face_attributes_set` and `uv_nudge`) go through `applyUvUpdates`
+  (`UvTools.h`): one `mdl::applyAndSwap` over all faces, without selecting them.
 - `uv_nudge` changes offsets in each face's own texture axes (not camera-relative like `translateUv`),
   accounts for negative scales, and rotates by the grid angle by default.
 - **Smart tags.** `SmartTag` does not expose its matcher, so `tags_list` classifies it from its printed form
@@ -1630,6 +1733,17 @@ are dropped when the target format has none (`PATCHES_DROPPED`). The kept object
 document's format and pasted through the `clipboard_paste` path with the same placement options, into
 `targetLayer` (default: the current layer; source layers are flattened). The result lists the new ids, the
 missing materials, and selects the imported objects; the call is one undo step, `AI: Import Map`.
+
+**UV modes of new objects.** `clipboard_paste` (object text), `map_import` and `brushes_create` take `uv: "keep" |
+"typical" | "fit" | "world"` (default `keep`). `alignNodeUvs` (`UvTools.h`) collects the brush faces of the new
+objects, skips faces whose material is not loaded (`MATERIAL_NOT_LOADED` with a count; they keep their UVs), gets
+the typical scales from the material profiles (`uvFitProfiles`: notes, corpus, the map's other faces, else the
+game's default with `TYPICAL_SCALE_DEFAULT`) and applies per face, in the same undo step: `typical` =
+`typicalFitUpdate` (typical scale, justified to the face edge, like `uv_align typical`); `fit` =
+`wholeRepeatsFitUpdate` (the typical scale adjusted per axis to the nearest whole number of repeats, at least one,
+justified); `world` = `worldAlignedUpdate` (paraxial axes, offset 0, rotation 0, the typical scale: textures continue
+across adjacent brushes). The result gets `uv: {mode, faces, skipped, typicalScales: {material: {scale, source}}}`.
+Face text ignores `uv` (`IGNORED_ARGUMENT`).
 
 ### 10.12 Agent vision (E10)
 
@@ -2055,6 +2169,10 @@ breaks, with the subsections and the parent, previous and next sections. Without
 | `tst_DocumentTargeting` | two sessions: session A opens map 1, session B creates map 2 (focused); calls without `document` stay on each session's active document regardless of focus; `document_list` `active` / `activeIn` and `editor_status` per session, also as a resource; explicit `document` leaves the active document; `ACTIVE_DOCUMENT_CLOSED` with the open documents after the user, another session or (fallback) the session itself closed it; the `DOCUMENT_FROM_FOCUS` fallback and adoption of a fresh session; `document_close` / `document_revert` never fall back; the status notification on activation; `DOCUMENT_IN_USE` in single-window mode |
 | `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks; asynchronous read-only calls (immediate while busy, concurrent, cancel, session close, document close, no undo step) |
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
+| `tst_BackgroundDocuments` | `window: false` (listing, no replacing, dry run, not recent), tools, snapshot and save on a background document, the `DOCUMENT_IN_BACKGROUND` tools, the focus fallback, `document_show` (ids, history, recent, dry run, transaction, single-window mode, no document), close |
+| `tst_DeferredChecks` | `issuesSummaryJson` (order, sources, examples); `issuesSummary` with `detail: "summary"` and only when needed; a deferred series (no issues per call, dry runs inside it, the reporting call with the issues of all calls and its own), objects created and removed within a series, `checks_report`, a failed first call, transactions begun with `checks: "defer"` reporting on commit, an explicit `report` inside such a transaction, closing the session |
+| `tst_BulkCreateTools` | `brushes_create` (boxes, stairs, hulls, per-face materials, groups, brush entities, selection, one undo step, all invalid items listed and nothing created, dry run, detail summary on 120 items, layer, default group and `""`, `uv` without loaded materials); `entities_create` (properties, links by ref and to an existing entity, generated and colliding names, `dropToFloor`, all invalid items listed, group, layer, dry run, one undo step) |
+| `tst_UvModes` | `uv` of `clipboard_paste` and `map_import` on knowledge.wad with a material note: keep, typical (justified), fit (whole repeats), world (paraxial, offset 0), unloaded materials skipped, dry run, face text ignoring it; `uv_align` on `layer:default` with 40 brushes in one undo step; `uvModeFromString` |
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
 | `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
 | `tst_GeometryUtils`, `tst_CsgUtils` | the pure model helpers over `mdl::MapFixture`: `intersectsInterior`, `owningBrushEntity`, `classifyBrush`, `isPointEntity`, `castRay`, `checkBox`, `geometryError`, `addBrushes`, `ScopedLockOverride`; hollowing with a thickness |
@@ -2119,6 +2237,10 @@ findings), and game paths in `mdl/Game/`.
 
 ### 11.2 `TbMcpUiLibTest` (Qt, `RunAllTests.cpp` QApplication, offscreen)
 
+- `tst_McpBackgroundDocuments.cpp`: `QtMcpHost` creating and loading background documents, listing and order, not
+  in `mapWindows()`, the console buffer, `save_as` not recent, deferred close, handles never reused, `showDocument`
+  through `setCreateMapWindow` (an unshown window), the single-window refusal, destroying the host with an unsaved
+  background document; a `[gpu]` render of a background document without a window.
 - `tst_McpTcpTransport.cpp`: listen on port 0, drive with `QTcpSocket`/`QNetworkAccessManager`, wait with
   `QTest::qWaitFor`.
 - `McpUiTestUtils.{h,cpp}`: showing a window under the offscreen platform fails on OpenGL, so
@@ -2200,6 +2322,15 @@ findings), and game paths in `mdl/Game/`.
 - `clipboard_paste` does not convert between incompatible formats (`map_import` does); pasted face text
   applies only its last face; `clipboard_cut` cuts objects, not faces. `map_import` does not recreate the
   source layers.
+- `brushes_create` makes new groups and brush entities only (it does not add to existing ones) and no patches;
+  `entities_create` links to an existing entity only if it already has the target key. A deferred check series also
+  covers edits that other sessions and the user make meanwhile, and only a reporting call of the same session ends
+  it. The `uv` modes of the import tools change brush faces, not patches, and apply one typical scale per material
+  (no panel or trim rules per face).
+- Background documents have no user views, cameras, view layout or editor actions (`DOCUMENT_IN_BACKGROUND`), and
+  no human can edit them until `document_show`. Unsaved background documents are discarded without a prompt when
+  the editor quits or the MCP server stops (preference toggle or port change); a SIGTERM ends the editor without
+  running the destructors, like for window documents. `document_show` refuses while an agent transaction is open.
 - The bridge ignores portable mode when locating the discovery file. It links the whole tool code for its offline
   catalog (a large Debug binary). Its offline lists are those of its own build: connected to an editor of another
   build it sends `list_changed` for tools and resources, but prompts do not announce changes (`listChanged: false`).

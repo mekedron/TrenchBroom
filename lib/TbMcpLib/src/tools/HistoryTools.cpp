@@ -186,10 +186,14 @@ ToolResult transactionBegin(CallContext& context, const Args& args)
     context.session().id,
     context.session().clientDisplayName(),
     name,
-    map.commandProcessor().transactionDepth()};
+    map.commandProcessor().transactionDepth(),
+    args.get<std::string>("checks") == "defer"};
   context.server().updateOpenTransactions();
 
-  return Json{{"transaction", name}, {"document", context.documentInfo().id}};
+  return Json{
+    {"transaction", name},
+    {"document", context.documentInfo().id},
+    {"checks", args.get<std::string>("checks")}};
 }
 
 std::optional<ToolError> checkOwnTransaction(CallContext& context)
@@ -365,14 +369,23 @@ void registerHistoryTools(ToolRegistry& registry)
         "become one undo step 'AI: <name>' on transaction_commit, or leave no trace on "
         "transaction_rollback. Other clients cannot modify the document meanwhile, and "
         "undo/redo fail until it is closed. Calls inside the transaction report undoStep "
-        "null (their changes belong to the transaction's step). Transactions cannot be "
-        "nested. Closing the session rolls it back. Example: {\"name\": \"Build east "
-        "wing\"}")
+        "null (their changes belong to the transaction's step). With checks: "
+        "\"defer\", the calls inside skip their issue checks (unless they pass checks: "
+        "\"report\") and transaction_commit reports the issues of the whole "
+        "transaction, with issuesSummary counting them per code: use it for bulk work "
+        "such as importing a shell and its entities in several calls. Transactions "
+        "cannot be nested. Closing the session rolls it back. Example: {\"name\": "
+        "\"Build east wing\", \"checks\": \"defer\"}")
       .input(object({
         field("name", string().nonEmpty()).required().describe("Name of the undo step"),
+        field("checks", enumOf({"report", "defer"}).defaultsTo("report"))
+          .describe(
+            "defer: calls inside the transaction defer their issue checks by default, "
+            "and transaction_commit reports them for the whole transaction"),
       }))
       .output(object({
         field("transaction", string()).describe("Name of the opened transaction"),
+        field("checks", string()).describe("The checks mode of the calls inside"),
         field("document", string()).describe("Handle of the document"),
         field("wouldBegin", string()).describe("Dry run: name it would open"),
       }))
@@ -387,8 +400,10 @@ void registerHistoryTools(ToolRegistry& registry)
         "Closes this session's open transaction (transaction_begin) and stores all its "
         "changes as one undo step 'AI: <name>' (undoStep); empty: true if nothing "
         "changed. 'changes' lists the net created, modified and removed objects of all "
-        "calls in the transaction. Fails with NO_TRANSACTION if this session has none "
-        "open. Example: {}")
+        "calls in the transaction; if the calls deferred their checks (checks: "
+        "\"defer\"), issuesIntroduced and issuesSummary report the issues of the whole "
+        "transaction. Fails with NO_TRANSACTION if this session has none open. "
+        "Example: {\"detail\": \"summary\"}")
       .input(object({}))
       .output(object({
         field("committed", string()).describe("Name of the committed transaction"),

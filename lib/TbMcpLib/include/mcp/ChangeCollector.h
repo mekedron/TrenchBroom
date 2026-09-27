@@ -127,6 +127,15 @@ Json changesToJson(
 Json issuesToJson(const std::vector<IntroducedIssue>& issues, size_t limit = 100);
 
 /**
+ * Summarizes introduced issues for responses whose issue list is cut or short (detail
+ * summary): `{total, bySource: {editor, mcp}, byCode: [{code, source, count, examples:
+ * [{objectId, description}]}]}`, codes ordered by count, at most `examplesPerCode`
+ * examples each.
+ */
+Json issuesSummaryJson(
+  const std::vector<IntroducedIssue>& issues, size_t examplesPerCode = 2);
+
+/**
  * Summarizes the current selection:
  * `{"mode": "none"|"objects"|"faces", "count": n, "ids": [...], "truncated": bool}`.
  */
@@ -158,14 +167,22 @@ private:
   std::unique_ptr<PlacementTracker> m_placement;
   /** Editor validator codes whose issues are not reported (validators_set). */
   std::set<std::string> m_disabledValidators;
+  /** Whether finish() computes the introduced editor issues. */
+  bool m_collectIssues = true;
 
   NotifierConnection m_notifierConnection;
 
 public:
+  /**
+   * Without `collectIssues`, the collector reports only the changes: it neither
+   * snapshots nor computes issues (the calls of a deferred series, whose issues another
+   * collector reports).
+   */
   ChangeCollector(
     ui::MapDocument& document,
     IdRegistry& ids,
-    std::optional<PlacementTrackerOptions> placement = std::nullopt);
+    std::optional<PlacementTrackerOptions> placement = std::nullopt,
+    bool collectIssues = true);
   ~ChangeCollector();
 
   ChangeCollector(const ChangeCollector&) = delete;

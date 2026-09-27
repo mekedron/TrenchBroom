@@ -78,16 +78,19 @@ public:
 
   std::optional<DocumentInfo> documentToReplace() override { return std::nullopt; }
 
-  Result<OpenedDocument> createDocument(const mdl::GameInfo&, mdl::MapFormat) override
+  Result<OpenedDocument> createDocument(
+    const mdl::GameInfo&, mdl::MapFormat, bool) override
   {
     return Error{NoEditor};
   }
 
   Result<OpenedDocument> loadDocument(
-    const mdl::GameInfo&, mdl::MapFormat, const std::filesystem::path&) override
+    const mdl::GameInfo&, mdl::MapFormat, const std::filesystem::path&, bool) override
   {
     return Error{NoEditor};
   }
+
+  Result<void> showDocument(ui::MapDocument&) override { return Error{NoEditor}; }
 
   void closeDocument(ui::MapDocument&) override {}
 

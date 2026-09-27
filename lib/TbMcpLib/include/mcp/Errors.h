@@ -48,6 +48,11 @@ enum class ErrorCode
   ActiveDocumentClosed,
   /** The document is the active document of another session. */
   DocumentInUse,
+  /**
+   * The tool needs the document's editor window, and the document is a background
+   * document without one (document_show gives it a window).
+   */
+  DocumentInBackground,
   InvalidGeometry,
   OutOfWorldBounds,
   OperationFailed,

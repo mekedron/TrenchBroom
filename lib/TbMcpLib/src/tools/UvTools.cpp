@@ -19,6 +19,7 @@
 
 #include "mcp/tools/UvTools.h"
 
+#include "base/Logger.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
 #include "mcp/JsonVm.h"
@@ -28,6 +29,7 @@
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
 #include "mcp/tools/MaterialKnowledgeTools.h"
+#include "mdl/ApplyAndSwap.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushFaceHandle.h"
@@ -41,6 +43,7 @@
 #include "mdl/UvAttributes.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/result.h"
 #include "kd/string_format.h"
 #include "kd/string_utils.h"
 
@@ -751,6 +754,161 @@ std::optional<mdl::UpdateBrushFaceAttributes> typicalFitUpdate(
   const auto& typical = it->second.value;
   return justifiedUpdate(
     face, vm::vec2d{sign(current.x()) * typical.x(), sign(current.y()) * typical.y()});
+}
+
+std::optional<mdl::UpdateBrushFaceAttributes> wholeRepeatsFitUpdate(
+  const mdl::BrushFace& face, const UvFitProfiles& profiles)
+{
+  const auto it = profiles.typicalScales.find(lower(face.materialName()));
+  if (!face.material() || !face.geometry() || it == profiles.typicalScales.end())
+  {
+    return std::nullopt;
+  }
+
+  const auto textureSize = vm::vec2d{face.textureSize()};
+  const auto current = vm::vec2d{face.uvAttributes().scale};
+  const auto typical = vm::abs(it->second.value);
+  const auto [unitMin, unitMax] = texelExtent(face, vm::vec2d{1, 1});
+  const auto extent = unitMax - unitMin;
+
+  auto scale = vm::vec2d{};
+  for (size_t axis = 0; axis < 2; ++axis)
+  {
+    if (extent[axis] <= 0.0 || typical[axis] <= 0.0 || textureSize[axis] <= 0.0)
+    {
+      return std::nullopt;
+    }
+    const auto repeats = extent[axis] / (typical[axis] * textureSize[axis]);
+    scale[axis] = sign(current[axis]) * extent[axis]
+                  / (std::max(1.0, std::round(repeats)) * textureSize[axis]);
+  }
+  return justifiedUpdate(face, scale);
+}
+
+std::optional<mdl::UpdateBrushFaceAttributes> worldAlignedUpdate(
+  const mdl::BrushFace& face, const UvFitProfiles& profiles)
+{
+  const auto it = profiles.typicalScales.find(lower(face.materialName()));
+  if (!face.material() || it == profiles.typicalScales.end())
+  {
+    return std::nullopt;
+  }
+  const auto typical = vm::abs(it->second.value);
+  return mdl::UpdateBrushFaceAttributes{
+    .xOffset = mdl::SetValue{0.0f},
+    .yOffset = mdl::SetValue{0.0f},
+    .rotation = mdl::SetValue{0.0f},
+    .xScale = mdl::SetValue{float(typical.x())},
+    .yScale = mdl::SetValue{float(typical.y())},
+    .axis = mdl::ToParaxial{},
+  };
+}
+
+ToolResult applyUvUpdates(
+  CallContext& context,
+  const std::vector<mdl::BrushFaceHandle>& faces,
+  const std::function<
+    std::optional<mdl::UpdateBrushFaceAttributes>(const mdl::BrushFace&)>& updateFor)
+{
+  auto& map = context.map();
+  const auto applied =
+    mdl::applyAndSwap(map, "Change Face Attributes", faces, [&](mdl::BrushFace& face) {
+      if (const auto update = updateFor(face))
+      {
+        return mdl::evaluate(*update, face) | kdl::if_error([&](const auto& e) {
+                 map.logger().error() << "Could not set face attributes: " << e.msg;
+               })
+               | kdl::is_success();
+      }
+      return true;
+    });
+  if (!applied)
+  {
+    return context.operationFailed(
+      "The face attributes could not be changed.",
+      "Check the values, e.g. a scale must not be 0.");
+  }
+  return Json::object();
+}
+
+std::optional<UvMode> uvModeFromString(const std::string_view name)
+{
+  if (name == "keep")
+  {
+    return UvMode::Keep;
+  }
+  if (name == "typical")
+  {
+    return UvMode::Typical;
+  }
+  if (name == "fit")
+  {
+    return UvMode::Fit;
+  }
+  if (name == "world")
+  {
+    return UvMode::World;
+  }
+  return std::nullopt;
+}
+
+Result<Json, ToolError> alignNodeUvs(
+  CallContext& context, const std::vector<mdl::Node*>& nodes, const UvMode mode)
+{
+  if (mode == UvMode::Keep)
+  {
+    return Json{{"mode", "keep"}, {"faces", 0}};
+  }
+
+  auto faces = mdl::collectBrushFaces(nodes);
+  const auto total = faces.size();
+  std::erase_if(faces, [](const auto& handle) { return !handle.face().material(); });
+  const auto skipped = total - faces.size();
+  if (skipped > 0)
+  {
+    context.warn(
+      "MATERIAL_NOT_LOADED",
+      fmt::format(
+        "{} of {} face(s) kept their UVs: aligning needs the texture size, but their "
+        "material is not loaded.",
+        skipped,
+        total));
+  }
+
+  const auto profiles = uvFitProfiles(context, faces, mode != UvMode::World);
+  auto result = applyUvUpdates(context, faces, [&](const mdl::BrushFace& face) {
+    switch (mode)
+    {
+    case UvMode::Typical:
+      return typicalFitUpdate(face, profiles);
+    case UvMode::Fit:
+      return wholeRepeatsFitUpdate(face, profiles);
+    case UvMode::World:
+      return worldAlignedUpdate(face, profiles);
+    case UvMode::Keep:
+      break;
+    }
+    return std::optional<mdl::UpdateBrushFaceAttributes>{};
+  });
+  if (result.is_error())
+  {
+    return errorOf(result);
+  }
+
+  auto materials = Json::object();
+  for (const auto& [key, scale] : profiles.typicalScales)
+  {
+    materials[key] = Json{{"scale", toJson(scale.value)}, {"source", scale.source}};
+  }
+  return Json{
+    {"mode",
+     mode == UvMode::Typical ? "typical"
+     : mode == UvMode::Fit   ? "fit"
+                             : "world"},
+    {"faces", faces.size()},
+    {"skipped", skipped},
+    {"typicalScales", std::move(materials)},
+  };
 }
 
 Json uvFitReport(

@@ -257,7 +257,10 @@ public:
   bool compileRunning = false;
   std::string version = "test-version";
 
-  /** Simulates single window mode: new documents replace the focused document. */
+  /**
+   * Simulates single window mode: new documents replace the focused document, and a
+   * background document cannot be shown while another document has a window.
+   */
   bool singleWindow = false;
   std::vector<std::filesystem::path> recentDocumentList;
   mdl::EnvironmentConfig environmentConfig;
@@ -344,8 +347,14 @@ public:
    */
   const std::filesystem::path& configDir() const;
 
-  /** Registers the document and returns its handle. The new document gets the focus. */
-  std::string addDocument(ui::MapDocument& document, std::string title = "unnamed.map");
+  /**
+   * Registers the document and returns its handle. The new document gets the focus,
+   * unless it is a background document (without a window).
+   */
+  std::string addDocument(
+    ui::MapDocument& document,
+    std::string title = "unnamed.map",
+    bool background = false);
 
   /** Fires documentWillClose, removes the document and fires documentsDidChange. */
   void removeDocument(ui::MapDocument& document);
@@ -376,17 +385,25 @@ public:
   // DocumentHost
   std::optional<DocumentInfo> documentToReplace() override;
   Result<OpenedDocument> createDocument(
-    const mdl::GameInfo& gameInfo, mdl::MapFormat mapFormat) override;
+    const mdl::GameInfo& gameInfo, mdl::MapFormat mapFormat, bool background) override;
+  /** Adds the path to the recent list unless the document is a background document. */
   Result<OpenedDocument> loadDocument(
     const mdl::GameInfo& gameInfo,
     mdl::MapFormat mapFormat,
-    const std::filesystem::path& path) override;
+    const std::filesystem::path& path,
+    bool background) override;
+  /**
+   * Like a new map window: the document gets the focus, its path is added to the recent
+   * list, and its documentWasLoadedNotifier fires.
+   */
+  Result<void> showDocument(ui::MapDocument& document) override;
   /** Removes the document like removeDocument; the document object stays alive. */
   void closeDocument(ui::MapDocument& document) override;
   std::vector<std::filesystem::path> recentDocuments() override;
 
 private:
   std::optional<DocumentInfo> findDocumentInfo(const ui::MapDocument& document) const;
+  void addRecentDocument(const std::filesystem::path& path);
   void logToConsole(
     const ui::MapDocument& document, LogLevel level, std::string_view message);
   void processResources();

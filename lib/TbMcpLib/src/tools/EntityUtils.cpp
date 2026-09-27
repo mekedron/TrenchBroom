@@ -651,4 +651,119 @@ ToolResult withEntities(
   return result;
 }
 
+std::string formatPropertyNumber(const Json& value)
+{
+  if (value.is_number_integer())
+  {
+    return std::to_string(value.get<int64_t>());
+  }
+  const auto rounded = roundForOutput(value.get<double>());
+  return rounded == std::floor(rounded) && std::abs(rounded) < 1e15
+           ? std::to_string(int64_t(rounded))
+           : fmt::format("{}", rounded);
+}
+
+std::optional<std::string> propertyValueFromJson(const Json& value)
+{
+  if (value.is_string())
+  {
+    return value.get<std::string>();
+  }
+  if (value.is_number())
+  {
+    return formatPropertyNumber(value);
+  }
+  if (value.is_boolean())
+  {
+    return value.get<bool>() ? "1" : "0";
+  }
+  if (value.is_array())
+  {
+    auto result = std::string{};
+    for (const auto& element : value)
+    {
+      if (!element.is_number())
+      {
+        return std::nullopt;
+      }
+      result += (result.empty() ? "" : " ") + formatPropertyNumber(element);
+    }
+    return result;
+  }
+  return std::nullopt;
+}
+
+bool containsQuote(const std::string_view str)
+{
+  return str.find('"') != std::string::npos;
+}
+
+Result<PropertyList, ToolError> propertiesFromJson(
+  const Json& properties, const bool allowOrigin)
+{
+  auto result = PropertyList{};
+  if (!properties.is_object())
+  {
+    return makeError(
+      ErrorCode::InvalidArgument,
+      "The properties must be an object of key-value pairs.",
+      "Example: {\"light\": 300, \"_color\": [255, 128, 0]}");
+  }
+
+  for (const auto& item : properties.items())
+  {
+    const auto& key = item.key();
+    if (key.empty() || containsQuote(key))
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "Property key '" + key + "' is invalid: keys must be non-empty and must not "
+        "contain quotes, which map files cannot store.");
+    }
+    if (key == mdl::EntityPropertyKeys::Classname)
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "Set the classname with the argument 'classname', not in 'properties'.",
+        "Remove 'classname' from 'properties'.");
+    }
+    if (!allowOrigin && key == mdl::EntityPropertyKeys::Origin)
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "Set the origin of a point entity with the argument 'position', not in "
+        "'properties'.",
+        "Remove 'origin' from 'properties' and pass 'position': [x, y, z].");
+    }
+
+    if (item.value().is_null())
+    {
+      result.emplace_back(key, std::nullopt);
+      continue;
+    }
+
+    auto value = propertyValueFromJson(item.value());
+    if (!value)
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "The value of property '" + key + "' must be a string, a number, a boolean, "
+        "an array of numbers or null.",
+        "Example: {\"light\": 300, \"_color\": [255, 128, 0], \"message\": \"Hello\", "
+        "\"gibmodel\": null}");
+    }
+    if (containsQuote(*value))
+    {
+      return makeError(
+        ErrorCode::InvalidArgument,
+        "The value of property '" + key + "' contains a quote, which map files cannot "
+        "store.",
+        "Use single quotes instead.");
+    }
+    result.emplace_back(key, std::move(*value));
+  }
+  return result;
+}
+
+
 } // namespace tb::mcp

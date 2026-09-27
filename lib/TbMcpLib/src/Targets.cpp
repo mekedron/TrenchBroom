@@ -31,6 +31,8 @@
 #include "mdl/Selection.h"
 
 #include <algorithm>
+#include <set>
+#include <utility>
 
 namespace tb::mcp
 {
@@ -280,7 +282,11 @@ schema::Field faceTargetsField(std::string description)
   using namespace schema;
   return field(
            "ids",
-           array(objectId({ObjectKind::Brush, ObjectKind::Group, ObjectKind::Entity}))
+           array(objectId(
+                   {ObjectKind::Brush,
+                    ObjectKind::Group,
+                    ObjectKind::Entity,
+                    ObjectKind::Layer}))
              .nonEmpty())
     .describe(std::move(description));
 }
@@ -293,8 +299,9 @@ Result<std::vector<mdl::BrushFaceHandle>, ToolError> resolveFaceTargets(
   const auto& editorContext = map.editorContext();
 
   auto faces = std::vector<mdl::BrushFaceHandle>{};
+  auto added = std::set<std::pair<const mdl::BrushNode*, size_t>>{};
   const auto addFace = [&](const mdl::BrushFaceHandle& handle) {
-    if (std::ranges::find(faces, handle) == faces.end())
+    if (added.emplace(handle.node(), handle.faceIndex()).second)
     {
       faces.push_back(handle);
     }

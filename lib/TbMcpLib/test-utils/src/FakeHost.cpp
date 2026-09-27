@@ -291,15 +291,20 @@ const std::filesystem::path& FakeHost::configDir() const
   return m_configEnvironment->dir();
 }
 
-std::string FakeHost::addDocument(ui::MapDocument& document, std::string title)
+std::string FakeHost::addDocument(
+  ui::MapDocument& document, std::string title, const bool background)
 {
-  for (auto& info : documentList)
+  if (!background)
   {
-    info.focused = false;
+    for (auto& info : documentList)
+    {
+      info.focused = false;
+    }
   }
 
   auto id = "doc:" + std::to_string(m_nextDocumentId++);
-  documentList.push_back(DocumentInfo{id, &document, std::move(title), true});
+  documentList.push_back(
+    DocumentInfo{id, &document, std::move(title), !background, background});
   // like a map window, which makes its console the document's logger
   document.setTargetLogger(logTarget(document));
   documentsDidChangeNotifier();
@@ -438,20 +443,27 @@ std::optional<std::filesystem::path> FakeHost::manualPath()
 
 std::optional<DocumentInfo> FakeHost::documentToReplace()
 {
-  if (!singleWindow || documentList.empty())
+  if (!singleWindow)
   {
     return std::nullopt;
   }
 
   const auto it =
     std::ranges::find_if(documentList, [](const auto& info) { return info.focused; });
-  return it != documentList.end() ? *it : documentList.front();
+  if (it != documentList.end())
+  {
+    return *it;
+  }
+
+  const auto shown =
+    std::ranges::find_if(documentList, [](const auto& info) { return !info.background; });
+  return shown != documentList.end() ? std::optional{*shown} : std::nullopt;
 }
 
 Result<OpenedDocument> FakeHost::createDocument(
-  const mdl::GameInfo& gameInfo, const mdl::MapFormat mapFormat)
+  const mdl::GameInfo& gameInfo, const mdl::MapFormat mapFormat, const bool background)
 {
-  if (auto replaced = documentToReplace())
+  if (auto replaced = background ? std::nullopt : documentToReplace())
   {
     auto capture = ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
     return replaced->document->create(environmentConfig, gameInfo, mapFormat, WorldBounds)
@@ -474,7 +486,7 @@ Result<OpenedDocument> FakeHost::createDocument(
              auto messages = collectCachedMessages(*document);
              auto& documentRef = *m_ownedDocuments.emplace_back(std::move(document));
              processResources();
-             addDocument(documentRef, "unnamed.map");
+             addDocument(documentRef, "unnamed.map", background);
              return OpenedDocument{*findDocumentInfo(documentRef), std::move(messages)};
            });
 }
@@ -482,21 +494,17 @@ Result<OpenedDocument> FakeHost::createDocument(
 Result<OpenedDocument> FakeHost::loadDocument(
   const mdl::GameInfo& gameInfo,
   const mdl::MapFormat mapFormat,
-  const std::filesystem::path& path)
+  const std::filesystem::path& path,
+  const bool background)
 {
-  const auto addRecent = [&]() {
-    std::erase(recentDocumentList, path);
-    recentDocumentList.insert(recentDocumentList.begin(), path);
-  };
-
-  if (auto replaced = documentToReplace())
+  if (auto replaced = background ? std::nullopt : documentToReplace())
   {
     auto capture = ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
     return replaced->document->load(
              environmentConfig, gameInfo, mapFormat, WorldBounds, path)
            | kdl::transform([&]() {
                processResources();
-               addRecent();
+               addRecentDocument(path);
                documentsDidChangeNotifier();
                return OpenedDocument{
                  *findDocumentInfo(*replaced->document), capture.messages()};
@@ -515,10 +523,46 @@ Result<OpenedDocument> FakeHost::loadDocument(
              auto messages = collectCachedMessages(*document);
              auto& documentRef = *m_ownedDocuments.emplace_back(std::move(document));
              processResources();
-             addRecent();
-             addDocument(documentRef, path.filename().string());
+             if (!background)
+             {
+               addRecentDocument(path);
+             }
+             addDocument(documentRef, path.filename().string(), background);
              return OpenedDocument{*findDocumentInfo(documentRef), std::move(messages)};
            });
+}
+
+Result<void> FakeHost::showDocument(ui::MapDocument& document)
+{
+  const auto it = std::ranges::find_if(
+    documentList, [&](const auto& info) { return info.document == &document; });
+  if (it == documentList.end() || !it->background)
+  {
+    return Error{"The document is not a background document"};
+  }
+  if (singleWindow && std::ranges::any_of(documentList, [](const auto& info) {
+        return !info.background;
+      }))
+  {
+    return Error{"Single window mode: another document has a window"};
+  }
+
+  for (auto& info : documentList)
+  {
+    info.focused = false;
+  }
+  it->background = false;
+  it->focused = true;
+
+  if (const auto& map = document.map(); map.persistent())
+  {
+    addRecentDocument(map.path());
+  }
+
+  // like a new map window, which acts as if the document was loaded to update itself
+  document.documentWasLoadedNotifier();
+  documentsDidChangeNotifier();
+  return kdl::void_success;
 }
 
 void FakeHost::closeDocument(ui::MapDocument& document)
@@ -537,6 +581,12 @@ std::optional<DocumentInfo> FakeHost::findDocumentInfo(
   const auto it = std::ranges::find_if(
     documentList, [&](const auto& info) { return info.document == &document; });
   return it != documentList.end() ? std::optional{*it} : std::nullopt;
+}
+
+void FakeHost::addRecentDocument(const std::filesystem::path& path)
+{
+  std::erase(recentDocumentList, path);
+  recentDocumentList.insert(recentDocumentList.begin(), path);
 }
 
 void FakeHost::logToConsole(

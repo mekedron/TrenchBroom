@@ -144,11 +144,6 @@ std::string joined(const std::vector<std::string>& strings)
   return result;
 }
 
-bool containsQuote(const std::string& str)
-{
-  return str.find('"') != std::string::npos;
-}
-
 std::optional<ToolError> checkKey(const std::string& key)
 {
   if (key.empty())

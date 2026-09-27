@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <unordered_map>
 
@@ -208,6 +209,35 @@ void accumulateTransactionChanges(
   allChanges.erase(it);
 }
 
+enum class ChecksMode
+{
+  Report,
+  Defer,
+};
+
+/**
+ * Whether a call reports its checks or defers them: the `checks` argument, else defer
+ * inside a transaction of the session begun with checks: "defer" (except for the calls
+ * that close it).
+ */
+ChecksMode checksMode(
+  const ToolDef& tool,
+  const Json& arguments,
+  const DocumentState& state,
+  const std::string& sessionId)
+{
+  if (const auto* checks = findMember(arguments, "checks"); checks && checks->is_string())
+  {
+    return checks->get<std::string>() == "defer" ? ChecksMode::Defer : ChecksMode::Report;
+  }
+  const auto closesTransaction =
+    tool.name() == "transaction_commit" || tool.name() == "transaction_rollback";
+  return state.transaction && state.transaction->sessionId == sessionId
+             && state.transaction->deferChecks && !closesTransaction
+           ? ChecksMode::Defer
+           : ChecksMode::Report;
+}
+
 /** The document a call acts on. */
 struct ResolvedDocument
 {
@@ -310,8 +340,10 @@ Result<ResolvedDocument, ToolError> resolveDocument(
   {
     return makeError(
       ErrorCode::NoDocument,
-      "No document is open in TrenchBroom.",
-      "Open or create a map first.");
+      "No document with a window is open in TrenchBroom and this session has no "
+      "active document.",
+      "Open or create a map first, or pass 'document' or call document_activate for a "
+      "background document (document_list lists them).");
   }
   return ResolvedDocument{};
 }
@@ -767,16 +799,42 @@ Json CallRunner::execute(const CallRequest& request)
   }
   const auto placementCountAtStart =
     documentState ? documentState->placement.changeCount : size_t(0);
+  const auto placementOptions = [&](const bool dryRunCall) {
+    return PlacementTrackerOptions{
+      &documentState->placement,
+      m_server.host.knowledgeDirectory(),
+      dryRunCall,
+      documentState->disabledValidators};
+  };
+  // Checks deferred by this call or reported for the session's deferred series (a dry
+  // run neither extends nor ends a series)
+  auto checks = ChecksMode::Report;
+  auto* series = static_cast<DeferredChecks*>(nullptr);
   if (tool->mutation() == Mutation::Map && mapDocument)
   {
+    checks = checksMode(*tool, request.arguments, *documentState, session->id);
+    if (!dryRun)
+    {
+      if (const auto it = documentState->deferredChecks.find(session->id);
+          it != documentState->deferredChecks.end())
+      {
+        series = &it->second;
+      }
+      else if (checks == ChecksMode::Defer)
+      {
+        series = &documentState->deferredChecks[session->id];
+        series->collector = std::make_unique<ChangeCollector>(
+          *mapDocument, documentState->ids, placementOptions(false));
+      }
+    }
+
+    // the calls of a series are checked by the series' collector
+    const auto ownChecks = checks == ChecksMode::Report && !series;
     collector.emplace(
       *mapDocument,
       documentState->ids,
-      PlacementTrackerOptions{
-        &documentState->placement,
-        m_server.host.knowledgeDirectory(),
-        dryRun,
-        documentState->disabledValidators});
+      ownChecks ? std::optional{placementOptions(dryRun)} : std::nullopt,
+      ownChecks);
   }
 
   m_server.setActivity(ServerActivity::State::Running, tool->title());
@@ -876,6 +934,11 @@ Json CallRunner::execute(const CallRequest& request)
 
   if (result.is_error())
   {
+    if (series && series->calls == 0)
+    {
+      // the series has not started
+      documentState->deferredChecks.erase(session->id);
+    }
     m_server.setActivity(ServerActivity::State::Idle);
     return failWith(errorOf(result));
   }
@@ -883,6 +946,33 @@ Json CallRunner::execute(const CallRequest& request)
   if (collector && !report)
   {
     report = collector->finish();
+  }
+  auto checksJson = Json(nullptr);
+  if (series)
+  {
+    ++series->calls;
+    if (checks == ChecksMode::Defer)
+    {
+      checksJson = Json{{"deferred", true}, {"calls", series->calls}};
+    }
+    else
+    {
+      // this call ends the series and reports the issues of all its calls
+      auto seriesReport = series->collector->finish();
+      checksJson = Json{
+        {"deferredCalls", series->calls - 1},
+        {"changes",
+         Json{
+           {"created", seriesReport.created.size()},
+           {"modified", seriesReport.modified.size()},
+           {"removed", seriesReport.removed.size()},
+         }},
+      };
+      report->issuesIntroduced = std::move(seriesReport.issuesIntroduced);
+      std::ranges::move(seriesReport.warnings, std::back_inserter(report->warnings));
+      documentState->deferredChecks.erase(session->id);
+      series = nullptr;
+    }
   }
   if (report && !dryRun)
   {
@@ -948,6 +1038,14 @@ Json CallRunner::execute(const CallRequest& request)
       {
         truncated.push_back(TruncatedList{
           "issuesIntroduced", issuesToJson(issues, std::numeric_limits<size_t>::max())});
+      }
+      if (issues.size() > limit || (detail == ListDetail::Summary && !issues.empty()))
+      {
+        structured["issuesSummary"] = issuesSummaryJson(issues);
+      }
+      if (!checksJson.is_null())
+      {
+        structured["checks"] = std::move(checksJson);
       }
     }
     if (!truncated.empty())

@@ -38,6 +38,7 @@ namespace mdl
 class BrushNode;
 class GroupNode;
 class LayerNode;
+class Map;
 class Node;
 } // namespace mdl
 
@@ -102,6 +103,11 @@ private:
   using LinkKey = std::tuple<const mdl::Node*, std::vector<std::string>>;
 
   ui::MapDocument& m_document;
+  /**
+   * The map the ids were built for. A document replaces its map when it is created or
+   * loaded in place; a new map window only notifies that the document was loaded.
+   */
+  const mdl::Map* m_map = nullptr;
   std::unordered_map<mdl::IdType, mdl::Node*> m_nodes;
   /** runtime id of a clone -> canonical (first seen) id */
   std::unordered_map<mdl::IdType, mdl::IdType> m_canonicalIds;

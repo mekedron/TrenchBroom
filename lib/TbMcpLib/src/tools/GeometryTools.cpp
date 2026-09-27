@@ -19,8 +19,10 @@
 
 #include "mcp/tools/GeometryTools.h"
 
+#include "EntityUtils.h"
 #include "NodeJson.h"
 #include "ToolUtils.h"
+#include "gl/MaterialManager.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
 #include "mcp/JsonVm.h"
@@ -29,23 +31,30 @@
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
 #include "mcp/tools/GeometryUtils.h"
+#include "mcp/tools/UvTools.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CircleShape.h"
 #include "mdl/EditorContext.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityDefinition.h"
+#include "mdl/EntityNode.h"
+#include "mdl/EntityProperties.h"
 #include "mdl/Grid.h"
 #include "mdl/Group.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/ModelUtils.h"
 #include "mdl/Node.h"
 #include "mdl/WorldNode.h"
 #include "ui/DrawShapeToolParameters.h"
 
 #include "kd/result_fold.h"
+#include "kd/string_utils.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
@@ -53,9 +62,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
+#include <ranges>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1080,6 +1092,496 @@ ToolResult openingCut(CallContext& context, const Args& args)
   };
 }
 
+// brushes_create
+
+/** The keys of per-face materials (`faces`) by face direction. */
+constexpr auto FaceDirections = std::array<std::string_view, 7>{
+  "top", "bottom", "north", "south", "east", "west", "sides"};
+
+/**
+ * The direction key of a face normal: the axis with the largest component, top / bottom
+ * (z), east / west (x), north / south (y).
+ */
+std::string_view faceDirection(const vm::vec3d& normal)
+{
+  const auto a = vm::abs(normal);
+  if (a.z() >= a.x() && a.z() >= a.y())
+  {
+    return normal.z() > 0.0 ? "top" : "bottom";
+  }
+  if (a.x() >= a.y())
+  {
+    return normal.x() > 0.0 ? "east" : "west";
+  }
+  return normal.y() > 0.0 ? "north" : "south";
+}
+
+/**
+ * The material of a face from per-face materials: its direction, then "sides" for faces
+ * that are not top or bottom; nullopt if neither is given.
+ */
+std::optional<std::string> faceMaterial(const Json& faces, const vm::vec3d& normal)
+{
+  const auto direction = std::string{faceDirection(normal)};
+  if (const auto it = faces.find(direction); it != faces.end())
+  {
+    return it->get<std::string>();
+  }
+  if (direction != "top" && direction != "bottom")
+  {
+    if (const auto it = faces.find("sides"); it != faces.end())
+    {
+      return it->get<std::string>();
+    }
+  }
+  return std::nullopt;
+}
+
+/** The brushes of one item of brushes_create. */
+Result<std::vector<mdl::Brush>, ToolError> buildItemBrushes(
+  CallContext& context,
+  const Args& item,
+  const std::string& material,
+  std::vector<std::string>& ignored,
+  size_t& pointsInside)
+{
+  auto& map = context.map();
+  if (item.has("points"))
+  {
+    if (item.has("shape") || item.has("min") || item.has("max"))
+    {
+      return invalidArgument(
+        "A hull item takes only 'points', not 'shape', 'min' or 'max'.",
+        "Pass either points or min and max.");
+    }
+    auto points = std::vector<vm::vec3d>{};
+    for (const auto& point : item.get<Json>("points"))
+    {
+      points.push_back(*vec3FromJson(point));
+    }
+    if (points.size() < 4)
+    {
+      return makeError(
+        ErrorCode::InvalidGeometry,
+        "A convex hull needs at least 4 points, got " + std::to_string(points.size())
+          + ".");
+    }
+    if (std::ranges::any_of(
+          points, [&](const auto& p) { return !map.worldBounds().contains(p); }))
+    {
+      return makeError(
+        ErrorCode::OutOfWorldBounds, "Some points lie outside the world bounds.");
+    }
+    if (const auto reason = degeneratePointsReason(points))
+    {
+      return makeError(
+        ErrorCode::InvalidGeometry,
+        "The points do not enclose a volume: " + *reason + ".");
+    }
+    auto brush = brushBuilder(map).createBrush(points, material);
+    if (brush.is_error())
+    {
+      return makeError(
+        ErrorCode::InvalidGeometry,
+        "The convex hull does not make a valid brush: " + errorMessage(brush));
+    }
+    pointsInside += points.size() - std::min(points.size(), brush.value().vertexCount());
+    return std::vector{std::move(brush).value()};
+  }
+
+  if (!item.has("min") || !item.has("max"))
+  {
+    return invalidArgument(
+      "An item needs 'min' and 'max' (a box, or a shape with 'shape') or 'points' (a "
+      "hull).",
+      "E.g. {\"min\": [0, 0, 0], \"max\": [64, 64, 16]}.");
+  }
+  const auto box = boxArgument(item);
+  if (auto error = checkBox(map, box))
+  {
+    return *error;
+  }
+
+  const auto shape = item.getOr<std::string>("shape", "cuboid");
+  const auto circleMode = item.getOr<std::string>("circleMode", "edgeAligned");
+  const auto relevant =
+    relevantShapeParameters(shape, circleMode, item.getOr<bool>("hollow", false));
+  for (const auto key : ShapeParameterKeys)
+  {
+    if (item.has(key) && std::ranges::find(relevant, key) == relevant.end())
+    {
+      ignored.push_back(std::string{key});
+    }
+  }
+  if (shape == "cuboid")
+  {
+    auto brush = brushBuilder(map).createCuboid(box, material);
+    if (brush.is_error())
+    {
+      return makeError(
+        ErrorCode::InvalidGeometry,
+        "The box does not make a valid brush: " + errorMessage(brush));
+    }
+    return std::vector{std::move(brush).value()};
+  }
+
+  auto parameters = shapeParameters(item, shape, box);
+  if (parameters.is_error())
+  {
+    return errorOf(parameters);
+  }
+  auto brushes = buildShape(map, shape, box, parameters.value(), material);
+  if (brushes.is_error())
+  {
+    return makeError(
+      ErrorCode::InvalidGeometry,
+      "The " + shape + " could not be built: " + errorMessage(brushes),
+      "Make the bounds larger or use fewer sides, rings or subdivisions.");
+  }
+  if (brushes.value().empty())
+  {
+    return makeError(ErrorCode::InvalidGeometry, "The " + shape + " yields no brushes.");
+  }
+  return std::move(brushes).value();
+}
+
+/** A brush entity of brushes_create. */
+struct BulkBrushEntity
+{
+  mdl::Entity entity;
+  /** The group of the first item that uses the entity. */
+  std::optional<std::string> group;
+  bool used = false;
+  mdl::EntityNode* node = nullptr;
+};
+
+Result<std::map<std::string, BulkBrushEntity>, ToolError> brushEntitiesArgument(
+  CallContext& context, const Args& args)
+{
+  auto& map = context.map();
+  auto result = std::map<std::string, BulkBrushEntity>{};
+  const auto entities = args.getOptional<Json>("brushEntities");
+  if (!entities)
+  {
+    return result;
+  }
+  const auto setDefaults = map.worldNode().entityPropertyConfig().setDefaultProperties;
+  for (const auto& [key, value] : entities->items())
+  {
+    const auto classname = value.value("classname", std::string{});
+    if (
+      classname.empty() || containsQuote(classname)
+      || classname.find_first_of(" \t\n") != std::string::npos)
+    {
+      return invalidArgument(
+        "brushEntities." + key + ": the classname must be non-empty and must not "
+        "contain quotes or whitespace.",
+        "E.g. {\"door\": {\"classname\": \"func_door\", \"properties\": {\"speed\": "
+        "100}}}.");
+    }
+    const auto* definition = findEntityDefinition(map, classname);
+    if (definition && mdl::getType(*definition) != mdl::EntityDefinitionType::Brush)
+    {
+      return invalidArgument(
+        "brushEntities." + key + ": '" + classname + "' is a point entity class.",
+        "Create point entities with entities_create.");
+    }
+    auto properties = propertiesFromJson(value.value("properties", Json::object()), true);
+    if (properties.is_error())
+    {
+      auto error = errorOf(properties);
+      error.message = "brushEntities." + key + ": " + error.message;
+      return error;
+    }
+
+    auto entity = mdl::Entity{{{mdl::EntityPropertyKeys::Classname, classname}}};
+    if (definition && setDefaults)
+    {
+      mdl::setDefaultProperties(*definition, entity, mdl::SetDefaultPropertyMode::SetAll);
+    }
+    for (const auto& [propertyKey, propertyValue] : properties.value())
+    {
+      if (propertyValue)
+      {
+        validateProperty(context, definition, propertyKey, *propertyValue, {});
+        entity.addOrUpdateProperty(propertyKey, *propertyValue);
+      }
+      else
+      {
+        entity.removeProperty(propertyKey);
+      }
+    }
+    if (!definition)
+    {
+      warnUnknownClassname(context, classname, {});
+    }
+    result.emplace(key, BulkBrushEntity{std::move(entity)});
+  }
+  return result;
+}
+
+ToolResult brushesCreate(CallContext& context, const Args& args)
+{
+  auto& map = context.map();
+  auto& ids = context.ids();
+  const auto items = args.get<Json>("items");
+  const auto defaultFaces = args.getOr<Json>("faces", Json::object());
+  const auto defaultGroup = args.getOptional<std::string>("group");
+  const auto defaultMaterial =
+    args.getOr<std::string>("material", map.currentMaterialName());
+  const auto uvMode =
+    uvModeFromString(args.get<std::string>("uv")).value_or(UvMode::Keep);
+
+  auto brushEntities = brushEntitiesArgument(context, args);
+  if (brushEntities.is_error())
+  {
+    return errorOf(brushEntities);
+  }
+  auto entities = std::move(brushEntities).value();
+
+  auto* parent = &mdl::parentForNodes(map);
+  if (const auto layerId = args.getOptional<std::string>("layer"))
+  {
+    auto layer = ids.resolve(*layerId);
+    if (layer.is_error())
+    {
+      return errorOf(layer);
+    }
+    parent = layer.value();
+  }
+
+  // build and validate every item before anything is added
+  auto errors = ItemErrors{};
+  auto itemBrushes = std::vector<std::vector<mdl::Brush>>{};
+  auto itemGroups = std::vector<std::optional<std::string>>{};
+  auto itemEntities = std::vector<BulkBrushEntity*>{};
+  auto ignored = std::map<std::string, std::vector<size_t>>{};
+  auto materials = std::set<std::string>{};
+  auto pointsInside = size_t(0);
+  for (size_t i = 0; i < items.size(); ++i)
+  {
+    const auto item = Args{items[i]};
+    const auto material = item.getOr<std::string>("material", defaultMaterial);
+    auto faces = defaultFaces;
+    faces.update(item.getOr<Json>("faces", Json::object()));
+
+    auto ignoredKeys = std::vector<std::string>{};
+    auto brushes = buildItemBrushes(context, item, material, ignoredKeys, pointsInside);
+    for (auto& key : ignoredKeys)
+    {
+      ignored[std::move(key)].push_back(i);
+    }
+    if (brushes.is_error())
+    {
+      errors.add(i, errorOf(brushes));
+      brushes = std::vector<mdl::Brush>{};
+    }
+    auto itemBrushList = std::move(brushes).value();
+    for (auto& brush : itemBrushList)
+    {
+      for (size_t f = 0; f < brush.faceCount(); ++f)
+      {
+        auto& face = brush.face(f);
+        if (const auto name = faceMaterial(faces, face.boundary().normal))
+        {
+          face.setMaterialName(*name);
+        }
+        materials.insert(face.materialName());
+      }
+    }
+    itemBrushes.push_back(std::move(itemBrushList));
+
+    // an empty group name keeps the item out of the call's group
+    auto group = item.getOptional<std::string>("group");
+    if (!group)
+    {
+      group = defaultGroup;
+    }
+    else if (group->empty())
+    {
+      group = std::nullopt;
+    }
+    auto* entity = static_cast<BulkBrushEntity*>(nullptr);
+    if (const auto key = item.getOptional<std::string>("entity"))
+    {
+      if (const auto it = entities.find(*key); it == entities.end())
+      {
+        errors.add(i, "The entity '" + *key + "' is not defined in brushEntities.");
+      }
+      else
+      {
+        entity = &it->second;
+        if (!entity->used)
+        {
+          entity->used = true;
+          entity->group = group;
+        }
+        else if (entity->group != group)
+        {
+          errors.add(
+            i,
+            "The brushes of entity '" + *key
+              + "' must all be in the same group, but this item names another group.");
+        }
+      }
+    }
+    itemGroups.push_back(std::move(group));
+    itemEntities.push_back(entity);
+  }
+  for (const auto& [key, entity] : entities)
+  {
+    if (!entity.used)
+    {
+      context.warn(
+        "UNUSED_BRUSH_ENTITY",
+        "brushEntities." + key + " is not used by any item and was not created.");
+    }
+  }
+  if (!errors.empty())
+  {
+    return errors.error(
+      items.size(),
+      "Fix the listed items (details.errors) and call brushes_create again with all "
+      "items.");
+  }
+
+  // the node tree: layer -> groups -> brush entities -> brushes
+  auto groups = std::map<std::string, mdl::GroupNode*>{};
+  auto topLevel = std::vector<mdl::Node*>{};
+  auto brushNodes = std::vector<mdl::Node*>{};
+  auto brushesPerItem = std::vector<size_t>{};
+  for (size_t i = 0; i < items.size(); ++i)
+  {
+    auto* container = static_cast<mdl::Node*>(nullptr);
+    if (const auto& groupName = itemGroups[i])
+    {
+      auto [it, inserted] = groups.try_emplace(*groupName, nullptr);
+      if (inserted)
+      {
+        it->second = new mdl::GroupNode{mdl::Group{*groupName}};
+        topLevel.push_back(it->second);
+      }
+      container = it->second;
+    }
+    if (auto* entity = itemEntities[i])
+    {
+      if (!entity->node)
+      {
+        entity->node = new mdl::EntityNode{entity->entity};
+        if (container)
+        {
+          container->addChild(entity->node);
+        }
+        else
+        {
+          topLevel.push_back(entity->node);
+        }
+      }
+      container = entity->node;
+    }
+
+    brushesPerItem.push_back(itemBrushes[i].size());
+    for (auto& brush : itemBrushes[i])
+    {
+      auto* brushNode = new mdl::BrushNode{std::move(brush)};
+      brushNodes.push_back(brushNode);
+      if (container)
+      {
+        container->addChild(brushNode);
+      }
+      else
+      {
+        topLevel.push_back(brushNode);
+      }
+    }
+  }
+
+  mdl::deselectAll(map);
+  if (mdl::addNodes(map, {{parent, topLevel}}).empty())
+  {
+    return context.operationFailed("The new brushes could not be added to the map.");
+  }
+  if (
+    auto error = checkInsideWorldBounds(
+      brushNodes, map, ids, "Move the items inside the world bounds."))
+  {
+    return *error;
+  }
+  auto selectable = std::vector<mdl::Node*>{};
+  std::ranges::copy_if(topLevel, std::back_inserter(selectable), [&](const auto* node) {
+    return map.editorContext().selectable(*node);
+  });
+  mdl::selectNodes(map, selectable);
+
+  auto unknown = std::vector<std::string>{};
+  std::ranges::copy_if(materials, std::back_inserter(unknown), [&](const auto& name) {
+    return !map.materialManager().material(name);
+  });
+  if (!unknown.empty())
+  {
+    context.warn(
+      "UNKNOWN_MATERIAL",
+      "Materials not loaded: " + kdl::str_join(unknown, ", ")
+        + "; the brushes use them anyway and show them as missing. Use materials_list "
+          "to find available materials.");
+  }
+  for (const auto& [key, indices] : ignored)
+  {
+    context.warn(
+      "IGNORED_ARGUMENT",
+      fmt::format(
+        "'{}' has no effect on the shapes of items {}.",
+        key,
+        kdl::str_join(
+          indices | std::views::transform([](auto i) { return std::to_string(i); }),
+          ", ")));
+  }
+  if (pointsInside > 0)
+  {
+    context.warn(
+      "POINTS_INSIDE_HULL",
+      std::to_string(pointsInside)
+        + " hull points are not vertices of their hulls (they lie inside them or on "
+          "their faces or edges).");
+  }
+  warnNonIntegerVertices(context, brushNodes);
+
+  auto result = Json{
+    {"ids", formatIds(brushNodes, ids)},
+    {"count", brushNodes.size()},
+  };
+  if (std::ranges::any_of(brushesPerItem, [](const auto n) { return n != 1; }))
+  {
+    result["brushesPerItem"] = brushesPerItem;
+  }
+  auto groupIds = Json::object();
+  for (const auto& [name, groupNode] : groups)
+  {
+    groupIds[name] = ids.format(*groupNode);
+  }
+  result["groups"] = std::move(groupIds);
+  auto entityIds = Json::object();
+  for (const auto& [key, entity] : entities)
+  {
+    if (entity.node)
+    {
+      entityIds[key] = ids.format(*entity.node);
+    }
+  }
+  result["entities"] = std::move(entityIds);
+  result["bounds"] = toJson(mdl::computeLogicalBounds(brushNodes));
+  if (uvMode != UvMode::Keep)
+  {
+    auto aligned = alignNodeUvs(context, brushNodes, uvMode);
+    if (aligned.is_error())
+    {
+      return errorOf(aligned);
+    }
+    result["uv"] = std::move(aligned).value();
+  }
+  return result;
+}
+
 } // namespace
 
 void registerGeometryTools(ToolRegistry& registry)
@@ -1301,6 +1803,133 @@ void registerGeometryTools(ToolRegistry& registry)
       }))
       .mutation(Mutation::Map)
       .handler(openingCut));
+
+  auto facesSchema = object({
+    field("top", string().nonEmpty()).describe("+z"),
+    field("bottom", string().nonEmpty()).describe("-z"),
+    field("north", string().nonEmpty()).describe("+y"),
+    field("south", string().nonEmpty()).describe("-y"),
+    field("east", string().nonEmpty()).describe("+x"),
+    field("west", string().nonEmpty()).describe("-x"),
+    field("sides", string().nonEmpty())
+      .describe("All faces that are not top or bottom and have no material of their own"),
+  });
+  registry.add(
+    ToolDef{"brushes_create"}
+      .title("Create Brushes")
+      .description(
+        "Creates many brushes in one call and one undo step, e.g. the shell of a "
+        "generated building, without writing a map file. Each item is a box {min, max}, "
+        "a shape {shape, min, max, shape parameters as in brush_create_shape} or a "
+        "convex hull {points}, with an optional material, per-face materials 'faces' "
+        "(top, bottom, north +y, south -y, east +x, west -x, sides; by the face normal's "
+        "main axis), 'group' (items with the same name share one new group; the call's "
+        "'group' is the default) and 'entity' (a key of 'brushEntities', e.g. a "
+        "func_door made of several items). The call's material and faces are the "
+        "defaults. 'uv' aligns the new faces from the material profiles like map_import "
+        "(typical, fit, world; default keep). All items are validated first; if any is "
+        "invalid nothing is created and INVALID_ARGUMENT lists every problem with its "
+        "item index in details.errors. The new objects go into 'layer' (default: the "
+        "open group or current layer) and are selected. Result ids list the brushes in "
+        "item order (brushesPerItem tells how many each item made when shapes make "
+        "several); lists are cut to the detail level. Example: {\"material\": "
+        "\"wall_brick\", \"faces\": {\"top\": \"floor_stone\"}, \"items\": [{\"min\": "
+        "[0, 0, 0], \"max\": [512, 512, 16]}, {\"min\": [0, 0, 16], \"max\": [16, 512, "
+        "192]}, {\"shape\": \"cylinder\", \"min\": [240, 240, 16], \"max\": [272, 272, "
+        "192], \"sides\": 12, \"material\": \"pillar\"}, {\"min\": [256, 0, 16], "
+        "\"max\": [320, 8, 128], \"entity\": \"door\"}], \"brushEntities\": {\"door\": "
+        "{\"classname\": \"func_door\", \"properties\": {\"angle\": 90}}}, \"uv\": "
+        "\"world\"}")
+      .input(object({
+        field(
+          "items",
+          array(
+            object({
+              field("min", vec3()).describe("Box or shape: minimum corner"),
+              field("max", vec3()).describe("Box or shape: maximum corner"),
+              field(
+                "shape",
+                enumOf(
+                  {"cuboid",
+                   "stairs",
+                   "arch",
+                   "cylinder",
+                   "cone",
+                   "uvSphere",
+                   "icoSphere"}))
+                .describe("A shape of brush_create_shape. Default: cuboid (a box)"),
+              field("points", array(vec3()).nonEmpty())
+                .describe("Hull: points whose convex hull becomes the brush"),
+              field("axis", enumOf({"x", "y", "z"}))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("circleMode", enumOf({"edgeAligned", "vertexAligned", "scalable"}))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("sides", integer().min(3).max(96))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("precision", integer().min(0).max(3))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("hollow", boolean())
+                .describe("Shape parameter as in brush_create_shape"),
+              field("thickness", number())
+                .describe("Shape parameter as in brush_create_shape"),
+              field("spandrel", boolean())
+                .describe("Shape parameter as in brush_create_shape"),
+              field("rings", integer().min(1).max(256))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("subdivision", integer().min(1).max(4))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("stepHeight", number())
+                .describe("Shape parameter as in brush_create_shape"),
+              field("stairDirection", enumOf({"+x", "-x", "+y", "-y"}))
+                .describe("Shape parameter as in brush_create_shape"),
+              field("material", string().nonEmpty())
+                .describe("Material of the item's faces. Default: the call's"),
+              field("faces", facesSchema)
+                .describe("Per-face materials, merged over the call's 'faces'"),
+              field("group", string())
+                .describe("Name of a new group for the item; \"\" keeps it out of the "
+                          "call's group"),
+              field("entity", string().nonEmpty())
+                .describe("Key of the brush entity in 'brushEntities'"),
+            }))
+            .nonEmpty()
+            .maxSize(5000))
+          .required()
+          .describe("The brushes to create"),
+        field("material", string().nonEmpty())
+          .describe("Default material of all faces. Default: the current material"),
+        field("faces", facesSchema).describe("Default per-face materials"),
+        field("group", string().nonEmpty())
+          .describe("Default group name of the items: one new group"),
+        field("brushEntities", object({}).allowAdditionalProperties())
+          .describe(
+            "Brush entities by key: {classname, properties}; items join them with "
+            "'entity'"),
+        field("layer", objectId({ObjectKind::Layer}))
+          .describe("Layer of the new objects. Default: the open group or current layer"),
+        field("uv", enumOf({"keep", "typical", "fit", "world"}).defaultsTo("keep"))
+          .describe(
+            "Texture alignment of the new faces: keep (the game's defaults), typical, "
+            "fit or world (see map_import)"),
+      }))
+      .output(object({
+        field("ids", array(objectId()))
+          .required()
+          .describe("The new brushes in item order"),
+        field("count", integer()).required().describe("Number of new brushes"),
+        field("brushesPerItem", array(integer()))
+          .describe("Only if an item made more or less than one brush"),
+        field("groups", object({}).allowAdditionalProperties())
+          .required()
+          .describe("Group id per group name"),
+        field("entities", object({}).allowAdditionalProperties())
+          .required()
+          .describe("Entity id per brushEntities key"),
+        field("bounds", box()).describe("Bounds of the new brushes"),
+        field("uv", any()).describe("With uv other than keep: as in map_import"),
+      }))
+      .mutation(Mutation::Map)
+      .handler(brushesCreate));
 }
 
 } // namespace tb::mcp

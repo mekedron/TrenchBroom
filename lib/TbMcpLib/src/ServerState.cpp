@@ -63,13 +63,20 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
   , manifest{document_.map().path()}
   , m_didChange{std::move(didChange_)}
   , m_lastModified{document_.map().modified()}
+  , m_map{&document_.map()}
 {
   // reloading replaces the map and with it the command processor, so an open agent
-  // transaction is gone
+  // transaction is gone; a new window of the same map (document_show) only notifies
   m_notifierConnection += document.documentWasLoadedNotifier.connect([&]() {
-    transaction.reset();
-    placement = PlacementCache{placement.changeCount + 1};
-    manifest.mapWasLoaded(document.map().path());
+    if (&document.map() != m_map)
+    {
+      m_map = &document.map();
+      transaction.reset();
+      // the ids of a reloaded map are new, so deferred checks cannot be reported
+      deferredChecks.clear();
+      placement = PlacementCache{placement.changeCount + 1};
+      manifest.mapWasLoaded(document.map().path());
+    }
     infoDidChange();
     didChange(DocumentAspect::Summary);
     didChange(DocumentAspect::Selection);
@@ -139,6 +146,8 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
   m_notifierConnection += document.selectionDidChangeNotifier.connect(
     [&](const auto&) { didChange(DocumentAspect::Selection); });
 }
+
+DocumentState::~DocumentState() = default;
 
 void DocumentState::didChange(const DocumentAspect aspect)
 {
@@ -287,16 +296,18 @@ DocumentTarget ServerState::targetDocument(const Session& session) const
                                  : DocumentTarget{DocumentTarget::Source::ActiveClosed};
   }
 
-  if (documents.empty())
+  // background documents have no window, so they are never the focused document
+  const auto focused =
+    std::ranges::find_if(documents, [](const auto& info_) { return info_.focused; });
+  const auto shown =
+    std::ranges::find_if(documents, [](const auto& info_) { return !info_.background; });
+  if (focused == documents.end() && shown == documents.end())
   {
     return DocumentTarget{DocumentTarget::Source::None};
   }
 
-  const auto focused =
-    std::ranges::find_if(documents, [](const auto& info_) { return info_.focused; });
   return DocumentTarget{
-    DocumentTarget::Source::Focused,
-    focused != documents.end() ? *focused : documents.front()};
+    DocumentTarget::Source::Focused, focused != documents.end() ? *focused : *shown};
 }
 
 void ServerState::setActiveDocument(
@@ -394,6 +405,10 @@ void ServerState::closeSession(const std::string& sessionId)
 {
   callRunner->cancelAll(sessionId);
   rollbackAgentTransactions(sessionId);
+  for (auto& [document, state] : documentStates)
+  {
+    state->deferredChecks.erase(sessionId);
+  }
   if (const auto it = sessions.find(sessionId); it != sessions.end())
   {
     sessions.erase(it);

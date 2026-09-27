@@ -74,6 +74,12 @@ struct DocumentInfo
   std::string windowTitle;
   /** Whether the document's window is the focused (or most recently focused) window. */
   bool focused = false;
+  /**
+   * Whether the document is a background document: the host owns it without a map
+   * window (DocumentHost::createDocument / loadDocument with background = true) until
+   * DocumentHost::showDocument gives it one. A background document is never focused.
+   */
+  bool background = false;
 };
 
 /** A document that the host created or loaded, with the messages it logged meanwhile. */
@@ -94,25 +100,43 @@ public:
 
   /**
    * The document that a new or loaded document replaces instead of opening a new window
-   * (single window mode), or nullopt if new documents get their own window.
+   * (single window mode), or nullopt if new documents get their own window. Never a
+   * background document.
    */
   virtual std::optional<DocumentInfo> documentToReplace() = 0;
 
   /**
    * Creates a new document for the given game and format and shows it. The new
    * document's window gets the focus.
+   *
+   * If background is true, the host keeps the new document without a window instead: it
+   * never replaces another document (documentToReplace does not apply), does not take
+   * the focus, and is listed with DocumentInfo::background until showDocument gives it a
+   * window.
    */
   virtual Result<OpenedDocument> createDocument(
-    const mdl::GameInfo& gameInfo, mdl::MapFormat mapFormat) = 0;
+    const mdl::GameInfo& gameInfo, mdl::MapFormat mapFormat, bool background) = 0;
 
   /**
    * Loads the given map file and shows it. MapFormat::Unknown detects the format. The
-   * new document's window gets the focus.
+   * new document's window gets the focus. With background = true, the document has no
+   * window (see createDocument).
    */
   virtual Result<OpenedDocument> loadDocument(
     const mdl::GameInfo& gameInfo,
     mdl::MapFormat mapFormat,
-    const std::filesystem::path& path) = 0;
+    const std::filesystem::path& path,
+    bool background) = 0;
+
+  /**
+   * Gives a background document its own map window, which gets the focus. The document
+   * keeps its handle, its undo history and its unsaved changes; documentWillCloseNotifier
+   * is not fired. The window may fire the document's documentWasLoadedNotifier to update
+   * itself, without replacing the document's map. Fails if the document is not a
+   * background document or if the host cannot open another window (single window mode
+   * while a window is open).
+   */
+  virtual Result<void> showDocument(ui::MapDocument& document) = 0;
 
   /**
    * Closes the given document without asking the user, discarding unsaved changes. The
@@ -463,8 +487,9 @@ public:
 
   /**
    * Returns the logger that receives the document's messages outside of a log capture
-   * (the console of the document's window), or nullptr. The default implementation
-   * returns nullptr.
+   * (the console of the document's window; for a background document, a logger that
+   * adds them to the console buffer), or nullptr. The default implementation returns
+   * nullptr.
    */
   virtual Logger* logTarget(ui::MapDocument& document);
 

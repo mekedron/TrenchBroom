@@ -319,10 +319,17 @@ TEST_CASE("Targets")
       CHECK(error.objectIds == std::vector<std::string>{entityId});
     }
 
+    SECTION("a layer stands for the faces of its brushes")
+    {
+      // both brushes
+      const auto result = fixture.call("test_faces", Json{{"ids", {"layer:default"}}});
+      CHECK(result["result"]["faces"] == 2 * faceCount);
+    }
+
     SECTION("fails for bad ids")
     {
       CHECK(
-        fixture.callExpectingError("test_faces", Json{{"ids", {"layer:default"}}}).code
+        fixture.callExpectingError("test_faces", Json{{"ids", {"world"}}}).code
         == ErrorCode::InvalidArgument);
       CHECK(
         fixture.callExpectingError("test_faces", Json{{"ids", {brushId1 + "/face:99"}}})

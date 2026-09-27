@@ -23,7 +23,10 @@ namespace tb::mcp
 {
 class ToolRegistry;
 
-/** Registers entity_create_point, entity_create_brush and entity_move_brushes. */
+/**
+ * Registers entity_create_point, entity_create_brush, entity_move_brushes and
+ * entities_create.
+ */
 void registerEntityCreateTools(ToolRegistry& registry);
 
 } // namespace tb::mcp

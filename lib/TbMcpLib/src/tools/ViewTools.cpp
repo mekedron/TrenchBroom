@@ -232,6 +232,11 @@ Result<ViewHost*, ToolError> requireViewHost(CallContext& context)
 Result<std::vector<UserView>, ToolError> userViews(
   CallContext& context, ViewHost& viewHost)
 {
+  if (auto error = backgroundDocumentError(context.documentInfo(), "The user views"))
+  {
+    return std::move(*error);
+  }
+
   auto views = viewHost.views(context.document());
   if (views.empty())
   {

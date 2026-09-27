@@ -320,45 +320,6 @@ ToolResult setAttributes(
   });
 }
 
-/**
- * Applies an update computed per face. Faces with equal updates are changed together;
- * faces for which the function returns nothing are left unchanged.
- */
-ToolResult applyPerFace(
-  CallContext& context,
-  const std::vector<mdl::BrushFaceHandle>& faces,
-  const std::function<
-    std::optional<mdl::UpdateBrushFaceAttributes>(const mdl::BrushFace&)>& updateFor)
-{
-  auto groups = std::vector<
-    std::pair<mdl::UpdateBrushFaceAttributes, std::vector<mdl::BrushFaceHandle>>>{};
-  for (const auto& handle : faces)
-  {
-    if (auto update = updateFor(handle.face()))
-    {
-      auto it = std::ranges::find_if(
-        groups, [&](const auto& group) { return group.first == *update; });
-      if (it == groups.end())
-      {
-        groups.emplace_back(std::move(*update), std::vector{handle});
-      }
-      else
-      {
-        it->second.push_back(handle);
-      }
-    }
-  }
-
-  for (const auto& [update, groupFaces] : groups)
-  {
-    if (auto result = setAttributes(context, groupFaces, {update}); result.is_error())
-    {
-      return result;
-    }
-  }
-  return Json::object();
-}
-
 /** Warns with IGNORED_ARGUMENT about arguments that do not apply. */
 void warnIgnored(
   CallContext& context,
@@ -855,7 +816,7 @@ ToolResult faceAttributesSet(CallContext& context, const Args& args)
   }
   if (parallelRotation)
   {
-    if (auto result = applyPerFace(
+    if (auto result = applyUvUpdates(
           context,
           faces.value(),
           [&](
@@ -1154,7 +1115,7 @@ ToolResult uvAlign(CallContext& context, const Args& args)
     if (edge == "center")
     {
       removeFacesWithoutMaterial(context, faces, "centering");
-      result = applyPerFace(context, faces, centerUpdate);
+      result = applyUvUpdates(context, faces, centerUpdate);
     }
     else
     {
@@ -1190,13 +1151,13 @@ ToolResult uvAlign(CallContext& context, const Args& args)
       if (request.value().keepAspect)
       {
         fitProfiles = uvFitProfiles(context, faces, false);
-        result = applyPerFace(context, faces, [&](const auto& face) {
+        result = applyUvUpdates(context, faces, [&](const auto& face) {
           return aspectFitUpdate(face, request.value(), *fitProfiles);
         });
       }
       else
       {
-        result = applyPerFace(context, faces, [&](const auto& face) {
+        result = applyUvUpdates(context, faces, [&](const auto& face) {
           return fitUpdate(face, request.value().repeatU, request.value().repeatV);
         });
       }
@@ -1207,7 +1168,7 @@ ToolResult uvAlign(CallContext& context, const Args& args)
   {
     removeFacesWithoutMaterial(context, faces, "the typical scale");
     fitProfiles = uvFitProfiles(context, faces, true);
-    result = applyPerFace(context, faces, [&](const auto& face) {
+    result = applyUvUpdates(context, faces, [&](const auto& face) {
       return typicalFitUpdate(face, *fitProfiles);
     });
     reportFits = true;
@@ -1314,7 +1275,7 @@ ToolResult uvNudge(CallContext& context, const Args& args)
     return vm::vec2f{0, -distance};
   }();
 
-  auto result = applyPerFace(context, faces.value(), [&](const auto& face) {
+  auto result = applyUvUpdates(context, faces.value(), [&](const auto& face) {
     auto update = mdl::UpdateBrushFaceAttributes{};
     if (direction)
     {

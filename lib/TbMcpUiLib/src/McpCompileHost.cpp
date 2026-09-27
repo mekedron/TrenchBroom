@@ -40,6 +40,8 @@ class McpCompileJob : public mcp::CompileJob
 {
 private:
   MapDocument& m_document;
+  /** The compiled map; a new map window notifies a load without replacing it. */
+  const mdl::Map* m_map;
   mcp::CompileJobCallbacks m_callbacks;
   std::unique_ptr<gl::PerspectiveCamera> m_camera;
   std::unique_ptr<QTextEdit> m_output;
@@ -56,6 +58,7 @@ public:
     mcp::CompileJobCallbacks callbacks,
     std::unique_ptr<gl::PerspectiveCamera> camera)
     : m_document{document}
+    , m_map{&document.map()}
     , m_callbacks{std::move(callbacks)}
     , m_camera{std::move(camera)}
     , m_output{std::make_unique<QTextEdit>()}
@@ -127,7 +130,7 @@ private:
 
   void documentWasLoaded()
   {
-    if (m_ended)
+    if (m_ended || &m_document.map() == m_map)
     {
       return;
     }

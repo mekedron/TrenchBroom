@@ -34,6 +34,7 @@
 #include "mcp/Targets.h"
 #include "mcp/ToolRegistry.h"
 #include "mcp/tools/GeometryUtils.h"
+#include "mcp/tools/UvTools.h"
 #include "mdl/BezierPatch.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
@@ -341,16 +342,22 @@ Result<mdl::LayerNode*, ToolError> targetLayerArgument(
   return dynamic_cast<mdl::LayerNode*>(resolved.value());
 }
 
+UvMode uvModeArgument(const Args& args)
+{
+  return uvModeFromString(args.getOr<std::string>("uv", "keep")).value_or(UvMode::Keep);
+}
+
 /**
  * Pastes map text as objects (mdl::paste, the editor's paste), moves them to their
- * placement and into the target layer, and leaves them selected. Returns the paste
- * result.
+ * placement and into the target layer, aligns their faces with the UV mode, and leaves
+ * them selected. Returns the paste result.
  */
 ToolResult pasteObjects(
   CallContext& context,
   const std::string& text,
   const Placement& placement,
-  mdl::LayerNode* targetLayer)
+  mdl::LayerNode* targetLayer,
+  const UvMode uvMode)
 {
   auto& map = context.map();
   auto& ids = context.ids();
@@ -413,8 +420,19 @@ ToolResult pasteObjects(
   const auto missing = missingMaterials(map, materialsOf(pasted));
   warnMissingMaterials(context, missing);
 
+  auto uv = Json(nullptr);
+  if (uvMode != UvMode::Keep)
+  {
+    auto aligned = alignNodeUvs(context, pasted, uvMode);
+    if (aligned.is_error())
+    {
+      return errorOf(aligned);
+    }
+    uv = std::move(aligned).value();
+  }
+
   const auto finalBounds = boundsOf(pasted);
-  return Json{
+  auto result = Json{
     {"pasteType", "objects"},
     {"ids", formatIds(pasted, ids)},
     {"count", pasted.size()},
@@ -426,6 +444,11 @@ ToolResult pasteObjects(
     {"layer", layerIdOf(*pasted.front(), ids)},
     {"missingMaterials", missing},
   };
+  if (!uv.is_null())
+  {
+    result["uv"] = std::move(uv);
+  }
+  return result;
 }
 
 // clipboard_copy / clipboard_cut
@@ -617,6 +640,11 @@ ToolResult clipboardPaste(CallContext& context, const Args& args)
 
   if (isFaceText(pasteText))
   {
+    if (uvModeArgument(args) != UvMode::Keep)
+    {
+      context.warn(
+        "IGNORED_ARGUMENT", "'uv' has no effect on face text, which carries its UVs.");
+    }
     return pasteFaces(context, args, pasteText);
   }
 
@@ -639,7 +667,8 @@ ToolResult clipboardPaste(CallContext& context, const Args& args)
     return errorOf(targetLayer);
   }
 
-  return pasteObjects(context, pasteText, placement.value(), targetLayer.value());
+  return pasteObjects(
+    context, pasteText, placement.value(), targetLayer.value(), uvModeArgument(args));
 }
 
 // map_import and map_file_inspect
@@ -1259,7 +1288,8 @@ ToolResult mapImport(CallContext& context, const Args& args)
   auto& map = context.map();
   const auto text = serializeNodes(*sourceMap.world, nodes.value(), map.taskManager());
 
-  auto result = pasteObjects(context, text, placement.value(), targetLayer.value());
+  auto result = pasteObjects(
+    context, text, placement.value(), targetLayer.value(), uvModeArgument(args));
   if (result.is_error())
   {
     return result;
@@ -1300,6 +1330,15 @@ void addPlacementFields(std::vector<Field>& fields)
   fields.push_back(
     field("targetLayer", objectId({ObjectKind::Layer}))
       .describe("Layer to put the objects in. Default: the current layer"));
+  fields.push_back(
+    field("uv", enumOf({"keep", "typical", "fit", "world"}).defaultsTo("keep"))
+      .describe(
+        "Texture alignment of the new faces, from the material profiles "
+        "(material_usage): keep (as in the source); typical (the material's typical "
+        "scale, justified to each face's edge, like uv_align typical); fit (the typical "
+        "scale rounded to whole repeats per face); world (world-aligned axes at the "
+        "typical scale, offset 0: textures continue across brushes). Faces whose "
+        "material is not loaded keep their UVs"));
 }
 
 std::vector<Field> pasteOutputFields()
@@ -1317,6 +1356,9 @@ std::vector<Field> pasteOutputFields()
     field("layer", any()).describe("The layer of the new objects"),
     field("missingMaterials", array(string()))
       .describe("Materials of the new objects that no material collection provides"),
+    field("uv", any())
+      .describe("With uv other than keep: {mode, faces (aligned), skipped (material not "
+                "loaded), typicalScales: {material: {scale, source}}}"),
   };
 }
 
@@ -1415,10 +1457,11 @@ void registerClipboardTools(ToolRegistry& registry)
         "the point) or moved by 'offset' (not both); they are selected. Face text "
         "(brush face lines from clipboard_copy with 'faces') applies the material and "
         "alignment of its last face to 'faces' or the selected faces. Materials missing "
-        "from the material collections are reported (MISSING_MATERIALS). Use "
-        "map_import to paste from a map file. Examples: {\"position\": [512, 0, 0], "
-        "\"anchor\": \"min\"}; {\"offset\": [0, 256, 0]}; {\"faces\": "
-        "[\"brush:12/face:3\"]}")
+        "from the material collections are reported (MISSING_MATERIALS). 'uv' aligns "
+        "the textures of the new faces from the material profiles (typical, fit, world; "
+        "default keep). Use map_import to paste from a map file. Examples: "
+        "{\"position\": [512, 0, 0], \"anchor\": \"min\"}; {\"offset\": [0, 256, 0], "
+        "\"uv\": \"typical\"}; {\"faces\": [\"brush:12/face:3\"]}")
       .input(object(std::move(pasteInput)))
       .output(object(std::move(pasteOutput)))
       .mutation(Mutation::Map)
@@ -1525,9 +1568,16 @@ void registerClipboardTools(ToolRegistry& registry)
         "original coordinates, 'position' + 'anchor' or 'offset' (map units). Materials "
         "missing "
         "from the document's collections are listed in missingMaterials "
-        "(MISSING_MATERIALS warning). The imported objects are selected. Examples: "
+        "(MISSING_MATERIALS warning). 'uv' aligns the imported faces in the same undo "
+        "step from the material profiles: typical (typical scale, justified per face), "
+        "fit (typical scale rounded to whole repeats), world (world-aligned at the "
+        "typical scale, continuous across brushes); default keep, so generated maps "
+        "need not compute UVs. For bulk imports into an unfinished map, pass checks: "
+        "\"defer\" (or detail: \"summary\" for issuesSummary). The imported objects are "
+        "selected. Examples: "
         "{\"path\": \"/maps/prefabs/rooms.map\", \"group\": \"Armory\", \"position\": "
-        "[512, 0, 0], \"anchor\": \"min\"}; {\"path\": \"/maps/e1m1.map\", "
+        "[512, 0, 0], \"anchor\": \"min\"}; {\"path\": \"/tmp/shell.map\", \"uv\": "
+        "\"world\", \"checks\": \"defer\"}; {\"path\": \"/maps/e1m1.map\", "
         "\"region\": {\"min\": [0, 0, 0], \"max\": [512, 512, 256]}, \"regionMode\": "
         "\"inside\"}")
       .input(object(std::move(importInput)))

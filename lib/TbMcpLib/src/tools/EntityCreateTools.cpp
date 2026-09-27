@@ -20,6 +20,8 @@
 #include "mcp/tools/EntityCreateTools.h"
 
 #include "EntityUtils.h"
+#include "NodeJson.h"
+#include "ToolUtils.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
 #include "mcp/JsonVm.h"
@@ -34,8 +36,12 @@
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityNode.h"
+#include "mdl/EntityNodeBase.h"
 #include "mdl/EntityProperties.h"
 #include "mdl/Grid.h"
+#include "mdl/Group.h"
+#include "mdl/GroupNode.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/Map_Nodes.h"
@@ -55,9 +61,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace tb::mcp
@@ -85,64 +95,9 @@ double cleanDropHeight(const double z)
   return std::abs(z - rounded) <= DropRoundingEpsilon ? rounded : std::ceil(z);
 }
 
-/** Key-value pairs to set; a missing value removes the key. */
-using PropertyList = std::vector<std::pair<std::string, std::optional<std::string>>>;
-
 ToolError invalidArgument(std::string message, std::string hint = {})
 {
   return makeError(ErrorCode::InvalidArgument, std::move(message), std::move(hint));
-}
-
-/** Formats a number as a property value: integers without decimals. */
-std::string formatNumber(const Json& value)
-{
-  if (value.is_number_integer())
-  {
-    return std::to_string(value.get<int64_t>());
-  }
-  const auto rounded = roundForOutput(value.get<double>());
-  return rounded == std::floor(rounded) && std::abs(rounded) < 1e15
-           ? std::to_string(int64_t(rounded))
-           : fmt::format("{}", rounded);
-}
-
-/**
- * The property value given as JSON: strings as they are, numbers formatted, booleans as
- * "1" / "0" and arrays of numbers as space separated numbers ("255 128 0").
- */
-std::optional<std::string> propertyValue(const Json& value)
-{
-  if (value.is_string())
-  {
-    return value.get<std::string>();
-  }
-  if (value.is_number())
-  {
-    return formatNumber(value);
-  }
-  if (value.is_boolean())
-  {
-    return value.get<bool>() ? "1" : "0";
-  }
-  if (value.is_array())
-  {
-    auto result = std::string{};
-    for (const auto& element : value)
-    {
-      if (!element.is_number())
-      {
-        return std::nullopt;
-      }
-      result += (result.empty() ? "" : " ") + formatNumber(element);
-    }
-    return result;
-  }
-  return std::nullopt;
-}
-
-bool containsQuote(const std::string& str)
-{
-  return str.find('"') != std::string::npos;
 }
 
 Result<std::string, ToolError> classnameArgument(const Args& args)
@@ -158,69 +113,14 @@ Result<std::string, ToolError> classnameArgument(const Args& args)
 }
 
 /**
- * The properties of the argument `properties` as key-value strings; null values (no
- * value in the result) remove the key, like in entity_properties_set. The classname is
- * given by its own argument; `origin` is rejected if `allowOrigin` is false (point
- * entities take `position`).
+ * The properties of the argument `properties` (propertiesFromJson). `origin` is rejected
+ * if `allowOrigin` is false (point entities take `position`).
  */
 Result<PropertyList, ToolError> propertiesArgument(
   const Args& args, const bool allowOrigin)
 {
-  auto result = PropertyList{};
   const auto properties = args.getOptional<Json>("properties");
-  if (!properties)
-  {
-    return result;
-  }
-
-  for (const auto& item : properties->items())
-  {
-    const auto& key = item.key();
-    if (key.empty() || containsQuote(key))
-    {
-      return invalidArgument(
-        "Property key '" + key + "' is invalid: keys must be non-empty and must not "
-        "contain quotes, which map files cannot store.");
-    }
-    if (key == mdl::EntityPropertyKeys::Classname)
-    {
-      return invalidArgument(
-        "Set the classname with the argument 'classname', not in 'properties'.",
-        "Remove 'classname' from 'properties'.");
-    }
-    if (!allowOrigin && key == mdl::EntityPropertyKeys::Origin)
-    {
-      return invalidArgument(
-        "Set the origin of a point entity with the argument 'position', not in "
-        "'properties'.",
-        "Remove 'origin' from 'properties' and pass 'position': [x, y, z].");
-    }
-
-    if (item.value().is_null())
-    {
-      result.emplace_back(key, std::nullopt);
-      continue;
-    }
-
-    auto value = propertyValue(item.value());
-    if (!value)
-    {
-      return invalidArgument(
-        "The value of property '" + key + "' must be a string, a number, a boolean, "
-        "an array of numbers or null.",
-        "Example: {\"light\": 300, \"_color\": [255, 128, 0], \"message\": \"Hello\", "
-        "\"gibmodel\": null}");
-    }
-    if (containsQuote(*value))
-    {
-      return invalidArgument(
-        "The value of property '" + key + "' contains a quote, which map files cannot "
-        "store.",
-        "Use single quotes instead.");
-    }
-    result.emplace_back(key, std::move(*value));
-  }
-  return result;
+  return properties ? propertiesFromJson(*properties, allowOrigin) : PropertyList{};
 }
 
 Json propertiesJson(const mdl::Entity& entity)
@@ -445,7 +345,8 @@ ToolResult entityCreatePoint(CallContext& context, const Args& args)
         "The angle is given twice, as 'angle' and in 'properties'.",
         "Pass only one of them.");
     }
-    properties.emplace_back(mdl::EntityPropertyKeys::Angle, formatNumber(Json(*angle)));
+    properties.emplace_back(
+      mdl::EntityPropertyKeys::Angle, formatPropertyNumber(Json(*angle)));
   }
 
   const auto* definition = findEntityDefinition(map, classname);
@@ -784,6 +685,497 @@ ToolResult entityMoveBrushes(CallContext& context, const Args& args)
   };
 }
 
+// entities_create
+
+/** At most this many object ids are named in an aggregated warning. */
+constexpr auto MaxIdsPerWarning = size_t(10);
+
+/** An item of entities_create after validation. */
+struct EntityItem
+{
+  std::string classname;
+  const mdl::EntityDefinition* definition = nullptr;
+  vm::vec3d origin;
+  PropertyList properties;
+  std::optional<std::string> ref;
+  bool dropped = false;
+};
+
+/** A link of entities_create: `from` gets `key` = the `targetKey` value of `to`. */
+struct EntityLink
+{
+  size_t from;
+  std::string key;
+  std::string targetKey;
+  /** An item index or an existing entity. */
+  std::variant<size_t, mdl::EntityNodeBase*> to;
+};
+
+/** The values of the given key of all entities of the map. */
+std::set<std::string> propertyValuesInMap(mdl::Map& map, const std::string& key)
+{
+  auto result = std::set<std::string>{};
+  const auto visit = [&](const auto& self, const mdl::Node& node) -> void {
+    if (const auto* entityNode = dynamic_cast<const mdl::EntityNodeBase*>(&node))
+    {
+      if (const auto* value = entityNode->entity().property(key))
+      {
+        result.insert(*value);
+      }
+    }
+    for (const auto* child : node.children())
+    {
+      self(self, *child);
+    }
+  };
+  visit(visit, map.worldNode());
+  return result;
+}
+
+/** Adds up problems of many objects to one warning per code and subject. */
+class AggregatedWarnings
+{
+private:
+  struct Entry
+  {
+    std::string code;
+    std::string message;
+    std::vector<std::string> ids;
+  };
+  std::vector<Entry> m_entries;
+
+public:
+  void add(std::string code, std::string message, std::string id)
+  {
+    auto it = std::ranges::find_if(m_entries, [&](const auto& entry) {
+      return entry.code == code && entry.message == message;
+    });
+    if (it == m_entries.end())
+    {
+      m_entries.push_back(Entry{std::move(code), std::move(message), {}});
+      it = std::prev(m_entries.end());
+    }
+    it->ids.push_back(std::move(id));
+  }
+
+  void report(CallContext& context)
+  {
+    for (auto& entry : m_entries)
+    {
+      const auto count = entry.ids.size();
+      if (count > MaxIdsPerWarning)
+      {
+        entry.ids.resize(MaxIdsPerWarning);
+      }
+      context.warn(
+        std::move(entry.code),
+        count == 1 ? std::move(entry.message)
+                   : fmt::format(
+                       "{} ({} entities{})",
+                       entry.message,
+                       count,
+                       count > MaxIdsPerWarning ? ", the first 10 listed" : ""),
+        std::move(entry.ids));
+    }
+  }
+};
+
+ToolResult entitiesCreate(CallContext& context, const Args& args)
+{
+  auto& map = context.map();
+  auto& ids = context.ids();
+  const auto& grid = map.grid();
+  const auto items = args.get<Json>("items");
+  const auto snapToGrid = args.get<bool>("snapToGrid");
+  const auto applyDefaults = args.get<bool>("applyDefaults");
+  const auto dropToFloorDefault = args.get<bool>("dropToFloor");
+
+  auto errors = ItemErrors{};
+  auto entityItems = std::vector<EntityItem>{};
+  auto links = std::vector<EntityLink>{};
+  auto refs = std::map<std::string, size_t>{};
+  auto models = EntityModelLoader{map};
+
+  // everything is validated before anything is created
+  for (size_t i = 0; i < items.size(); ++i)
+  {
+    const auto item = Args{items[i]};
+    auto entityItem = EntityItem{};
+
+    auto classname = classnameArgument(item);
+    if (classname.is_error())
+    {
+      errors.add(i, errorOf(classname));
+      entityItems.push_back(std::move(entityItem));
+      continue;
+    }
+    entityItem.classname = std::move(classname).value();
+    entityItem.definition = findEntityDefinition(map, entityItem.classname);
+    if (
+      entityItem.definition
+      && mdl::getType(*entityItem.definition) != mdl::EntityDefinitionType::Point)
+    {
+      errors.add(
+        i,
+        "'" + entityItem.classname
+          + "' is a brush entity class; create it with brushes_create (entity) or "
+            "entity_create_brush.");
+    }
+
+    auto properties = propertiesArgument(item, false);
+    if (properties.is_error())
+    {
+      errors.add(i, errorOf(properties));
+    }
+    else
+    {
+      entityItem.properties = std::move(properties).value();
+    }
+    if (const auto angle = item.getOptional<double>("angle"))
+    {
+      if (std::ranges::any_of(entityItem.properties, [](const auto& property) {
+            return property.first == mdl::EntityPropertyKeys::Angle;
+          }))
+      {
+        errors.add(i, "The angle is given twice, as 'angle' and in 'properties'.");
+      }
+      entityItem.properties.emplace_back(
+        mdl::EntityPropertyKeys::Angle, formatPropertyNumber(Json(*angle)));
+    }
+
+    const auto dropToFloor = item.getOr<bool>("dropToFloor", dropToFloorDefault);
+    auto position = item.get<vm::vec3d>("position");
+    if (snapToGrid)
+    {
+      position[0] = grid.snap(position.x());
+      position[1] = grid.snap(position.y());
+      if (!dropToFloor)
+      {
+        position[2] = grid.snap(position.z());
+      }
+    }
+    if (!map.worldBounds().contains(position))
+    {
+      errors.add(
+        i,
+        makeError(
+          ErrorCode::OutOfWorldBounds,
+          "The position " + toJson(position).dump() + " lies outside the world bounds.",
+          "Move it inside the world bounds " + toJson(map.worldBounds()).dump() + "."));
+    }
+    else if (dropToFloor)
+    {
+      auto presentProperties = std::vector<std::pair<std::string, std::string>>{};
+      for (const auto& [key, value] : entityItem.properties)
+      {
+        if (value)
+        {
+          presentProperties.emplace_back(key, *value);
+        }
+      }
+      auto bounds = dropToFloorBounds(
+        entityItem.definition,
+        entityItem.classname,
+        presentProperties,
+        applyDefaults,
+        "auto",
+        models);
+      if (bounds.is_error())
+      {
+        errors.add(i, errorOf(bounds));
+      }
+      else if (
+        const auto floor = findFloor(map, bounds.value().bounds.translate(position)))
+      {
+        position[2] = cleanDropHeight(floor->point.z() - bounds.value().bounds.min.z());
+        entityItem.dropped = true;
+      }
+      else
+      {
+        errors.add(
+          i,
+          "There is no floor below " + toJson(position).dump()
+            + "; move the position above a floor or omit dropToFloor.");
+      }
+    }
+    entityItem.origin = position;
+
+    if (const auto ref = item.getOptional<std::string>("ref"))
+    {
+      if (!refs.emplace(*ref, i).second)
+      {
+        errors.add(i, "The ref '" + *ref + "' is used by another item, too.");
+      }
+      entityItem.ref = *ref;
+    }
+    entityItems.push_back(std::move(entityItem));
+  }
+
+  // links name refs of any item or existing entities
+  for (size_t i = 0; i < items.size(); ++i)
+  {
+    const auto linksJson = items[i].value("links", Json::array());
+    for (const auto& linkJson : linksJson)
+    {
+      const auto to = linkJson.value("to", std::string{});
+      auto link = EntityLink{
+        i,
+        linkJson.value("key", std::string{"target"}),
+        linkJson.value("targetKey", std::string{"targetname"}),
+        size_t(0)};
+      if (
+        link.key.empty() || containsQuote(link.key) || link.targetKey.empty()
+        || containsQuote(link.targetKey))
+      {
+        errors.add(i, "The link keys must be non-empty and must not contain quotes.");
+        continue;
+      }
+      if (const auto it = refs.find(to); it != refs.end())
+      {
+        link.to = it->second;
+      }
+      else if (const auto ref = parseObjectRef(to);
+               ref && ref->kind == ObjectKind::Entity)
+      {
+        auto node = ids.resolve(*ref);
+        auto* entityNode =
+          node.is_success() ? dynamic_cast<mdl::EntityNodeBase*>(node.value()) : nullptr;
+        if (!entityNode)
+        {
+          errors.add(i, "The link target " + to + " does not exist.");
+          continue;
+        }
+        if (!entityNode->entity().property(link.targetKey))
+        {
+          errors.add(
+            i,
+            "The link target " + to + " has no '" + link.targetKey
+              + "'; set one with entity_properties_set first.");
+          continue;
+        }
+        link.to = entityNode;
+      }
+      else
+      {
+        errors.add(
+          i,
+          "The link target '" + to
+            + "' is neither the ref of an item nor the id of an existing entity.");
+        continue;
+      }
+      links.push_back(std::move(link));
+    }
+  }
+
+  if (!errors.empty())
+  {
+    return errors.error(
+      items.size(),
+      "Fix the listed items (details.errors) and call entities_create again with all "
+      "items.");
+  }
+
+  // build the entities
+  const auto setDefaults = map.worldNode().entityPropertyConfig().setDefaultProperties;
+  auto entities = std::vector<mdl::Entity>{};
+  entities.reserve(entityItems.size());
+  for (const auto& entityItem : entityItems)
+  {
+    auto entity =
+      mdl::Entity{{{mdl::EntityPropertyKeys::Classname, entityItem.classname}}};
+    if (entityItem.definition && setDefaults)
+    {
+      mdl::setDefaultProperties(
+        *entityItem.definition, entity, mdl::SetDefaultPropertyMode::SetAll);
+    }
+    for (const auto& [key, value] : entityItem.properties)
+    {
+      if (value)
+      {
+        entity.addOrUpdateProperty(key, *value);
+      }
+    }
+    if (entityItem.definition && applyDefaults)
+    {
+      mdl::setDefaultProperties(
+        *entityItem.definition, entity, mdl::SetDefaultPropertyMode::SetMissing);
+    }
+    for (const auto& [key, value] : entityItem.properties)
+    {
+      if (!value)
+      {
+        entity.removeProperty(key);
+      }
+    }
+    entity.setOrigin(entityItem.origin);
+    entities.push_back(std::move(entity));
+  }
+
+  // link values: the target's value, or a new unique name
+  auto generatedNames = size_t(0);
+  auto usedNames = std::map<std::string, std::set<std::string>>{};
+  for (const auto& link : links)
+  {
+    auto value = std::string{};
+    if (const auto* targetIndex = std::get_if<size_t>(&link.to))
+    {
+      auto& target = entities[*targetIndex];
+      if (const auto* existing = target.property(link.targetKey))
+      {
+        value = *existing;
+      }
+      else
+      {
+        auto [it, inserted] = usedNames.try_emplace(link.targetKey);
+        if (inserted)
+        {
+          it->second = propertyValuesInMap(map, link.targetKey);
+          for (const auto& entity : entities)
+          {
+            if (const auto* name = entity.property(link.targetKey))
+            {
+              it->second.insert(*name);
+            }
+          }
+        }
+        const auto& base = entityItems[*targetIndex].ref
+                             ? *entityItems[*targetIndex].ref
+                             : entityItems[*targetIndex].classname;
+        value = base;
+        for (size_t n = 1; it->second.contains(value) || containsQuote(value); ++n)
+        {
+          value = fmt::format("{}_{}", base, n);
+        }
+        it->second.insert(value);
+        target.addOrUpdateProperty(link.targetKey, value);
+        ++generatedNames;
+      }
+    }
+    else
+    {
+      value = *std::get<mdl::EntityNodeBase*>(link.to)->entity().property(link.targetKey);
+    }
+    entities[link.from].addOrUpdateProperty(link.key, value);
+  }
+
+  // add them in one step
+  auto* parent = &mdl::parentForNodes(map);
+  if (const auto layerId = args.getOptional<std::string>("layer"))
+  {
+    auto layer = ids.resolve(*layerId);
+    if (layer.is_error())
+    {
+      return errorOf(layer);
+    }
+    parent = layer.value();
+  }
+  auto nodes = std::vector<mdl::Node*>{};
+  nodes.reserve(entities.size());
+  for (auto& entity : entities)
+  {
+    nodes.push_back(new mdl::EntityNode{std::move(entity)});
+  }
+  auto* group = static_cast<mdl::GroupNode*>(nullptr);
+  auto topLevel = nodes;
+  if (const auto groupName = args.getOptional<std::string>("group"))
+  {
+    group = new mdl::GroupNode{mdl::Group{*groupName}};
+    group->addChildren(nodes);
+    topLevel = {group};
+  }
+
+  mdl::deselectAll(map);
+  if (mdl::addNodes(map, {{parent, topLevel}}).empty())
+  {
+    return context.operationFailed("The entities could not be added to the map.");
+  }
+  auto selectable = std::vector<mdl::Node*>{};
+  std::ranges::copy_if(topLevel, std::back_inserter(selectable), [&](const auto* node) {
+    return map.editorContext().selectable(*node);
+  });
+  mdl::selectNodes(map, selectable);
+
+  // problems as aggregated warnings
+  auto warnings = AggregatedWarnings{};
+  auto unknownClasses = std::map<std::string, std::vector<std::string>>{};
+  auto outside = std::vector<std::string>{};
+  auto overlapping = std::vector<std::string>{};
+  for (size_t i = 0; i < nodes.size(); ++i)
+  {
+    const auto& entityNode = static_cast<const mdl::EntityNode&>(*nodes[i]);
+    const auto id = ids.format(entityNode);
+    const auto& entityItem = entityItems[i];
+    if (!entityItem.definition)
+    {
+      unknownClasses[entityItem.classname].push_back(id);
+    }
+    for (const auto& [key, value] : entityItem.properties)
+    {
+      if (value)
+      {
+        if (auto problem = checkPropertyValue(entityItem.definition, key, *value))
+        {
+          warnings.add(std::move(problem->code), std::move(problem->message), id);
+        }
+      }
+    }
+    const auto bounds = entityNode.logicalBounds();
+    if (!map.worldBounds().contains(bounds))
+    {
+      outside.push_back(id);
+    }
+    if (!overlappingBrushes(context, bounds).empty())
+    {
+      overlapping.push_back(id);
+    }
+  }
+  for (auto& [classname, classIds] : unknownClasses)
+  {
+    if (classIds.size() > MaxIdsPerWarning)
+    {
+      classIds.resize(MaxIdsPerWarning);
+    }
+    warnUnknownClassname(context, classname, std::move(classIds));
+  }
+  warnings.report(context);
+  const auto warnIds =
+    [&](const char* code, std::vector<std::string> warnedIds, auto message) {
+      if (!warnedIds.empty())
+      {
+        const auto count = warnedIds.size();
+        warnedIds.resize(std::min(count, MaxIdsPerWarning));
+        context.warn(
+          code, fmt::format(fmt::runtime(message), count), std::move(warnedIds));
+      }
+    };
+  warnIds(
+    "ENTITY_OVERLAPS_BRUSHES",
+    std::move(overlapping),
+    "{} entities intersect brushes; move them into open space or use dropToFloor "
+    "(entity_placement_check lists the brushes).");
+  warnIds(
+    "OUTSIDE_WORLD_BOUNDS",
+    std::move(outside),
+    "{} entities lie (partly) outside the world bounds.");
+
+  auto refIds = Json::object();
+  for (const auto& [ref, index] : refs)
+  {
+    refIds[ref] = ids.format(*nodes[index]);
+  }
+  return Json{
+    {"ids", formatIds(nodes, ids)},
+    {"count", nodes.size()},
+    {"refs", std::move(refIds)},
+    {"links", links.size()},
+    {"generatedNames", generatedNames},
+    {"dropped",
+     std::ranges::count_if(entityItems, [](const auto& item) { return item.dropped; })},
+    {"group", group ? Json(ids.format(*group)) : Json(nullptr)},
+    {"layer", layerIdOf(*nodes.front(), ids)},
+  };
+}
+
 Field propertiesField()
 {
   return field("properties", object({}).allowAdditionalProperties())
@@ -947,6 +1339,96 @@ void registerEntityCreateTools(ToolRegistry& registry)
       }))
       .mutation(Mutation::Map)
       .handler(entityMoveBrushes));
+
+  registry.add(
+    ToolDef{"entities_create"}
+      .title("Create Entities")
+      .description(
+        "Creates many point entities in one call and one undo step, e.g. the lights, "
+        "monsters and items of a generated level. Each item: classname, position (map "
+        "units), optional angle, properties (as in entity_create_point), dropToFloor "
+        "(default: the call's dropToFloor), ref (a name for links) and links: [{to: a "
+        "ref of another item or an existing entity id, key (default target), targetKey "
+        "(default targetname)}] sets key to the target's targetKey value, generating a "
+        "unique name (the ref, else the classname, with _n) if the target has none. All "
+        "items are validated first; if any is invalid nothing is created and "
+        "INVALID_ARGUMENT lists every problem with its item index in details.errors. "
+        "Games that set default properties on creation get them like the editor. The "
+        "entities go into 'layer' (default: the open group or current layer), into a "
+        "new group with 'group', and are selected. Result ids[i] is the entity of "
+        "items[i]; lists are cut to the detail level. Property problems, unknown classes "
+        "and overlaps are aggregated into one warning per code. Use checks: \"defer\" "
+        "while the surrounding brushes are not yet built. Example: {\"items\": "
+        "[{\"classname\": \"light\", \"position\": [0, 0, 128], \"properties\": "
+        "{\"light\": 300}, \"ref\": \"lamp\"}, {\"classname\": \"func_button_target\", "
+        "\"position\": [64, 0, 32], \"links\": [{\"to\": \"lamp\"}]}, {\"classname\": "
+        "\"monster_army\", \"position\": [256, 0, 64], \"angle\": 180, \"dropToFloor\": "
+        "true}]}")
+      .input(object({
+        field(
+          "items",
+          array(object({
+                  field("classname", string().nonEmpty())
+                    .required()
+                    .describe("Entity class, e.g. 'light'"),
+                  field("position", vec3()).required().describe("Origin in map units"),
+                  field("angle", angle()).describe("Yaw in degrees; sets 'angle'"),
+                  propertiesField(),
+                  field("dropToFloor", boolean())
+                    .describe("Stand the entity on the floor below the position"),
+                  field("ref", string().nonEmpty())
+                    .describe("A name that links of other items refer to"),
+                  field(
+                    "links",
+                    array(object({
+                      field("to", string().nonEmpty())
+                        .required()
+                        .describe("The ref of an item or an existing entity id"),
+                      field("key", string().nonEmpty())
+                        .describe("Property of this entity to set. Default: target"),
+                      field("targetKey", string().nonEmpty())
+                        .describe("Property of the target whose value is used. Default: "
+                                  "targetname"),
+                    })))
+                    .describe("Properties that point at other entities"),
+                }))
+            .nonEmpty()
+            .maxSize(5000))
+          .required()
+          .describe("The entities to create"),
+        field("dropToFloor", boolean().defaultsTo(false))
+          .describe("Default of the items' dropToFloor"),
+        field("snapToGrid", boolean().defaultsTo(true))
+          .describe("Snap positions to the grid (x and y; z too unless dropped)"),
+        field("applyDefaults", boolean().defaultsTo(false))
+          .describe("Also set the definitions' default values of all properties not "
+                    "given"),
+        field("layer", objectId({ObjectKind::Layer}))
+          .describe("Layer of the new entities. Default: the open group or current "
+                    "layer"),
+        field("group", string().nonEmpty())
+          .describe("Put the new entities into a new group with this name"),
+      }))
+      .output(object({
+        field("ids", array(objectId()))
+          .required()
+          .describe("The new entities; ids[i] belongs to items[i]"),
+        field("count", integer()).required(),
+        field("refs", object({}).allowAdditionalProperties())
+          .required()
+          .describe("Entity id per ref"),
+        field("links", integer()).required().describe("Number of links set"),
+        field("generatedNames", integer())
+          .required()
+          .describe("Number of target names generated for links"),
+        field("dropped", integer())
+          .required()
+          .describe("Number of entities dropped to the floor"),
+        field("group", any()).required().describe("Id of the new group, or null"),
+        field("layer", any()).required().describe("Layer of the new entities"),
+      }))
+      .mutation(Mutation::Map)
+      .handler(entitiesCreate));
 }
 
 } // namespace tb::mcp

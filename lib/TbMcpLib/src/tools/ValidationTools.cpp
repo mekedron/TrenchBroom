@@ -1245,6 +1245,17 @@ ToolResult validatorsList(CallContext& context, const Args&)
   return validatorsJson(context.map(), context.documentState().disabledValidators);
 }
 
+ToolResult checksReport(CallContext& context, const Args&)
+{
+  // the call runner reports the series after this call, which changes nothing
+  const auto& series = context.documentState().deferredChecks;
+  const auto it = series.find(context.session().id);
+  return Json{
+    {"deferredSeries", it != series.end()},
+    {"deferredCalls", it != series.end() ? it->second.calls : size_t(0)},
+  };
+}
+
 ToolResult validatorsSet(CallContext& context, const Args& args)
 {
   const auto validators = allValidators(context.map());
@@ -1576,6 +1587,31 @@ void registerValidationTools(ToolRegistry& registry)
       .documentUse(DocumentUse::Required)
       .idempotent()
       .handler(validatorsList));
+
+  registry.add(
+    ToolDef{"checks_report"}
+      .title("Report Deferred Checks")
+      .description(
+        "Ends this session's series of calls made with checks: \"defer\" on the "
+        "document and reports the issues the whole series introduced (issuesIntroduced, "
+        "issuesSummary with counts per code, checks: {deferredCalls, changes}) without "
+        "changing the map. Any modifying call without checks: \"defer\" ends the series "
+        "the same way; use this one when there is nothing left to change. Returns "
+        "deferredSeries: false if no series was open. Example: {\"detail\": "
+        "\"summary\"}")
+      .input(object({}))
+      .output(object({
+        field("deferredSeries", boolean())
+          .required()
+          .describe("Whether a deferred series was open and is now reported"),
+        field("deferredCalls", integer())
+          .required()
+          .describe("The number of calls in the series"),
+      }))
+      .mutation(Mutation::Map)
+      .documentUse(DocumentUse::Required)
+      .idempotent()
+      .handler(checksReport));
 
   registry.add(
     ToolDef{"validators_set"}

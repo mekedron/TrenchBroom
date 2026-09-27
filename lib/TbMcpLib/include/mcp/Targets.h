@@ -71,12 +71,13 @@ Result<mdl::BrushFaceHandle, ToolError> resolveFace(
 
 /**
  * The `ids` parameter of face tools: face ids such as `brush:1042/face:3`, and ids of
- * brushes, groups and entities, which stand for all faces of the brushes they contain.
+ * brushes, groups, entities and layers, which stand for all faces of the brushes they
+ * contain.
  */
 schema::Field faceTargetsField(
   std::string description =
-    "Face ids ('brush:1042/face:3') and brush, group or entity ids (all faces of their "
-    "brushes). Default: the selected faces, or all faces of the selected objects");
+    "Face ids ('brush:1042/face:3') and brush, group, entity or layer ids (all faces of "
+    "their brushes). Default: the selected faces, or all faces of the selected objects");
 
 /**
  * Resolves the faces a face tool acts on: the faces named by the given argument (see

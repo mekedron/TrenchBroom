@@ -28,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace tb::mdl
@@ -155,5 +156,30 @@ ToolResult withEntities(
   CallContext& context,
   const std::vector<mdl::EntityNodeBase*>& entities,
   const std::function<ToolResult()>& function);
+
+/** Key-value pairs to set; a missing value removes the key. */
+using PropertyList = std::vector<std::pair<std::string, std::optional<std::string>>>;
+
+/** Formats a number as a property value: integers without decimals. */
+std::string formatPropertyNumber(const Json& value);
+
+/**
+ * The property value given as JSON: strings as they are, numbers formatted, booleans as
+ * "1" / "0" and arrays of numbers as space separated numbers ("255 128 0"); nullopt for
+ * other values.
+ */
+std::optional<std::string> propertyValueFromJson(const Json& value);
+
+/** Whether the string contains a double quote, which map files cannot store. */
+bool containsQuote(std::string_view str);
+
+/**
+ * The properties of a JSON object as key-value strings (propertyValueFromJson); null
+ * values (no value in the result) remove the key, like in entity_properties_set. Fails
+ * with INVALID_ARGUMENT for invalid keys or values, `classname` (it has its own argument)
+ * and, unless `allowOrigin`, `origin` (point entities take `position`).
+ */
+Result<PropertyList, ToolError> propertiesFromJson(
+  const Json& properties, bool allowOrigin);
 
 } // namespace tb::mcp

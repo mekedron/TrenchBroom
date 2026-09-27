@@ -21,6 +21,7 @@
 
 #include "base/NotifierConnection.h"
 #include "mcp/CallLog.h"
+#include "mcp/ChangeCollector.h"
 #include "mcp/CompileRuns.h"
 #include "mcp/Host.h"
 #include "mcp/MapManifest.h"
@@ -42,6 +43,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace tb::mdl
+{
+class Map;
+}
+
 namespace tb::ui
 {
 class MapDocument;
@@ -60,6 +66,20 @@ struct AgentTransaction
   std::string name;
   /** The document's transaction depth right after the transaction was started. */
   size_t depth = 0;
+  /** Calls inside the transaction defer their checks by default (checks: "defer"). */
+  bool deferChecks = false;
+};
+
+/**
+ * A series of calls of one session made with `checks: "defer"`: one collector observes
+ * the document from the first call of the series until a call that reports its checks,
+ * which then reports the issues the whole series introduced.
+ */
+struct DeferredChecks
+{
+  std::unique_ptr<ChangeCollector> collector;
+  /** The successful calls of the series. */
+  size_t calls = 0;
 };
 
 /** The aspects of a document that resources report and clients can subscribe to. */
@@ -112,11 +132,17 @@ struct DocumentTarget
   {
     /** The session's active document. */
     Active,
-    /** The session has no active document; the focused (or first) document. */
+    /**
+     * The session has no active document; the focused (or first) document with a
+     * window.
+     */
     Focused,
     /** The session's active document was closed; there is no target. */
     ActiveClosed,
-    /** The session has no active document and no document is open. */
+    /**
+     * The session has no active document and no document with a window is open (there
+     * may be background documents).
+     */
     None,
   };
 
@@ -144,15 +170,20 @@ public:
    * neither listed nor reported per call.
    */
   std::set<std::string> disabledValidators;
+  /** The open deferred check series per session id. */
+  std::map<std::string, DeferredChecks, std::less<>> deferredChecks;
 
 private:
   NotifierConnection m_notifierConnection;
   DidChange m_didChange;
   bool m_lastModified = false;
+  /** The document's map; a reload replaces it. */
+  const mdl::Map* m_map = nullptr;
 
 public:
   /** The callback is called when an aspect of the document may have changed. */
   explicit DocumentState(ui::MapDocument& document, DidChange didChange = {});
+  ~DocumentState();
 
 private:
   void didChange(DocumentAspect aspect);
@@ -221,7 +252,8 @@ public:
   /**
    * The document that a call of the given session without a `document` argument acts on:
    * the session's active document; if the session has none, the focused document (or the
-   * first one); none if the session's active document was closed.
+   * first one with a window, never a background document); none if the session's active
+   * document was closed.
    */
   DocumentTarget targetDocument(const Session& session) const;
 

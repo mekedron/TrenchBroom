@@ -2288,6 +2288,11 @@ Json userViewJson(const UserView& view)
 
 void viewSnapshotUser(CallContext& context, const Args& args, ToolCompletion completion)
 {
+  if (auto error = backgroundDocumentError(context.documentInfo(), "The user views"))
+  {
+    completion(std::move(*error));
+    return;
+  }
   if (!context.host().snapshotRenderer())
   {
     completion(noRendererError());

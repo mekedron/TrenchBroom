@@ -371,6 +371,7 @@ void IdRegistry::rebuild()
     m_reloadThreshold = std::max(m_reloadThreshold, runtimeId + 1);
   }
 
+  m_map = &m_document.map();
   m_nodes.clear();
   m_canonicalIds.clear();
   m_currentIds.clear();
@@ -423,7 +424,11 @@ void IdRegistry::collectLinkKeys(
 
 void IdRegistry::documentWasLoaded()
 {
-  rebuild();
+  // A new map window (document_show) notifies without replacing the map; the ids stay
+  if (&m_document.map() != m_map)
+  {
+    rebuild();
+  }
 }
 
 void IdRegistry::nodesWereAdded(const std::vector<mdl::Node*>& nodes)

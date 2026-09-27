@@ -269,6 +269,14 @@ schema::Schema ToolDef::inputSchema() const
           "per list; summary keeps up to 5 and adds counts per kind to changes; full "
           "keeps all. Cut lists are described in truncatedLists and can be paged with "
           "result_list_get"));
+    addFieldIfAbsent(
+      result,
+      field("checks", enumOf({"report", "defer"}))
+        .describe(
+          "report (default; defer inside a transaction begun with checks: defer): "
+          "report the issues this call introduced. defer: skip the issue checks and "
+          "report them for the whole series of deferring calls with the next call that "
+          "reports (or checks_report, transaction_commit)"));
   }
   if (m_paginated)
   {
@@ -333,6 +341,15 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
                  "Problems the call introduced: editor validator issues of created and "
                  "modified objects, and MCP placement checks (z-fighting, entities "
                  "outside the hull, model placement, texture distortion)"),
+             field("issuesSummary", any())
+               .describe(
+                 "With detail summary or a cut issue list: {total, bySource, byCode: "
+                 "[{code, source, count, examples}]}"),
+             field("checks", any())
+               .describe(
+                 "Deferred checks: {deferred: true, calls} on a deferring call; "
+                 "{deferredCalls, changes} on the call that reported a deferred series "
+                 "(its issuesIntroduced cover the whole series)"),
              field("truncatedLists", any())
                .describe(
                  "Only if lists were cut to the detail level: {listsId, lists: [{path, "

@@ -42,6 +42,7 @@ namespace tb::mcp
 {
 class Args;
 class McpHost;
+struct DocumentInfo;
 
 // Shared building blocks of the tool implementations. Keep this small; it must not grow
 // into a second tool file.
@@ -58,6 +59,35 @@ std::vector<std::string> gameNames(McpHost& host);
 
 /** An INVALID_ARGUMENT error for an unknown game that lists the known games. */
 ToolError unknownGameError(McpHost& host, std::string_view name);
+
+/**
+ * The problems of the items of a bulk tool (brushes_create, entities_create), each with
+ * the index of its item, so that all of them are reported at once.
+ */
+class ItemErrors
+{
+private:
+  Json m_errors = Json::array();
+
+public:
+  void add(size_t index, std::string message);
+  /** Adds the error's message and hint (and its code unless INVALID_ARGUMENT). */
+  void add(size_t index, const ToolError& error);
+  bool empty() const;
+
+  /**
+   * INVALID_ARGUMENT whose message names the first problems and how many items are
+   * invalid; details.errors lists all problems as [{index, message, code?, hint?}].
+   */
+  ToolError error(size_t itemCount, std::string hint) const;
+};
+
+/**
+ * A DOCUMENT_IN_BACKGROUND error if the given document is a background document, which
+ * has no editor window; `what` names what needs the window, e.g. "The user views".
+ */
+std::optional<ToolError> backgroundDocumentError(
+  const DocumentInfo& document, std::string_view what);
 
 /** The configured game folder of the given game (empty if not set). */
 std::filesystem::path gamePath(const mdl::GameInfo& gameInfo);

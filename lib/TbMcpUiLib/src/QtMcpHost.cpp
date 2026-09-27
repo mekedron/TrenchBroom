@@ -21,7 +21,13 @@
 
 #include <QApplication>
 #include <QEvent>
+#include <QMetaObject>
+#include <QPointer>
+#include <QThread>
+#include <QTimer>
 
+#include "base/Logger.h"
+#include "base/NotifierConnection.h"
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
 #include "mdl/EnvironmentConfig.h"
@@ -44,6 +50,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
 #include <ranges>
 
 namespace tb::ui
@@ -68,6 +75,64 @@ std::string windowTitle(const MapDocument& document)
 }
 
 } // namespace
+
+/**
+ * A document without a window, with the logger that adds its messages to the console
+ * buffer (instead of a window console).
+ */
+struct QtMcpHost::BackgroundDocument
+{
+  class ConsoleLogger : public Logger
+  {
+  private:
+    QtMcpHost& m_host;
+    const MapDocument& m_document;
+
+  public:
+    ConsoleLogger(QtMcpHost& host, const MapDocument& document)
+      : m_host{host}
+      , m_document{document}
+    {
+    }
+
+  private:
+    void doLog(const LogLevel level, const std::string_view message) override
+    {
+      if (QThread::currentThread() == m_host.thread())
+      {
+        m_host.logBackgroundMessage(&m_document, level, message);
+      }
+      else
+      {
+        // the console buffer is not thread-safe; the message is dropped if the host is
+        // destroyed before it is delivered
+        QMetaObject::invokeMethod(
+          &m_host,
+          [host = &m_host, document = &m_document, level, text = std::string{message}]() {
+            host->logBackgroundMessage(document, level, text);
+          },
+          Qt::QueuedConnection);
+      }
+    }
+  };
+
+  std::unique_ptr<MapDocument> document;
+  std::unique_ptr<ConsoleLogger> logger;
+  NotifierConnection notifierConnection;
+
+  ~BackgroundDocument()
+  {
+    notifierConnection.disconnect();
+    if (document)
+    {
+      // like a map window, which triggers a final autosave before it releases its
+      // document
+      document->triggerAutosave();
+      document->setTargetLogger(nullptr);
+      document.reset();
+    }
+  }
+};
 
 std::optional<std::string> activeModalToolName(const MapViewToolBox& toolBox)
 {
@@ -137,9 +202,33 @@ QtMcpHost::QtMcpHost(AppController& appController, QObject* parent)
   assignDocumentIds();
   connectMapWindows();
   m_topMapWindow = m_appController.mapWindowManager().topMapWindow();
+
+  // like MapWindow's autosave timer
+  m_autosaveTimer = new QTimer{this};
+  connect(
+    m_autosaveTimer, &QTimer::timeout, this, &QtMcpHost::autosaveBackgroundDocuments);
+  m_autosaveTimer->start(std::chrono::milliseconds{1000});
 }
 
-QtMcpHost::~QtMcpHost() = default;
+QtMcpHost::~QtMcpHost()
+{
+  // Background documents are discarded; they must be destroyed while the application
+  // controller and its GL and resource managers still exist
+  for (const auto& backgroundDocument : m_backgroundDocuments)
+  {
+    if (const auto& map = backgroundDocument->document->map(); map.modified())
+    {
+      if (auto* topWindow = m_appController.mapWindowManager().topMapWindow())
+      {
+        topWindow->logger().warn() << fmt::format(
+          "Discarded the unsaved changes of the agent's background document {}",
+          map.filename());
+      }
+    }
+  }
+  m_backgroundDocuments.clear();
+  m_closedBackgroundDocuments.clear();
+}
 
 MapWindow* QtMcpHost::findMapWindow(const MapDocument& document) const
 {
@@ -153,6 +242,11 @@ MapWindow* QtMcpHost::findMapWindow(const MapDocument& document) const
 void QtMcpHost::setConsoleHook(McpConsoleHook* consoleHook)
 {
   m_consoleHook = consoleHook;
+}
+
+void QtMcpHost::setCreateMapWindow(CreateMapWindow createMapWindow)
+{
+  m_createMapWindow = std::move(createMapWindow);
 }
 
 std::string QtMcpHost::applicationVersion() const
@@ -182,6 +276,31 @@ std::vector<mcp::DocumentInfo> QtMcpHost::documents()
       });
   }
 
+  const auto addBackgroundDocument = [&](MapDocument& document) {
+    const auto id = documentId(document);
+    result.emplace_back(
+      id,
+      mcp::DocumentInfo{
+        .id = fmt::format("doc:{}", id),
+        .document = &document,
+        .windowTitle = windowTitle(document),
+        .focused = false,
+        .background = true,
+      });
+  };
+  for (const auto& backgroundDocument : m_backgroundDocuments)
+  {
+    addBackgroundDocument(*backgroundDocument->document);
+  }
+  // while its new window is being created, the document is in neither list
+  if (
+    m_documentBeingShown && std::ranges::none_of(mapWindows, [&](const auto* mapWindow) {
+      return &mapWindow->document() == m_documentBeingShown;
+    }))
+  {
+    addBackgroundDocument(*m_documentBeingShown);
+  }
+
   // List the documents in the order in which they were opened
   std::ranges::sort(result, {}, [](const auto& pair) { return pair.first; });
 
@@ -190,6 +309,12 @@ std::vector<mcp::DocumentInfo> QtMcpHost::documents()
 
 mcp::BusyState QtMcpHost::busyState(MapDocument& document)
 {
+  // the human cannot interact with a background document
+  if (findBackgroundDocument(document))
+  {
+    return mcp::BusyState::Idle;
+  }
+
   if (QApplication::activeModalWidget() != nullptr)
   {
     return mcp::BusyState::Busy;
@@ -263,6 +388,11 @@ mcp::EngineHost* QtMcpHost::engineHost()
 
 Logger* QtMcpHost::logTarget(MapDocument& document)
 {
+  if (const auto* backgroundDocument = findBackgroundDocument(document))
+  {
+    return backgroundDocument->logger.get();
+  }
+
   const auto* mapWindow = findMapWindow(document);
   return mapWindow ? &mapWindow->logger() : nullptr;
 }
@@ -334,10 +464,10 @@ std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()
 }
 
 Result<mcp::OpenedDocument> QtMcpHost::createDocument(
-  const mdl::GameInfo& gameInfo, const mdl::MapFormat mapFormat)
+  const mdl::GameInfo& gameInfo, const mdl::MapFormat mapFormat, const bool background)
 {
   auto& mapWindowManager = m_appController.mapWindowManager();
-  if (const auto replaced = documentToReplace())
+  if (const auto replaced = background ? std::nullopt : documentToReplace())
   {
     // single window mode: the document is recreated in place, logging to its console
     const auto capture =
@@ -361,6 +491,10 @@ Result<mcp::OpenedDocument> QtMcpHost::createDocument(
              // the new document caches its messages until its window's console shows
              // them
              auto messages = mcp::collectCachedMessages(*document);
+             if (background)
+             {
+               return addBackgroundDocument(std::move(document), std::move(messages));
+             }
              auto* mapWindow = mapWindowManager.createMapWindow(std::move(document));
              return mcp::OpenedDocument{
                documentInfo(mapWindow->document()), std::move(messages)};
@@ -370,10 +504,11 @@ Result<mcp::OpenedDocument> QtMcpHost::createDocument(
 Result<mcp::OpenedDocument> QtMcpHost::loadDocument(
   const mdl::GameInfo& gameInfo,
   const mdl::MapFormat mapFormat,
-  const std::filesystem::path& path)
+  const std::filesystem::path& path,
+  const bool background)
 {
   auto& mapWindowManager = m_appController.mapWindowManager();
-  if (const auto replaced = documentToReplace())
+  if (const auto replaced = background ? std::nullopt : documentToReplace())
   {
     const auto capture =
       mcp::ScopedLogCapture{*replaced->document, logTarget(*replaced->document)};
@@ -395,10 +530,53 @@ Result<mcp::OpenedDocument> QtMcpHost::loadDocument(
            m_appController.glManager().resourceManager())
          | kdl::transform([&](auto document) {
              auto messages = mcp::collectCachedMessages(*document);
+             if (background)
+             {
+               return addBackgroundDocument(std::move(document), std::move(messages));
+             }
              auto* mapWindow = mapWindowManager.createMapWindow(std::move(document));
              return mcp::OpenedDocument{
                documentInfo(mapWindow->document()), std::move(messages)};
            });
+}
+
+Result<void> QtMcpHost::showDocument(MapDocument& document)
+{
+  const auto it = std::ranges::find_if(m_backgroundDocuments, [&](const auto& entry) {
+    return entry->document.get() == &document;
+  });
+  if (it == m_backgroundDocuments.end())
+  {
+    return Error{"The document is not a background document"};
+  }
+
+  auto& mapWindowManager = m_appController.mapWindowManager();
+  if (!mapWindowManager.shouldCreateWindowForDocument())
+  {
+    return Error{"The editor shows one document at a time (single-window mode)"};
+  }
+
+  auto backgroundDocument = std::move(*it);
+  m_backgroundDocuments.erase(it);
+  backgroundDocument->notifierConnection.disconnect();
+
+  // the window's console becomes the document's logger
+  auto ownedDocument = std::move(backgroundDocument->document);
+  ownedDocument->setTargetLogger(nullptr);
+  backgroundDocument.reset();
+
+  m_documentBeingShown = &document;
+  auto* mapWindow = m_createMapWindow
+                      ? m_createMapWindow(std::move(ownedDocument))
+                      : mapWindowManager.createMapWindow(std::move(ownedDocument));
+  m_documentBeingShown = nullptr;
+
+  if (!m_mapWindowConnections.contains(mapWindow))
+  {
+    // the window's show event was not seen
+    mapWindowsDidChange();
+  }
+  return kdl::void_success;
 }
 
 void QtMcpHost::closeDocument(MapDocument& document)
@@ -407,12 +585,102 @@ void QtMcpHost::closeDocument(MapDocument& document)
   {
     // the window is deleted later, when control returns to the event loop
     mapWindow->closeDiscardingChanges();
+    return;
+  }
+
+  const auto it = std::ranges::find_if(m_backgroundDocuments, [&](const auto& entry) {
+    return entry->document.get() == &document;
+  });
+  if (it != m_backgroundDocuments.end())
+  {
+    // like a closed map window: no longer listed now, destroyed later
+    m_closedBackgroundDocuments.push_back(std::move(*it));
+    m_backgroundDocuments.erase(it);
+    QTimer::singleShot(0, this, &QtMcpHost::destroyClosedBackgroundDocuments);
   }
 }
 
 std::vector<std::filesystem::path> QtMcpHost::recentDocuments()
 {
   return m_appController.recentDocuments().recentDocuments();
+}
+
+QtMcpHost::BackgroundDocument* QtMcpHost::findBackgroundDocument(
+  const MapDocument& document) const
+{
+  const auto it = std::ranges::find_if(m_backgroundDocuments, [&](const auto& entry) {
+    return entry->document.get() == &document;
+  });
+  return it != m_backgroundDocuments.end() ? it->get() : nullptr;
+}
+
+mcp::OpenedDocument QtMcpHost::addBackgroundDocument(
+  std::unique_ptr<MapDocument> document, std::vector<mcp::LogMessage> messages)
+{
+  auto& documentRef = *document;
+  auto backgroundDocument = std::make_unique<BackgroundDocument>();
+  backgroundDocument->logger =
+    std::make_unique<BackgroundDocument::ConsoleLogger>(*this, documentRef);
+  backgroundDocument->document = std::move(document);
+
+  // a document created or loaded in place (document_revert) changes the title
+  backgroundDocument->notifierConnection += documentRef.documentWasLoadedNotifier.connect(
+    [this]() { documentsDidChangeNotifier(); });
+
+  m_backgroundDocuments.push_back(std::move(backgroundDocument));
+  documentId(documentRef);
+
+  // the cached messages go to the console buffer like a window console's
+  documentRef.setTargetLogger(m_backgroundDocuments.back()->logger.get());
+
+  documentsDidChangeNotifier();
+  return mcp::OpenedDocument{documentInfo(documentRef), std::move(messages)};
+}
+
+void QtMcpHost::destroyClosedBackgroundDocuments()
+{
+  auto closed = std::move(m_closedBackgroundDocuments);
+  m_closedBackgroundDocuments.clear();
+  if (closed.empty())
+  {
+    return;
+  }
+
+  for (const auto& backgroundDocument : closed)
+  {
+    documentWillCloseNotifier(*backgroundDocument->document);
+    m_documentIds.erase(backgroundDocument->document.get());
+  }
+  closed.clear();
+  documentsDidChangeNotifier();
+}
+
+void QtMcpHost::logBackgroundMessage(
+  const MapDocument* document, const LogLevel level, const std::string_view message)
+{
+  if (!m_consoleHook)
+  {
+    return;
+  }
+
+  // the document may have been closed if the message was logged on another thread
+  const auto known =
+    std::ranges::any_of(
+      m_backgroundDocuments,
+      [&](const auto& entry) { return entry->document.get() == document; })
+    || std::ranges::any_of(m_closedBackgroundDocuments, [&](const auto& entry) {
+         return entry->document.get() == document;
+       });
+  auto documentName = known ? document->map().path().filename().string() : std::string{};
+  m_consoleHook->buffer().add(level, message, document, std::move(documentName));
+}
+
+void QtMcpHost::autosaveBackgroundDocuments()
+{
+  for (const auto& backgroundDocument : m_backgroundDocuments)
+  {
+    backgroundDocument->document->triggerAutosave();
+  }
 }
 
 mcp::DocumentInfo QtMcpHost::documentInfo(const MapDocument& document)
@@ -434,9 +702,10 @@ void QtMcpHost::assignDocumentIds()
 
   // Forget documents that are no longer open. Their ids are never reused.
   std::erase_if(m_documentIds, [&](const auto& entry) {
-    return std::ranges::none_of(mapWindows, [&](const auto* mapWindow) {
-      return &mapWindow->document() == entry.first;
-    });
+    return entry.first != m_documentBeingShown && !findBackgroundDocument(*entry.first)
+           && std::ranges::none_of(mapWindows, [&](const auto* mapWindow) {
+                return &mapWindow->document() == entry.first;
+              });
   });
 
   // The most recently focused window comes first, so older windows receive their ids

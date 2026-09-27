@@ -78,6 +78,18 @@ Field unsavedChangesField(const std::string& action)
         "discarding their work.");
 }
 
+Field windowField()
+{
+  return field("window", boolean().defaultsTo(true))
+    .describe(
+      "false: open the document in the background, without an editor window, so that "
+      "the user's windows are not disturbed and no document is replaced. It is listed "
+      "with background: true and works with all tools except the user view, camera and "
+      "action tools. Its unsaved changes are discarded without asking when the editor "
+      "quits or the MCP server stops: save it with document_save_as, or give it a "
+      "window with document_show");
+}
+
 Schema documentInfoSchema()
 {
   return object(
@@ -89,6 +101,8 @@ Schema documentInfoSchema()
              field("format", string()),
              field("modified", boolean()),
              field("focused", boolean()),
+             field("background", boolean())
+               .describe("Whether it has no editor window (document_show gives it one)"),
              field("active", boolean()),
              field("activeIn", array(string())),
              field("gamePath", string()).describe("Configured game folder ('' if unset)"),
@@ -350,7 +364,10 @@ ToolResult documentNew(CallContext& context, const Args& args)
     format = parsed.value();
   }
 
-  const auto replaced = host.documentHost().documentToReplace();
+  // a background document never replaces the document of the window
+  const auto background = !args.get<bool>("window");
+  const auto replaced =
+    background ? std::nullopt : host.documentHost().documentToReplace();
   if (replaced)
   {
     if (auto error = checkReplace(context, *replaced))
@@ -380,15 +397,16 @@ ToolResult documentNew(CallContext& context, const Args& args)
     return Json{
       {"wouldDo",
        fmt::format(
-         "create a new {} map in {} format{}",
+         "create a new {} map in {} format{}{}",
          config.name,
          mdl::formatName(format),
+         background ? " in the background" : "",
          replaced ? " replacing " + describeDocument(*replaced) : "")},
       {"initialMap", initialMapValue},
     };
   }
 
-  const auto created = host.documentHost().createDocument(*gameInfo, format);
+  const auto created = host.documentHost().createDocument(*gameInfo, format, background);
   if (created.is_error())
   {
     return makeError(
@@ -576,7 +594,9 @@ void documentOpen(CallContext& context, const Args& args, ToolCompletion complet
     return;
   }
 
-  const auto replaced = host.documentHost().documentToReplace();
+  const auto background = !args.get<bool>("window");
+  const auto replaced =
+    background ? std::nullopt : host.documentHost().documentToReplace();
   if (replaced)
   {
     if (auto error = checkReplace(context, *replaced))
@@ -603,10 +623,11 @@ void documentOpen(CallContext& context, const Args& args, ToolCompletion complet
     completion(Json{
       {"wouldDo",
        fmt::format(
-         "open {} as a {} map in {}{}",
+         "open {} as a {} map in {}{}{}",
          plan.path,
          plan.gameInfo->gameConfig.name,
          formatDescription,
+         background ? " in the background" : "",
          replaced ? " replacing " + describeDocument(*replaced) : "")},
     });
     return;
@@ -622,7 +643,7 @@ void documentOpen(CallContext& context, const Args& args, ToolCompletion complet
       formatDescription));
 
   // Load in a later step so that a cancellation sent meanwhile is processed
-  context.defer([&context, plan, completion]() {
+  context.defer([&context, plan, background, completion]() {
     if (context.cancelled())
     {
       completion(makeError(
@@ -631,8 +652,8 @@ void documentOpen(CallContext& context, const Args& args, ToolCompletion complet
     }
 
     context.progress(1, 3, fmt::format("Loading {}", plan.path.filename()));
-    const auto loaded =
-      context.host().documentHost().loadDocument(*plan.gameInfo, plan.format, plan.path);
+    const auto loaded = context.host().documentHost().loadDocument(
+      *plan.gameInfo, plan.format, plan.path, background);
     if (loaded.is_error())
     {
       completion(makeError(
@@ -875,6 +896,95 @@ ToolResult documentRevert(CallContext& context, const Args& args)
     {"document", documentInfo(context.server(), document, context.session())},
     {"idsInvalidated", true},
     {"loadMessages", toJson(context.loggedProblems())},
+  };
+}
+
+// document_show
+
+ToolResult documentShow(CallContext& context, const Args& args)
+{
+  auto& server = context.server();
+
+  auto document = std::optional<DocumentInfo>{};
+  if (const auto documentId = args.getOptional<std::string>("document"))
+  {
+    document = server.findDocument(*documentId);
+    if (!document)
+    {
+      return makeError(
+        ErrorCode::DocumentNotFound,
+        fmt::format("Document {} is not open.", *documentId),
+        "Use document_list to see the open documents.");
+    }
+  }
+  else
+  {
+    auto target = server.targetDocument(context.session());
+    if (target.source != DocumentTarget::Source::Active || !target.document)
+    {
+      return makeError(
+        ErrorCode::NoDocument,
+        "document_show only acts on the document named by 'document' or on this "
+        "session's active document, and this session has no open active document.",
+        "Pass 'document', e.g. {\"document\": \"doc:2\"}; document_list marks "
+        "background documents with background: true.");
+    }
+    document = std::move(target.document);
+  }
+
+  if (!document->background)
+  {
+    return Json{
+      {"document", documentInfo(server, *document, context.session())},
+      {"alreadyShown", true},
+    };
+  }
+
+  // the new window acts as if the document was loaded, which would drop the transaction
+  if (server.documentState(*document->document).transaction)
+  {
+    return makeError(
+      ErrorCode::TransactionActive,
+      fmt::format("{} has an open agent transaction.", describeDocument(*document)),
+      "Commit it with transaction_commit or roll it back with transaction_rollback, "
+      "then show the document.");
+  }
+
+  if (const auto shown = context.host().documentHost().documentToReplace())
+  {
+    return makeError(
+      ErrorCode::OperationFailed,
+      fmt::format(
+        "The editor shows one document at a time (single-window mode) and shows {}; "
+        "{} cannot get a window without replacing it.",
+        describeDocument(*shown),
+        describeDocument(*document)),
+      "Keep working on it in the background and save it with document_save_as, so that "
+      "the user can open it later, or ask the user to turn off single-window mode or to "
+      "close the shown document.");
+  }
+
+  if (context.dryRun())
+  {
+    return Json{
+      {"wouldDo",
+       fmt::format("show {} in a new editor window", describeDocument(*document))},
+    };
+  }
+
+  if (const auto shown = context.host().documentHost().showDocument(*document->document);
+      shown.is_error())
+  {
+    return makeError(
+      ErrorCode::OperationFailed,
+      fmt::format(
+        "Could not show {}: {}", describeDocument(*document), errorMessage(shown)));
+  }
+
+  const auto updated = server.findDocument(document->id).value_or(*document);
+  return Json{
+    {"document", documentInfo(server, updated, context.session())},
+    {"alreadyShown", false},
   };
 }
 
@@ -1148,14 +1258,19 @@ void registerDocumentTools(ToolRegistry& registry)
         "from the game's initial map template for the format if it has one (otherwise "
         "with a single 128x128x32 brush, or empty for some games); 'initialObjects' "
         "lists these objects, delete them with objects_delete if you build from scratch. "
-        "game_list gives game and format names; save it with document_save_as. Example: "
-        "{\"game\": \"Quake\", \"format\": \"Valve\"}")
+        "game_list gives game and format names; save it with document_save_as. With "
+        "window: false the map is a background document without a window (for prefabs "
+        "and experiments that should not disturb the user; it is discarded unsaved when "
+        "the editor quits, so save it). Examples: "
+        "{\"game\": \"Quake\", \"format\": \"Valve\"}, "
+        "{\"game\": \"Quake\", \"window\": false}")
       .input(object({
         field("game", string())
           .required()
           .describe("Game name from game_list, e.g. 'Quake'"),
         field("format", string())
           .describe("Map format, e.g. 'Valve' or 'Standard'; default: the game's first"),
+        windowField(),
         unsavedChangesField("replaced (only in single-window mode)"),
       }))
       .output(object({
@@ -1186,12 +1301,16 @@ void registerDocumentTools(ToolRegistry& registry)
         "detected from the content). Returns the document and any warnings logged while "
         "loading (missing materials, definition problems). If the file is already open, "
         "returns that document (alreadyOpen: true) without reloading; use "
-        "document_revert to reload. Reports progress; can be cancelled until loading "
-        "starts. Example: {\"path\": \"/home/me/maps/e1m1.map\"}")
+        "document_revert to reload. With window: false the map is opened as a background "
+        "document without a window (discarded unsaved when the editor quits, so save "
+        "it). Reports progress; can be cancelled until loading starts. Examples: "
+        "{\"path\": \"/home/me/maps/e1m1.map\"}, "
+        "{\"path\": \"/home/me/maps/prefab.map\", \"window\": false}")
       .input(object({
         field("path", string()).required().describe("Absolute path of the .map file"),
         field("game", string()).describe("Game name from game_list; default: detected"),
         field("format", string()).describe("Map format name; default: detected"),
+        windowField(),
         unsavedChangesField("replaced (only in single-window mode)"),
       }))
       .output(object({
@@ -1257,7 +1376,8 @@ void registerDocumentTools(ToolRegistry& registry)
     ToolDef{"document_close"}
       .title("Close Document")
       .description(
-        "Closes the document and its window (not undoable): the one named by "
+        "Closes the document and its window, if it has one (not undoable): the one named "
+        "by "
         "'document', or this session's active document; it never falls back to the "
         "focused window. Other sessions that had it active get ACTIVE_DOCUMENT_CLOSED "
         "until they choose another one. With unsaved changes, "
@@ -1304,6 +1424,34 @@ void registerDocumentTools(ToolRegistry& registry)
       .focusFallback(false)
       .destructive()
       .handler(documentRevert));
+
+  registry.add(
+    ToolDef{"document_show"}
+      .title("Show Document")
+      .description(
+        "Gives a background document (document_new / document_open with window: false) "
+        "its own editor window, which takes the focus, so that the user can see it "
+        "(not undoable). The document keeps its handle, object ids, undo history and "
+        "unsaved changes, and stays the active document of the sessions that had it. "
+        "Acts on the document named by 'document' or on this session's active "
+        "document. Returns alreadyShown: true for a document that has a window. Fails "
+        "with TRANSACTION_ACTIVE while an agent transaction is open on it, and with "
+        "OPERATION_FAILED in single-window mode while another document is shown. "
+        "Example: {\"document\": \"doc:3\"}")
+      .input(object({
+        field("document", documentId())
+          .describe("The background document, e.g. 'doc:3'. Default: this session's "
+                    "active document"),
+      }))
+      .output(object({
+        field("document", documentInfoSchema()),
+        field("alreadyShown", boolean())
+          .describe("True: the document already had a window; nothing changed"),
+        field("wouldDo", wouldDoField()),
+      }))
+      .mutation(Mutation::External)
+      .documentUse(DocumentUse::None)
+      .handler(documentShow));
 
   registry.add(
     ToolDef{"document_recent"}

@@ -83,6 +83,82 @@ ToolError unknownGameError(McpHost& host, const std::string_view name)
       kdl::str_join(gameNames(host), ", ")));
 }
 
+void ItemErrors::add(const size_t index, std::string message)
+{
+  m_errors.push_back(Json{{"index", index}, {"message", std::move(message)}});
+}
+
+void ItemErrors::add(const size_t index, const ToolError& error)
+{
+  auto item = Json{{"index", index}, {"message", error.message}};
+  if (error.code != ErrorCode::InvalidArgument)
+  {
+    item["code"] = std::string{toString(error.code)};
+  }
+  if (!error.hint.empty())
+  {
+    item["hint"] = error.hint;
+  }
+  m_errors.push_back(std::move(item));
+}
+
+bool ItemErrors::empty() const
+{
+  return m_errors.empty();
+}
+
+ToolError ItemErrors::error(const size_t itemCount, std::string hint) const
+{
+  constexpr auto MaxInMessage = size_t(3);
+
+  auto indices = std::vector<size_t>{};
+  auto parts = std::vector<std::string>{};
+  for (const auto& item : m_errors)
+  {
+    const auto index = item["index"].get<size_t>();
+    if (std::ranges::find(indices, index) == indices.end())
+    {
+      indices.push_back(index);
+    }
+    if (parts.size() < MaxInMessage)
+    {
+      parts.push_back(
+        fmt::format("items[{}]: {}", index, item["message"].get<std::string>()));
+    }
+  }
+  auto message = fmt::format(
+    "{} of {} items are invalid, nothing was created. {}{}",
+    indices.size(),
+    itemCount,
+    kdl::str_join(parts, " "),
+    m_errors.size() > MaxInMessage
+      ? fmt::format(
+          " ({} more problems in details.errors)", m_errors.size() - MaxInMessage)
+      : std::string{});
+  auto error = makeError(ErrorCode::InvalidArgument, std::move(message), std::move(hint));
+  error.details["errors"] = m_errors;
+  return error;
+}
+
+std::optional<ToolError> backgroundDocumentError(
+  const DocumentInfo& document, const std::string_view what)
+{
+  if (!document.background)
+  {
+    return std::nullopt;
+  }
+  return makeError(
+    ErrorCode::DocumentInBackground,
+    fmt::format(
+      "{} need an editor window, and {} is a background document without one.",
+      what,
+      document.id),
+    fmt::format(
+      "Look at it with agent cameras (view_snapshot), or give it a window with "
+      "document_show {{\"document\": \"{}\"}}.",
+      document.id));
+}
+
 std::filesystem::path gamePath(const mdl::GameInfo& gameInfo)
 {
   return pref(gameInfo.gamePathPreference);

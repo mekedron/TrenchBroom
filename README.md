@@ -5,7 +5,7 @@
 > [!IMPORTANT]
 > **This is a fork with an MCP server for AI agents.** An agent like Claude Code can open this editor and build maps with you: geometry, entities and NPCs, textures that look right, snapshots from its own cameras to check its work, compiling, and starting the game. Highlights:
 >
-> - **198 tools, 9 prompts**, 98.7% of the editor's actions reachable
+> - **202 tools, 9 prompts**, 98.7% of the editor's actions reachable
 > - **Agent vision**: offscreen snapshots from the agent's own cameras; pick objects by pixel
 > - **Understands space**: rooms, openings, free spots on walls and floors, walkability
 > - **Catches problems as it goes**: z-fighting, leaks before compiling, models stuck in furniture, stretched textures

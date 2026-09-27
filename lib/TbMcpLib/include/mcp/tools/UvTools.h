@@ -27,15 +27,18 @@
 
 #include "vm/vec.h"
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb::mdl
 {
 class BrushFace;
 class BrushFaceHandle;
+class Node;
 struct UpdateBrushFaceAttributes;
 } // namespace tb::mdl
 
@@ -116,6 +119,58 @@ std::optional<mdl::UpdateBrushFaceAttributes> aspectFitUpdate(
  */
 std::optional<mdl::UpdateBrushFaceAttributes> typicalFitUpdate(
   const mdl::BrushFace& face, const UvFitProfiles& profiles);
+
+/**
+ * The material's typical scale adjusted to whole repeats (at least one) on both axes,
+ * keeping the signs of the current scale, justified to the face's edge. nullopt if the
+ * material is not loaded or the face has no extent.
+ */
+std::optional<mdl::UpdateBrushFaceAttributes> wholeRepeatsFitUpdate(
+  const mdl::BrushFace& face, const UvFitProfiles& profiles);
+
+/**
+ * World-aligned (paraxial) UV axes at the material's typical scale, offset 0 and rotation
+ * 0, so that the textures of adjacent faces continue across them. nullopt if the material
+ * is not loaded.
+ */
+std::optional<mdl::UpdateBrushFaceAttributes> worldAlignedUpdate(
+  const mdl::BrushFace& face, const UvFitProfiles& profiles);
+
+/**
+ * Applies an update computed per face in one command for all faces, without changing
+ * the selection; faces for which the function returns nothing are left unchanged.
+ * Fails with OPERATION_FAILED if an update is invalid (e.g. scale 0).
+ */
+ToolResult applyUvUpdates(
+  CallContext& context,
+  const std::vector<mdl::BrushFaceHandle>& faces,
+  const std::function<
+    std::optional<mdl::UpdateBrushFaceAttributes>(const mdl::BrushFace&)>& updateFor);
+
+/** How the faces of new objects are aligned (the `uv` argument of the import tools). */
+enum class UvMode
+{
+  /** The UVs of the source. */
+  Keep,
+  /** uv_align typical: the material's typical scale, justified to each face's edge. */
+  Typical,
+  /** The typical scale rounded to whole repeats per face, justified. */
+  Fit,
+  /** World-aligned axes at the typical scale: textures continue across brushes. */
+  World,
+};
+
+std::optional<UvMode> uvModeFromString(std::string_view name);
+
+/**
+ * Aligns all brush faces of the given nodes (and their descendants) with the given mode
+ * in one command. Faces whose material is not loaded keep their UVs
+ * (MATERIAL_NOT_LOADED); materials with only the game's default scale warn with
+ * TYPICAL_SCALE_DEFAULT. Returns {mode, faces, skipped, typicalScales: {material:
+ * {scale, source}}}.
+ */
+Result<Json, ToolError> alignNodeUvs(
+  CallContext& context, const std::vector<mdl::Node*>& nodes, UvMode mode);
 
 /**
  * [{"id", "material", "scale", "repeats", "typicalScale"?}] for the first 50 faces:

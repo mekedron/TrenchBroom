@@ -24,7 +24,7 @@ namespace tb::mcp
 class ToolRegistry;
 
 /** Registers the brush creation tools: brush_create_box, brush_create_shape,
-brush_create_hull, room_create and opening_cut. */
+brush_create_hull, room_create, opening_cut and brushes_create. */
 void registerGeometryTools(ToolRegistry& registry);
 
 } // namespace tb::mcp

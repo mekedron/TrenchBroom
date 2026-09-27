@@ -8,8 +8,10 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AgentCamera.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Annotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BackgroundDocuments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BridgeSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BulkCreateTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CameraProjection.cpp
@@ -21,6 +23,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ConsoleTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DeferredChecks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTargeting.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EngineTools.cpp
@@ -83,6 +86,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamNode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UpstreamQuickFixes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvCheck.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvModes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvWarnings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ValidationTools.cpp

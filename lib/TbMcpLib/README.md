@@ -79,7 +79,8 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `ObjectIds` (`IdRegistry`): stable object ids such as `brush:1042`, based on
   `mdl::Node::runtimeId()`, surviving undo/redo and linked group updates.
 - `ChangeCollector`: created / modified / removed ids and introduced issues of a call (editor validators and
-  the MCP placement checks).
+  the MCP placement checks), and their `issuesSummary`. A deferred check series (`checks: "defer"`,
+  `DocumentState::deferredChecks`) keeps one collector across calls and reports the issues of all of them at once.
 - `Pagination`: cursors, limits and field selection for list tools.
 - `ListDetail`: the `detail` level of modifying calls (summary / ids / full); cuts long id lists in the change
   report and the tool's result (`truncateIdLists`), counts them per kind and describes them in `truncatedLists`;

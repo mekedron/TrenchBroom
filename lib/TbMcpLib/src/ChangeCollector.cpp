@@ -32,6 +32,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <functional>
+#include <iterator>
+#include <map>
 #include <utility>
 
 namespace tb::mcp
@@ -222,6 +225,62 @@ Json issuesToJson(const std::vector<IntroducedIssue>& issues, const size_t limit
   return result;
 }
 
+Json issuesSummaryJson(
+  const std::vector<IntroducedIssue>& issues, const size_t examplesPerCode)
+{
+  struct CodeSummary
+  {
+    std::string code;
+    std::string source;
+    size_t count = 0;
+    Json examples = Json::array();
+  };
+
+  auto codes = std::vector<CodeSummary>{};
+  auto bySource = std::map<std::string, size_t>{};
+  for (const auto& issue : issues)
+  {
+    ++bySource[issue.source];
+    auto it = std::ranges::find_if(codes, [&](const auto& summary) {
+      return summary.code == issue.code && summary.source == issue.source;
+    });
+    if (it == codes.end())
+    {
+      codes.push_back(CodeSummary{issue.code, issue.source});
+      it = std::prev(codes.end());
+    }
+    ++it->count;
+    if (it->examples.size() < examplesPerCode)
+    {
+      it->examples.push_back(
+        Json{{"objectId", issue.objectId}, {"description", issue.description}});
+    }
+  }
+  std::ranges::stable_sort(
+    codes, std::greater<>{}, [](const auto& summary) { return summary.count; });
+
+  auto byCode = Json::array();
+  for (auto& summary : codes)
+  {
+    byCode.push_back(Json{
+      {"code", std::move(summary.code)},
+      {"source", std::move(summary.source)},
+      {"count", summary.count},
+      {"examples", std::move(summary.examples)},
+    });
+  }
+  auto sources = Json::object();
+  for (const auto& [source, count] : bySource)
+  {
+    sources[source] = count;
+  }
+  return Json{
+    {"total", issues.size()},
+    {"bySource", std::move(sources)},
+    {"byCode", std::move(byCode)},
+  };
+}
+
 Json selectionSummary(const mdl::Map& map, const IdRegistry& ids, const size_t limit)
 {
   const auto& selection = map.selection();
@@ -267,9 +326,11 @@ Json selectionSummary(const mdl::Map& map, const IdRegistry& ids, const size_t l
 ChangeCollector::ChangeCollector(
   ui::MapDocument& document,
   IdRegistry& ids,
-  std::optional<PlacementTrackerOptions> placement)
+  std::optional<PlacementTrackerOptions> placement,
+  const bool collectIssues)
   : m_document{document}
   , m_ids{ids}
+  , m_collectIssues{collectIssues}
 {
   if (placement)
   {
@@ -378,13 +439,16 @@ ChangeReport ChangeCollector::finish()
     }
   };
 
-  for (const auto& id : report.created)
+  if (m_collectIssues)
   {
-    collectIssues(id);
-  }
-  for (const auto& id : report.modified)
-  {
-    collectIssues(id);
+    for (const auto& id : report.created)
+    {
+      collectIssues(id);
+    }
+    for (const auto& id : report.modified)
+    {
+      collectIssues(id);
+    }
   }
 
   if (m_placement)
@@ -403,6 +467,10 @@ ChangeReport ChangeCollector::finish()
 
 void ChangeCollector::snapshotIssues(const std::vector<mdl::Node*>& nodes)
 {
+  if (!m_collectIssues)
+  {
+    return;
+  }
   const auto validators = m_document.map().worldNode().registeredValidators();
   for (auto* node : nodes)
   {

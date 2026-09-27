@@ -57,6 +57,10 @@ Schema documentSummarySchema()
     field("format", string()).describe("Map format, e.g. 'Valve'"),
     field("modified", boolean()).describe("Whether there are unsaved changes"),
     field("focused", boolean()).describe("Whether its window is the focused window"),
+    field("background", boolean())
+      .describe(
+        "Whether it is a background document without an editor window (document_new / "
+        "document_open with window: false); document_show gives it one"),
     field("active", boolean())
       .describe("Whether it is this session's active document, which calls without "
                 "'document' act on"),
@@ -198,6 +202,7 @@ Json documentSummary(
     {"format", mdl::formatName(map.worldNode().mapFormat())},
     {"modified", map.modified()},
     {"focused", document.focused},
+    {"background", document.background},
     {"active", session.activeDocumentId == document.id},
     {"activeIn", server.sessionsWithActiveDocument(document.id)},
   };
