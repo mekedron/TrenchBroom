@@ -41,6 +41,12 @@ the texture (128 for `C1A1_W1`); a panel texture such as `METAL_WALL04` must not
 vertically; size a picture texture's face from its texture (keyboard `FIFTIES_KEY` 80×32 →
 face 40×16).
 
+The TrenchBroom knowledge folder already holds notes for the textures used in the maps so
+far (`material_notes_get`): panels such as `GEN_VEND1`, doors, screens, signs and chargers
+with their face sizes. Add every texture you learn with `material_notes_set {"scope":"game"}`;
+`material_corpus_scan` on decompiled maps adds scales; it merges split faces and warns
+(`DECOMPILED_INPUT`), but walls still mostly come out as tiles, so notes stay the best source.
+
 ### Choosing
 
 `scripts/texsheet.py list WAD --grep KEY` and
@@ -142,7 +148,9 @@ detail goes into `func_wall`.
 ## Compile and test
 
 - The compiled BSP is copied to `<game>/valve/maps`.
-- Launch: `steam -applaunch 70 -condebug -dev +developer 2 +map <map>`. The console log is
+- Launch: `engine_launch` with the engine profile `Half-Life (Steam)` (path `/usr/bin/steam`,
+  parameters `-applaunch 70 -condebug -dev +developer 2 +map ${MAP_BASE_NAME}`; create it with
+  `engine_profile_save` if missing), or the same command from a shell. The console log is
   written to `<game>/qconsole.log` (the game root, not `valve/`). Check for
   `script "..." using monster "..."` (scripts grabbed their NPCs), `stuck in wall`,
   `Host_Error`, missing models and sounds.

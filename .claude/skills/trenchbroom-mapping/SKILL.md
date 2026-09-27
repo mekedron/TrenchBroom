@@ -74,9 +74,10 @@ in one picture.
   `camera_set` *(untested)* places it. Use this only when you want the user to look; for your own
   checks use agent cameras and snapshots.
 - From picture to object: every snapshot has a `snapshotId`;
-  `view_pick {"snapshot":"<snapshotId or keepAs name>","pixels":[{"x":..,"y":..}]}` *(untested)*
-  returns the object, face id, group, layer, hit point and normal under each pixel — no need to
-  search by region.
+  `view_pick {"snapshot":"<snapshotId or keepAs name>","pixels":[{"x":..,"y":..}]}`
+  returns the object, face id, group, layer, hit point, normal and distance under each pixel — no
+  need to search by region. It also explains a bad picture: a hit 9 units from the camera means
+  the camera stands against a wall.
 - Annotated snapshots *(untested)*: `"annotations"` with labels (id, classname or group name,
   size), a coordinate grid on floors and walls, a compass, and a player box for scale.
 - The editor preview differs from the game: models show their default pose, not a scripted
@@ -89,23 +90,31 @@ in one picture.
 
 Think in rooms, not brushes:
 
-- `spaces_list` *(untested)* — enclosed rooms with stable `space:` ids, bounds, floor and ceiling
+- `spaces_list` — enclosed rooms with stable `space:` ids, bounds, floor and ceiling
   heights, area, openings (doorways, windows, doors) and neighbours, and whether each is sealed.
   `openingSize` (default 96) is the largest opening that still separates two rooms: raise it for
   wide doorways, but keep it below the rooms' smallest inner size (usually their height) or they
   merge (`OPENING_SIZE_TOO_LARGE`). Pass the same `openingSize` to every tool that takes space ids.
-- `surroundings {"point":[..]}` *(untested)* — the room of a point, distances to the walls (with
+  Gaps that touch a room only along an edge keep it sealed (the compiler does not report them
+  as leaks) and come as the `EDGE_ONLY_GAPS` warning; close them anyway. Pockets such as the
+  space above a low sauna ceiling or under a counter show up as separate small spaces.
+- `surroundings {"point":[..]}` — the room of a point, distances to the walls (with
   their faces), floor, ceiling and nearby objects, as data and a sentence. Use it to look around
   without rendering.
-- `free_spots` *(untested)* — free positions for a box of a given size on the floor, against a
+- `free_spots` — free positions for a box of a given size on the floor, against a
   wall (with the wall normal and face id — for posters, machines, lights) or on the ceiling.
-- `walkable_plan` *(untested)* — where a player can really walk and reach, as text and image.
-- Keep the map's structure in its manifest *(untested)*: `map_manifest_set` stores spaces and
+  Use `objectDistance` to keep clear of props and `heightAboveFloor` for wall items.
+- `walkable_plan` — where a player can really walk and reach, as text and image, with the
+  unreachable areas listed. Tabletops and closed props are expected there; check real rooms
+  and pools in the game.
+- Keep the map's structure in its manifest: `map_manifest_set` stores spaces and
   their purpose, key points, notes and cameras in `<map>.mcp.json` next to the map;
-  `map_manifest_get` restores them in a later session.
-- Every modifying call reports the problems it introduced in `issuesIntroduced` *(untested)*:
+  `map_manifest_get {"restoreCameras":true}` restores them in a later session. `saveCameras`
+  takes `all` or a list of camera names.
+- Every modifying call reports the problems it introduced in `issuesIntroduced`:
   `Z_FIGHTING`, `ENTITY_OUTSIDE_HULL` (with the nearest gap), model placement and
-  `UV_ASPECT_DISTORTION`. Fix them right away; `issues_list` *(untested)* shows all of them plus
+  `UV_ASPECT_DISTORTION`. Fix them right away (a new filler brush reaching into a ceiling is
+  reported at once); `issues_list` *(untested)* shows all of them plus
   the editor's own checks.
 
 ## Units and proportions
@@ -125,8 +134,8 @@ derive the rest from them:
 
 Designers of classic engines almost always use **scale 1** and size the geometry to the
 texture; smaller scales appear on small detail panels and screens. Before texturing, learn
-how the game's original maps use a texture: `material_usage` *(untested)* (typical scale, face size, panel
-or tile; after `material_corpus_scan` *(untested)* on a folder of the game's map sources), or the game's
+how the game's original maps use a texture: `material_usage` (typical scale, face size, panel
+or tile; after `material_corpus_scan` on a folder of the game's map sources), or the game's
 statistics script if the game skill has one.
 
 Consequences:
@@ -137,7 +146,13 @@ Consequences:
   aspect matches the face (`material_fit_geometry` *(untested)* gives the size for a panel).
 - Give every face its own role: a front-panel texture only on the front face, neutral
   material on the sides and top. Never leave a picture texture on all six faces of a box.
-- Run `uv_check` *(untested)* on each finished area.
+- Run `uv_check` on each finished area. It measures against `material_usage`; without a corpus
+  or notes it expects square texels, so accept findings that are deliberate (a panel stretched
+  to a wall height) and fix seams and fractional panel repeats.
+- A corpus built from decompiled maps knows scales better than kinds: decompiling splits faces;
+  the scan merges them and warns (`DECOMPILED_INPUT`), but many panels still look like tiles. Record panels, trims and their face sizes with
+  `material_notes_set` as soon as you learn them; notes override all statistics and persist
+  for the game.
 
 ### Choosing
 
@@ -227,9 +242,10 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   including defaults the editor adds.
 - Place NPCs and props against their real model bounds: `entity_model_info` *(untested)* lists
   animations with their bounds and the property that selects them; `entity_animation_set`
-  *(untested)* switches the animation. A pose that reaches below the origin needs the origin that
+  switches the animation — set the pose the NPC will have in the game (e.g. the scripted idle)
+  so the editor preview and the placement checks see the real body. A pose that reaches below the origin needs the origin that
   much above the surface. `entity_create_point {"dropToFloor":true,"dropUsing":"model"}`
-  *(untested)* drops by the model bounds, and `entity_placement_check` *(untested)* reports models
+  *(untested)* drops by the model bounds, and `entity_placement_check` reports models
   in brushes or floating (`MODEL_*` warnings also come from creating and moving entities). Seated
   poses always touch their seat — judge them with a snapshot. Check the NPC's hull with
   `space_check` one unit above the floor.
@@ -246,9 +262,11 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
 
 ## Checking and fixing the map
 
-- `map_check` *(untested)* runs the agent checks: entities in walls or floating, a missing
+- `map_check` runs the agent checks: entities in walls or floating, a missing
   player start, broken links, missing materials, entities outside rooms — each finding with a
-  suggested fix.
+  suggested fix. Review before applying: seated NPCs touch furniture, props inside glass
+  cases intersect them, and an entity that is named but never triggered can be deliberate
+  (the input that keeps a locked door locked).
 - `issue_fix` *(untested)* applies quick fixes by issue id, code or object (one undo step);
   `issue_hide` / `issue_show` *(untested)* hide accepted issues; `validators_set` *(untested)*
   turns checks off for a document.
@@ -263,7 +281,8 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   map (`leavesMapAt`) and close the gap; otherwise move the entity inside. Compile again and
   `pointfile_unload` afterwards.
 - Launch the game with the map and its console logging on (command in the game skill, or
-  `engine_launch` *(untested)* with a configured engine profile, which returns the process id),
+  `engine_launch` with a configured engine profile, which returns the process id; create one
+  once with `engine_profile_save` and check it with `engine_launch {"dryRun":true}`),
   then read the log for errors, missing assets and stuck NPCs.
 - Stop the game by its exact process name (`kill $(pgrep -x <name>)`) — never `pkill -f`, it
   matches the shell running the command. Ask before restarting the game while the user is
