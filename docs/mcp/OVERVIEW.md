@@ -17,7 +17,7 @@ The agent works in the live editor window next to you. Every edit it makes shows
 | Editor coverage | 98.7% of the editor's menu and shortcut actions are reachable (390 of 395; the missing 5 are debug-only) |
 | Games | Every game TrenchBroom supports; tested most with Half-Life |
 | Transport | Streamable HTTP on `127.0.0.1:47100`, plus a stdio bridge (`TrenchBroomMcp`) for clients that only speak stdio |
-| Upstream footprint | 26 original files changed (+216/−14 lines); the rest is in new libraries |
+| Upstream footprint | 28 original files changed (+233/−15 lines, including this README); the rest is in new libraries |
 
 ## What an agent can do
 

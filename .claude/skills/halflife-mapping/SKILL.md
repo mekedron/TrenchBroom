@@ -22,8 +22,11 @@ ones (`zfight.py`, `mapio.py`) are in the trenchbroom-mapping skill.
   `multi_manager` keys or `m_iszEntity`; hide them with `issue_hide` instead of deleting names.
 - Sky: worldspawn `skyname` picks the skybox from `valve/gfx/env` (`night`, `city`, `black`, ...);
   without it the game shows the default desert sky.
-- `func_detail` (sdHLT) is not in the built-in FGD: the editor reports it as a missing
-  definition, the compiler handles it. Turn that validator off with `validators_set`.
+- `func_detail` and other sdHLT entities are not in the built-in FGD. Run
+  `entity_definitions_compose` *(untested)* once per map: it writes `<map>.mcp.fgd` from the game
+  FGD, the compiler FGD next to the configured tools and model expressions for `monster_generic`
+  and `cycler` (their models then show in the editor), and loads it. Validator settings you
+  change with `validators_set` are kept in the map manifest.
 
 ## Assets from other games
 
@@ -107,6 +110,11 @@ light. For others (e.g. the `~SPOT*` dance-floor tiles) add an `info_texlights` 
 with keys `"~SPOTBLUE" "20 90 255 120"`. The game logs `Can't init info_texlights` — harmless.
 
 ### How dark is too dark
+
+Check light without the game: `bsp_preview` *(untested)* renders the compiled BSP with its
+lightmaps from your cameras and reports dark and overexposed fractions per image, per region and
+per room (`"regions":"spaces"`). A one-off RAD option goes through
+`compile_run {"toolArgs":{"rad":"-ambient 0.09 0.08 0.10"}}` *(untested)* without a new profile.
 
 A club, a basement or a maze lit only by coloured spots reads as pitch black on a normal
 monitor. Give every walkable area a dim fill (a `light` of 70–120 every ~250 units in a maze)
@@ -203,8 +211,10 @@ detail goes into `func_wall`.
 - **Entity budget**: the engine allocates 900 edicts by default; a detailed map with hundreds of
   props, NPCs and scripts fails with `ED_Alloc: no free edicts`. Unnamed `light`s are removed at
   spawn, everything else counts (each `env_beam` adds its beam at run time). Count the spawned
-  entities before release; above ~800 either cut props or launch with `-num_edicts 2048` (the
-  engine maximum) and say so in the map's notes.
+  entities before release — `map_check` *(untested)* reports it as `ENTITY_LIMIT_NEAR` /
+  `ENTITY_LIMIT_EXCEEDED` and checks NPC spawns like the engine (`NPC_STUCK`,
+  `NPC_NO_SUPPORT`, `NPC_DROPS`); above ~800 either cut props or launch with `-num_edicts 2048`
+  (the engine maximum) and say so in the map's notes.
 - **Screenshots from the game** (for checks and for publishing): add `trigger_camera`s
   (`spawnflags 4` freezes the player, `wait` = hold time) with `info_target`s, fired one after
   another by a `multi_manager` from a `trigger_auto`; keep them in a layer that is omitted from

@@ -302,11 +302,14 @@ check, compile and fix it:
   into sky contents.
 - **One script per area** writing a Valve 220 `.map` (brushes with textures fitted from the WAD
   sizes, `func_detail`/brush entities, point entities, named groups), imported with
-  `map_import {"targetLayer": ...}` into one layer per area. To update an area, select its layer
-  (`select_by {"layers": [...]}`), delete, import again. When a delete times out
-  (`BUSY_TIMEOUT` while the user works in the editor) do not import before it succeeded, or the
-  area doubles.
-- Subagents can build areas in parallel as scripts (they cannot share the editor): give them one
+  `map_import {"targetLayer": ...}` into one layer per area. To update an area use
+  `layer_replace {"layer":"layer:@<area>","path":..}` *(untested)* (or `map_import` with
+  `replaceLayer` / `replaceGroup`): the delete and the import are one undo step, so a failure
+  changes nothing and repeating it never doubles the area. Use `"uv":"typical"` to align the
+  imported faces instead of computing UVs in the script, and `"checks":"defer"` for a series of
+  imports.
+- Subagents can build areas in parallel as scripts, or in the editor in background documents
+  (`document_new {"window":false}` *(untested)*: each session keeps its own active document): give them one
   brief with the room boxes, doors, materials, units and naming rules, let each verify its output
   itself (z-fighting script, hulls against the parsed shell, light near every NPC), and review
   their imports with snapshots.
