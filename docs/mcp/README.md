@@ -4,6 +4,7 @@ Product documentation for an MCP (Model Context Protocol) server that lets AI ag
 
 | Document | Purpose |
 |---|---|
+| [OVERVIEW.md](OVERVIEW.md) | What the server does, highlights, getting started, and why this is a fork |
 | [01-PRD.md](01-PRD.md) | Vision, goals, users, product concept, non-functional requirements, phases, risks |
 | [02-editor-capabilities.md](02-editor-capabilities.md) | What TrenchBroom can do today — the baseline the server must cover, with gaps marked |
 | [03-functional-spec.md](03-functional-spec.md) | The full list of MCP tools, resources and prompts, grouped by domain, with priorities and a coverage matrix |

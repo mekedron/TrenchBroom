@@ -2,6 +2,21 @@
 
 [![TrenchBroom Icon](app/TrenchBroom/resources/graphics/images/AppIcon.png)](https://www.youtube.com/watch?v=shcAvnYp9ow)
 
+> [!IMPORTANT]
+> **This is a fork with an MCP server for AI agents.** An agent like Claude Code can open this editor and build maps with you: geometry, entities and NPCs, textures that look right, snapshots from its own cameras to check its work, compiling, and starting the game. Highlights:
+>
+> - **197 tools, 9 prompts**, 98.7% of the editor's actions reachable
+> - **Agent vision**: offscreen snapshots from the agent's own cameras; pick objects by pixel
+> - **Understands space**: rooms, openings, free spots on walls and floors, walkability
+> - **Catches problems as it goes**: z-fighting, leaks before compiling, models stuck in furniture, stretched textures
+> - **Texturing knowledge**: learns how a game's original maps use each texture
+> - **Compiles and plays**: Half-Life, Quake, Quake 2 and Quake 3 presets
+> - **Every edit is one Undo step**, live in your editor window
+>
+> Fun fact: **not a single line of the MCP code has been reviewed by a human.** It was written by AI agents as an experiment. With all respect to TrenchBroom's author, who rightly asks contributors to understand the code they submit, this lives in a fork rather than a pull request. It is not a serious contribution, but it is quite usable, and it turned out really cool.
+>
+> **[Read the MCP server overview →](docs/mcp/OVERVIEW.md)**
+
 TrenchBroom is a modern cross-platform level editor for Quake-engine based games.
 
 - Trailer:   https://www.youtube.com/watch?v=shcAvnYp9ow
