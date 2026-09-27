@@ -20,6 +20,10 @@ entity recipes and the compile and launch commands of that game:
 For a game without its own skill, use this one and learn the game's conventions from its
 original maps (see *Textures* and *Porting pieces of other maps*).
 
+**Untested tools.** Tools marked *(untested)* are implemented and covered by automated tests
+but have not been used on a real map yet. Use them, check the result with a snapshot, and
+report anything that behaves unexpectedly.
+
 Generic helper scripts live in `scripts/` next to this file (Python 3, numpy); game-specific
 ones are in the game skills.
 
@@ -37,6 +41,16 @@ ones are in the game skills.
    `normal` preset, launch the game and read its console log (see *Compile and test*).
 6. A document reload (`document_revert`, `document_open`) or an editor restart invalidates
    all object ids — query them again (`objects_find` by region, material or classname).
+
+## Keeping the map navigable
+
+- Put every object made of several brushes into a named group (`table_1`, `cash_desk`,
+  `dj_console`) with `group_create`, and every room into its own layer. Then objects are found
+  by name, and rooms or objects can be hidden or isolated for snapshots.
+- Repeated objects (all tables, all chairs) as linked groups: one edit updates all copies.
+- Name a camera per room with `agent_camera_set` and reuse it after every change.
+- Keep a short note of the rooms, their purpose and key points (spawn, doors, triggers) and
+  update it as the map grows.
 
 ## Seeing your work
 
@@ -77,8 +91,8 @@ derive the rest from them:
 
 Designers of classic engines almost always use **scale 1** and size the geometry to the
 texture; smaller scales appear on small detail panels and screens. Before texturing, learn
-how the game's original maps use a texture: `material_usage` (typical scale, face size, panel
-or tile; after `material_corpus_scan` on a folder of the game's map sources), or the game's
+how the game's original maps use a texture: `material_usage` *(untested)* (typical scale, face size, panel
+or tile; after `material_corpus_scan` *(untested)* on a folder of the game's map sources), or the game's
 statistics script if the game skill has one.
 
 Consequences:
@@ -86,10 +100,10 @@ Consequences:
 - A panel texture (one panel per wall height) must not repeat; fit it once to the wall height
   and keep U and V scale close to each other.
 - Never distort aspect: pick the brush size from the texture size, or pick a texture whose
-  aspect matches the face (`material_fit_geometry` gives the size for a panel).
+  aspect matches the face (`material_fit_geometry` *(untested)* gives the size for a panel).
 - Give every face its own role: a front-panel texture only on the front face, neutral
   material on the sides and top. Never leave a picture texture on all six faces of a box.
-- Run `uv_check` on each finished area.
+- Run `uv_check` *(untested)* on each finished area.
 
 ### Choosing
 
@@ -99,7 +113,11 @@ lie — judge by the picture. Keep the choices that work in the game skill.
 ### Aligning
 
 - Single face, exact fit: `uv_align {"operation":"fit","repeatU":1,"repeatV":1}`. For several
-  repeats choose counts that keep `scaleU ≈ scaleV`, or fit one axis and keep the aspect.
+  repeats choose counts that keep `scaleU ≈ scaleV`, or set one axis with `keepAspect` *(untested)*
+  (optionally `round` to whole repeats). `uv_align {"operation":"typical"}` *(untested)* applies
+  the material's typical scale and aligns it to the face.
+- Material and UV tools return `UV_*` warnings *(untested)* for stretched textures and fractional
+  panel repeats; fix them before moving on.
 - A wall made of several brushes (cut by doorways): `uv_align resetToWorld`, then
   `face_attributes_set` with one scale and offset for all of them, so the pattern continues.
   Offset for a panel to start at a corner: `offset = -(corner / scale) mod textureSize` along
@@ -170,9 +188,14 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   finds broken links.
 - `null` as a property value in `entity_create_*` and `entity_properties_set` removes the key,
   including defaults the editor adds.
-- Place NPCs and props against their real model bounds: `entity_model_info` lists animations
-  and their bounds; a pose that reaches below the origin needs the origin that much above the
-  surface. Check the NPC's hull with `space_check` one unit above the floor.
+- Place NPCs and props against their real model bounds: `entity_model_info` *(untested)* lists
+  animations with their bounds and the property that selects them; `entity_animation_set`
+  *(untested)* switches the animation. A pose that reaches below the origin needs the origin that
+  much above the surface. `entity_create_point {"dropToFloor":true,"dropUsing":"model"}`
+  *(untested)* drops by the model bounds, and `entity_placement_check` *(untested)* reports models
+  in brushes or floating (`MODEL_*` warnings also come from creating and moving entities). Seated
+  poses always touch their seat — judge them with a snapshot. Check the NPC's hull with
+  `space_check` one unit above the floor.
 - Items and props: `dropToFloor` onto floors and furniture.
 
 ## Compile and test
