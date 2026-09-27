@@ -40,7 +40,9 @@ ones are in the game skills.
 5. After each area: **look at it** (see *Seeing your work*), check z-fighting, compile with the
    `normal` preset, launch the game and read its console log (see *Compile and test*).
 6. A document reload (`document_revert`, `document_open`) or an editor restart invalidates
-   all object ids — query them again (`objects_find` by region, material or classname).
+   the ids of brushes and entities (layer and group ids survive) — query them again
+   (`objects_find` by region, material or classname). Agent cameras and kept snapshots are lost
+   when the MCP session reconnects: save cameras into the map manifest.
 
 ## Keeping the map navigable
 
@@ -71,9 +73,10 @@ in one picture.
 - Showing the user something: `camera_focus` *(untested)* moves the **user's** camera to objects;
   `camera_set` *(untested)* places it. Use this only when you want the user to look; for your own
   checks use agent cameras and snapshots.
-- From picture to object: every snapshot has a `snapshotId`; `view_pick {"snapshotId":..,"pixels":[[x,y],..]}`
-  *(untested)* returns the object, face id, group, layer, hit point and normal under each pixel —
-  no need to search by region.
+- From picture to object: every snapshot has a `snapshotId`;
+  `view_pick {"snapshot":"<snapshotId or keepAs name>","pixels":[{"x":..,"y":..}]}` *(untested)*
+  returns the object, face id, group, layer, hit point and normal under each pixel — no need to
+  search by region.
 - Annotated snapshots *(untested)*: `"annotations"` with labels (id, classname or group name,
   size), a coordinate grid on floors and walls, a compass, and a player box for scale.
 - The editor preview differs from the game: models show their default pose, not a scripted
@@ -88,6 +91,9 @@ Think in rooms, not brushes:
 
 - `spaces_list` *(untested)* — enclosed rooms with stable `space:` ids, bounds, floor and ceiling
   heights, area, openings (doorways, windows, doors) and neighbours, and whether each is sealed.
+  `openingSize` (default 96) is the largest opening that still separates two rooms: raise it for
+  wide doorways, but keep it below the rooms' smallest inner size (usually their height) or they
+  merge (`OPENING_SIZE_TOO_LARGE`). Pass the same `openingSize` to every tool that takes space ids.
 - `surroundings {"point":[..]}` *(untested)* — the room of a point, distances to the walls (with
   their faces), floor, ceiling and nearby objects, as data and a sentence. Use it to look around
   without rendering.
@@ -164,7 +170,8 @@ lie — judge by the picture. Keep the choices that work in the game skill.
   so that its outer faces **touch** the existing walls instead of overlapping them, or delete
   the duplicate wall.
 - Doorways: `opening_cut` with explicit `ids` of **every** wall brush in the way (both rooms'
-  walls and trim strips), reveal `material` = trim texture.
+  walls and trim strips), reveal `material` = trim texture. Walls inside a closed group need
+  `group_open` → `opening_cut` → `group_close`.
 - A floor under a doorway must belong to one room only; trim the other floor so their top
   faces do not overlap.
 - A sunken pool: a second `room_create` below the floor, delete its ceiling, `opening_cut` the
@@ -200,6 +207,8 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
   `keep` = `back` keeps the side opposite the normal.
 - Avoid `csg_subtract` with round cutters (dozens of overlapping fragments) and `csg_hollow` on
   polygonal brushes (messy walls); use shapes with `hollow` or the arch method.
+- Rows and rings of copies: `objects_array` (line, grid or circle, optionally rotated toward the
+  centre); its `count` includes the original.
 - Transform tools (`objects_move`, `objects_rotate`, `objects_flip`, ...) take brushes, point
   entities, brush entities (their brushes move with them) and groups. Rotating updates the
   angle properties of point and brush entities.
@@ -249,8 +258,10 @@ face). Fix by moving faces: `vertices_move {"ids":[..],"faces":[[...all vertices
 
 - `compile_run {"preset":"normal"}` then `compile_status`; the compiled map is copied into the
   game's `maps` folder. The compile log is `<map dir>/compile/<map>.log`.
-- Leak: `pointfile_load` → the path starts at the entity that is outside; move it inside and
-  compile again; `pointfile_unload` afterwards.
+- Leak: `pointfile_load` → the path runs from an entity to the void. Often the entity is fine
+  and a wall has a gap (a thin slit where brushes do not meet): look where the path leaves the
+  map (`leavesMapAt`) and close the gap; otherwise move the entity inside. Compile again and
+  `pointfile_unload` afterwards.
 - Launch the game with the map and its console logging on (command in the game skill, or
   `engine_launch` *(untested)* with a configured engine profile, which returns the process id),
   then read the log for errors, missing assets and stuck NPCs.

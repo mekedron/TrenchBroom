@@ -17,7 +17,9 @@ ones (`zfight.py`, `mapio.py`) are in the trenchbroom-mapping skill.
 - Game `Half-Life`, format `Valve`: `document_new {"game":"Half-Life","format":"Valve"}`.
 - `compile_tools_get {"game":"Half-Life"}` — `csg`, `bsp`, `vis`, `rad` must be `ok` (sdHLT or VHLT).
 - `materials_collections_set` with the WADs from `<game>/valve/`: `halflife.wad`; add `xeno.wad`
-  for Xen, `liquids.wad` for more water.
+  for Xen, `liquids.wad` for more water. The server stores their paths so compiling finds them.
+- The editor's "unused targetname" issues are false positives for Half-Life logic that is fired by
+  `multi_manager` keys or `m_iszEntity`; hide them with `issue_hide` instead of deleting names.
 
 ## Units
 
