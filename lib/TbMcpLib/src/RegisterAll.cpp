@@ -22,6 +22,7 @@
 #include "mcp/McpServer.h"
 #include "mcp/Resources.h"
 #include "mcp/tools/BrushEditTools.h"
+#include "mcp/tools/CompileTools.h"
 #include "mcp/tools/DocumentTools.h"
 #include "mcp/tools/EntityClassTools.h"
 #include "mcp/tools/EntityCreateTools.h"
@@ -61,7 +62,9 @@ void registerAll(McpServer& server)
   registerEntityClassTools(server.tools());
   registerEntityCreateTools(server.tools());
   registerEntityPropertyTools(server.tools());
+  registerCompileTools(server.tools());
   registerResources(server);
+  registerCompileResources(server.resources());
 }
 
 } // namespace tb::mcp

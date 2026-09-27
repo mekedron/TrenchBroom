@@ -9,6 +9,9 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityCreateTools.cpp

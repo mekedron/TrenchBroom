@@ -24,6 +24,8 @@
 #include "mcp/LogCapture.h"
 
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,6 +35,7 @@ namespace tb
 namespace mdl
 {
 class GameManager;
+struct CompilationProfile;
 struct GameInfo;
 enum class MapFormat;
 } // namespace mdl
@@ -114,10 +117,75 @@ public:
 };
 
 /**
+ * A compilation started with CompileHost::startCompile. Destroying a running job
+ * terminates it without calling its callbacks.
+ */
+class CompileJob
+{
+public:
+  virtual ~CompileJob();
+
+  /**
+   * The output so far as plain text, as the editor's compilation dialog shows it: the
+   * runner's "#### ..." lines and the output of the tools, lines separated by '\n'.
+   */
+  virtual std::string log() const = 0;
+
+  /** Whether the job is still running. */
+  virtual bool running() const = 0;
+
+  /**
+   * Terminates the running task; the remaining tasks are skipped. The runner logs
+   * "#### Terminated" and the job ends: CompileJobCallbacks::ended is called, possibly
+   * before this function returns. Does nothing if the job is not running.
+   */
+  virtual void cancel() = 0;
+};
+
+struct CompileJobCallbacks
+{
+  /** Called when output was appended to the log; may be called very often. */
+  std::function<void()> outputChanged;
+  /** Called once when the job ended: all tasks finished, a task failed, or cancelled. */
+  std::function<void()> ended;
+};
+
+/**
+ * Runs compilation profiles with the editor's compilation runner. Implemented by the
+ * editor (ui::McpCompileHost); tests use FakeCompileHost.
+ */
+class CompileHost
+{
+public:
+  virtual ~CompileHost();
+
+  /**
+   * Runs the enabled tasks of the given profile for the given document in the background,
+   * like the editor's compilation dialog: the working directory and the task specs are
+   * interpolated with the editor's compilation variables (MAP_DIR_PATH, GAME_DIR_PATH,
+   * MODS, the game's compilation tool names, ...). An export task writes the document's
+   * current state, including unsaved changes. In test mode the tasks only log what they
+   * would do.
+   *
+   * Precondition: the profile has at least one enabled task.
+   *
+   * The callbacks may be called before this function returns (a test run usually ends
+   * synchronously). The job is cancelled if the document is reloaded, because the runner
+   * refers to the document's map; the caller must destroy the job before the document is
+   * destroyed. Fails if the working directory cannot be determined.
+   */
+  virtual Result<std::unique_ptr<CompileJob>> startCompile(
+    ui::MapDocument& document,
+    const mdl::CompilationProfile& profile,
+    bool test,
+    CompileJobCallbacks callbacks) = 0;
+};
+
+/**
  * The editor as seen by the MCP server. Implemented by ui::QtMcpHost in the editor and by
  * FakeHost in tests. All functions are called on the thread that owns the server.
  *
- * Further sub-interfaces (documents, actions, views, compile, preferences) are added by
+ * Further sub-interfaces (actions, views, preferences) are added by
  * the epics that need them.
  */
 class McpHost
@@ -175,6 +243,12 @@ public:
 
   /** The configured games. */
   virtual mdl::GameManager& gameManager() = 0;
+
+  /**
+   * Runs compilations, or nullptr if the host cannot compile (the compile tools then fail
+   * with UNSUPPORTED_IN_HOST). The default implementation returns nullptr.
+   */
+  virtual CompileHost* compileHost();
 };
 
 } // namespace tb::mcp

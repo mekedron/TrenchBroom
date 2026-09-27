@@ -54,6 +54,8 @@ enum class ErrorCode
   Unsupported,
   UnsupportedInHost,
   DryRunUnsupported,
+  /** A compilation of the document is already running. */
+  CompileRunning,
   InternalError,
 };
 

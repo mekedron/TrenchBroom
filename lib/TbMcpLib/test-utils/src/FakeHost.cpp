@@ -20,8 +20,10 @@
 #include "mcp/FakeHost.h"
 
 #include "TestEnvironment.h"
+#include "fs/DiskFileSystem.h"
 #include "fs/DiskIO.h"
 #include "fs/FileSystem.h"
+#include "fs/TestEnvironment.h"
 #include "gl/Resource.h"
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
@@ -37,6 +39,8 @@
 #include "kd/task_manager.h"
 
 #include <algorithm>
+#include <cassert>
+#include <stdexcept>
 
 namespace tb::mcp
 {
@@ -47,12 +51,10 @@ const auto WorldBounds = vm::bbox3d{8192.0};
 
 /**
  * Loads the real game configuration from the fixture's games folder so that builtin
- * entity definitions, tags and flags are available. Falls back to the given game info.
+ * entity definitions, tags and flags are available.
  */
-mdl::GameInfo loadGameInfo(
-  const std::string& configFolder,
-  const std::filesystem::path& gamePath,
-  const mdl::GameInfo& fallback)
+Result<mdl::GameInfo> loadGameInfo(
+  const std::string& configFolder, const std::filesystem::path& gamePath)
 {
   const auto configPath = getFixtureRoot() / "games" / configFolder / "GameConfig.cfg";
   return fs::Disk::withInputStream(
@@ -64,26 +66,148 @@ mdl::GameInfo loadGameInfo(
            [&](const auto& str) { return mdl::parseGameConfig(str, configPath); })
          | kdl::transform([&](auto gameConfig) {
              return mdl::detail::makeGameInfoFixture(std::move(gameConfig), gamePath);
-           })
-         | kdl::value_or(fallback);
+           });
 }
 
-std::vector<mdl::GameInfo> createGameInfos()
+/** Loads the real game configuration, or throws if it cannot be loaded. */
+mdl::GameInfo loadRequiredGameInfo(
+  const std::string& configFolder, const std::filesystem::path& gamePath)
+{
+  return loadGameInfo(configFolder, gamePath)
+         | kdl::if_error([](const auto& e) { throw std::runtime_error{e.msg}; })
+         | kdl::value();
+}
+
+std::vector<mdl::GameInfo> createGameInfos(const fs::TestEnvironment& configEnvironment)
 {
   const auto gamesRoot = getFixtureRoot() / "test" / "mdl" / "Game";
+  const auto tempGamesRoot = configEnvironment.dir() / "games";
   return {
     mdl::DefaultGameInfo,
-    loadGameInfo("Quake", gamesRoot / "Quake", mdl::QuakeGameInfo),
-    loadGameInfo("Quake2", gamesRoot / "Quake2", mdl::Quake2GameInfo),
+    loadGameInfo("Quake", gamesRoot / "Quake") | kdl::value_or(mdl::QuakeGameInfo),
+    loadGameInfo("Quake2", gamesRoot / "Quake2") | kdl::value_or(mdl::Quake2GameInfo),
+    loadRequiredGameInfo("Halflife", tempGamesRoot / "Halflife"),
+    loadRequiredGameInfo("Quake3", tempGamesRoot / "Quake3"),
   };
+}
+
+std::unique_ptr<fs::TestEnvironment> createConfigEnvironment()
+{
+  return std::make_unique<fs::TestEnvironment>([](auto& env) {
+    env.createDirectory("games/Halflife");
+    env.createDirectory("games/Quake3");
+  });
 }
 
 } // namespace
 
+FakeCompileJob::FakeCompileJob(FakeCompileHost& host, CompileJobCallbacks callbacks)
+  : m_host{&host}
+  , m_callbacks{std::move(callbacks)}
+{
+}
+
+FakeCompileJob::~FakeCompileJob()
+{
+  if (m_host)
+  {
+    m_host->jobDestroyed(*this);
+  }
+}
+
+std::string FakeCompileJob::log() const
+{
+  return m_log;
+}
+
+bool FakeCompileJob::running() const
+{
+  return m_running;
+}
+
+void FakeCompileJob::cancel()
+{
+  if (m_running)
+  {
+    append("\n\n#### Terminated\n");
+    finish();
+  }
+}
+
+void FakeCompileJob::append(const std::string_view text)
+{
+  assert(m_running);
+  m_log += text;
+  if (m_callbacks.outputChanged)
+  {
+    m_callbacks.outputChanged();
+  }
+}
+
+void FakeCompileJob::finish()
+{
+  assert(m_running);
+  m_running = false;
+  if (m_callbacks.ended)
+  {
+    m_callbacks.ended();
+  }
+}
+
+FakeCompileHost::~FakeCompileHost()
+{
+  for (auto& started : this->started)
+  {
+    if (started.job)
+    {
+      started.job->m_host = nullptr;
+    }
+  }
+}
+
+Result<std::unique_ptr<CompileJob>> FakeCompileHost::startCompile(
+  ui::MapDocument& document,
+  const mdl::CompilationProfile& profile,
+  const bool test,
+  CompileJobCallbacks callbacks)
+{
+  if (startError)
+  {
+    return Error{*startError};
+  }
+
+  auto job = std::make_unique<FakeCompileJob>(*this, std::move(callbacks));
+  started.push_back(StartedCompile{&document, profile, test, job.get()});
+  if (onStart)
+  {
+    onStart(*job, started.back());
+  }
+  return std::unique_ptr<CompileJob>{std::move(job)};
+}
+
+FakeCompileJob* FakeCompileHost::lastJob()
+{
+  return started.empty() ? nullptr : started.back().job;
+}
+
+void FakeCompileHost::jobDestroyed(FakeCompileJob& job)
+{
+  for (auto& started : this->started)
+  {
+    if (started.job == &job)
+    {
+      started.job = nullptr;
+    }
+  }
+}
+
 FakeHost::FakeHost()
-  : m_taskManager{createTestTaskManager()}
+  : m_configEnvironment{createConfigEnvironment()}
+  , m_taskManager{createTestTaskManager()}
   , m_resourceManager{std::make_unique<gl::ResourceManager>()}
-  , m_gameManager{std::make_unique<mdl::GameManager>(nullptr, createGameInfos())}
+  , m_gameManager{std::make_unique<mdl::GameManager>(
+      std::make_unique<fs::WritableDiskFileSystem>(m_configEnvironment->dir()),
+      createGameInfos(*m_configEnvironment))}
 {
 }
 
@@ -91,6 +215,11 @@ FakeHost::~FakeHost()
 {
   // documents must be destroyed before the resource manager and the game infos
   m_ownedDocuments.clear();
+}
+
+const std::filesystem::path& FakeHost::configDir() const
+{
+  return m_configEnvironment->dir();
 }
 
 std::string FakeHost::addDocument(ui::MapDocument& document, std::string title)
@@ -162,6 +291,15 @@ DocumentHost& FakeHost::documentHost()
 mdl::GameManager& FakeHost::gameManager()
 {
   return *m_gameManager;
+}
+
+CompileHost* FakeHost::compileHost()
+{
+  if (compileHostOverride)
+  {
+    return compileHostOverride;
+  }
+  return supportsCompile ? &compile : nullptr;
 }
 
 std::optional<DocumentInfo> FakeHost::documentToReplace()

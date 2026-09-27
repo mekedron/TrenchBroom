@@ -11,6 +11,8 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationProfileManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompilationTaskListBox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompileHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpTcpTransport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityDefinitionFileChooser.cpp

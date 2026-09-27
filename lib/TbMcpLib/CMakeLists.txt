@@ -7,6 +7,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ChangeCollector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CompileRuns.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Endpoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Errors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Host.cpp
@@ -33,6 +34,9 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ToolRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/BrushEditTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileLog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/CompileUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/DocumentTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityClassTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/EntityCreateTools.cpp
@@ -66,6 +70,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallRunner.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ChangeCollector.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CompileRuns.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Endpoint.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Errors.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Host.h
@@ -92,6 +97,9 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Targets.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ToolRegistry.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/BrushEditTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileLog.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/CompileUtils.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/DocumentTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityClassTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/EntityCreateTools.h

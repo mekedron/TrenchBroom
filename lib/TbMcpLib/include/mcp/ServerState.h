@@ -21,6 +21,7 @@
 
 #include "base/NotifierConnection.h"
 #include "mcp/CallLog.h"
+#include "mcp/CompileRuns.h"
 #include "mcp/Host.h"
 #include "mcp/McpServer.h"
 #include "mcp/ObjectIds.h"
@@ -140,6 +141,8 @@ public:
   std::map<std::string, std::unique_ptr<Session>, std::less<>> sessions;
   std::unordered_map<ui::MapDocument*, std::unique_ptr<DocumentState>> documentStates;
   std::unique_ptr<CallRunner> callRunner;
+  /** The compilations started by compile_run. */
+  std::unique_ptr<CompileRuns> compileRuns;
 
   ServerActivity activity;
 
@@ -213,6 +216,12 @@ public:
    */
   static std::string documentResourceUri(
     const std::string& documentId, DocumentAspect aspect);
+
+  /**
+   * Whether a compilation of the given document is running, started by compile_run or in
+   * the editor.
+   */
+  bool isCompileRunning(ui::MapDocument& document) const;
 
 private:
   void documentWillClose(ui::MapDocument& document);

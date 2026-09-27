@@ -68,8 +68,10 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `Pagination`: cursors, limits and field selection for list tools.
 - `CallLog`: the ring buffer behind `session_log` plus sinks (console, JSONL file).
 - `Host`: the editor as seen by the server (`McpHost`, with the `DocumentHost` sub-interface
-  that creates, loads and closes documents). The editor implements it in `TbUiLib`
-  (`QtMcpHost`); tests use `FakeHost` from `TbMcpTestUtilsLib`.
+  that creates, loads and closes documents and the `CompileHost` sub-interface that runs
+  compile profiles as `CompileJob`s). The editor implements it in `TbUiLib` (`QtMcpHost`,
+  `McpCompileHost`); tests use `FakeHost` and `FakeCompileHost` from `TbMcpTestUtilsLib`.
+- `CompileRuns`: the compile runs (`run:<n>`) with their jobs and logs, owned by `ServerState`.
 - `LogCapture`: records the warnings and errors the editor logs during a call or while a
   document loads.
 - `src/tools/ToolUtils`: small helpers shared by the tool files (game lookup, paths, times).
@@ -80,6 +82,9 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type
   descriptions, value validation with X14 warnings, flag lookup by name, `resolveEntities` /
   `withEntities` for tools that act on entities including worldspawn).
+- `tools/CompileUtils`, `tools/CompileLog` (public headers, tested directly): compile presets
+  per game family, tool path checks, profile JSON; analysis of compile logs (tasks, exit
+  codes, errors, warnings, leaks, output files).
 - `src/tools/NodeJson`: the shared JSON descriptions of objects and faces (`nodeSummary`,
   `nodeState`, `faceJson`); list and query tools use them so that all tools describe objects
   the same way.

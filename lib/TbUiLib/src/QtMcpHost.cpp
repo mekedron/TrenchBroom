@@ -22,6 +22,7 @@
 #include <QApplication>
 
 #include "gl/GlManager.h"
+#include "gl/PerspectiveCamera.h"
 #include "mdl/Map.h"
 #include "ui/AppController.h"
 #include "ui/GetVersion.h"
@@ -30,6 +31,7 @@
 #include "ui/MapWindow.h"
 #include "ui/MapWindowManager.h"
 #include "ui/RecentDocuments.h"
+#include "ui/SwitchableMapViewContainer.h"
 
 #include "kd/contracts.h"
 #include "kd/ranges/to.h"
@@ -110,6 +112,12 @@ std::optional<std::string> activeModalToolName(const MapViewToolBox& toolBox)
 QtMcpHost::QtMcpHost(AppController& appController, QObject* parent)
   : QObject{parent}
   , m_appController{appController}
+  , m_compileHost{[this](const MapDocument& document) {
+    const auto* mapWindow = findMapWindow(document);
+    const auto* mapView =
+      mapWindow ? mapWindow->findChild<SwitchableMapViewContainer*>() : nullptr;
+    return mapView ? copyPerspectiveCamera(mapView->perspectiveCamera()) : nullptr;
+  }}
 {
   auto& mapWindowManager = m_appController.mapWindowManager();
   connect(
@@ -231,6 +239,11 @@ mcp::DocumentHost& QtMcpHost::documentHost()
 mdl::GameManager& QtMcpHost::gameManager()
 {
   return m_appController.gameManager();
+}
+
+mcp::CompileHost* QtMcpHost::compileHost()
+{
+  return &m_compileHost;
 }
 
 std::optional<mcp::DocumentInfo> QtMcpHost::documentToReplace()

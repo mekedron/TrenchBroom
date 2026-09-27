@@ -18,7 +18,7 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E4 | Geometry: creation, transforms, editing, CSG | §7, §8, §9 | MVP + v1 | Done |
 | E5 | Entities, NPCs and models | §10 | MVP + v1 | Done |
 | E6 | Materials, UV and face attributes | §11 | MVP + v1 | Done |
-| E7 | Compile maps | §16 | v1 | Not started |
+| E7 | Compile maps | §16 | v1 | Done |
 | E8 | Minimal upstream footprint | 01 §7.7 | v1 | Not started |
 | E9 | Organization, clipboard and import | §12, §13 | v1 | Not started |
 | E10 | Validation and engine launch | §15, §16 | MVP + v1 | Not started |
@@ -198,15 +198,15 @@ Goal: the agent can texture a map as well as a human.
 
 Goal: the agent turns the open map into a playable compiled file (e.g. a `.bsp`) for the game, reads the compiler output, and finds leaks. Running the game itself is not required here: the agent gets the path of the compiled file and can start the game on its own.
 
-- [ ] E7.1 `compile_tools_get` / `compile_tools_set`: the compile tool paths of the current game (e.g. Half-Life `csg`, `bsp`, `vis`, `rad`; Quake `qbsp`, `vis`, `light`; Quake 3 `q3map2`), with a check that each file exists and is executable.
-- [ ] E7.2 `compile_profiles_list`, `compile_profile_save`, `compile_profile_delete`: the editor's compile profiles with all task types (export map, run tool, copy, rename, delete files, launch engine) and variables.
-- [ ] E7.3 Built-in presets for game families (Half-Life, Quake, Quake 2, Quake 3), available through `compile_presets_list` and usable directly or saved as a profile: fast (no vis, fast light), normal, and full quality. Each preset exports the map, runs the tool chain, and copies the result into the game's (or mod's) `maps` folder.
-- [ ] E7.4 `compile_run`: runs a profile or preset in the background and returns a run handle immediately; "test" mode only reports the commands that would run. Unsaved changes are compiled from the current state (the export step writes the map file).
-- [ ] E7.5 `compile_status`: progress, current task, exit codes, the log tail or full log, parsed errors and warnings, leak detection, elapsed time, and on success the absolute path of the compiled file and where it was copied.
-- [ ] E7.6 `compile_cancel`; one compile at a time per document, with a clear error if one is already running.
-- [ ] E7.7 `pointfile_load` / `pointfile_unload` (returns the leak path as points and the entities nearest to its ends), `portalfile_load` / `portalfile_unload`; a leak reported by `compile_status` names the point file to load.
-- [ ] E7.8 Resource: compile log of a run (streaming, subscribable).
-- [ ] E7.9 Tests with the existing `CmdTool` stub: success, failure, cancel, test mode, output path reporting, log parsing, and presets resolving tool variables.
+- [x] E7.1 `compile_tools_get` / `compile_tools_set`: the compile tool paths of the current game (e.g. Half-Life `csg`, `bsp`, `vis`, `rad`; Quake `qbsp`, `vis`, `light`; Quake 3 `q3map2`), with a check that each file exists and is executable.
+- [x] E7.2 `compile_profiles_list`, `compile_profile_save`, `compile_profile_delete`: the editor's compile profiles with all task types (export map, run tool, copy, rename, delete files, launch engine) and variables.
+- [x] E7.3 Built-in presets for game families (Half-Life, Quake, Quake 2, Quake 3), available through `compile_presets_list` and usable directly or saved as a profile: fast (no vis, fast light), normal, and full quality. Each preset exports the map, runs the tool chain, and copies the result into the game's (or mod's) `maps` folder.
+- [x] E7.4 `compile_run`: runs a profile or preset in the background and returns a run handle immediately; "test" mode only reports the commands that would run. Unsaved changes are compiled from the current state (the export step writes the map file).
+- [x] E7.5 `compile_status`: progress, current task, exit codes, the log tail or full log, parsed errors and warnings, leak detection, elapsed time, and on success the absolute path of the compiled file and where it was copied.
+- [x] E7.6 `compile_cancel`; one compile at a time per document, with a clear error if one is already running.
+- [x] E7.7 `pointfile_load` / `pointfile_unload` (returns the leak path as points and the entities nearest to its ends), `portalfile_load` / `portalfile_unload`; a leak reported by `compile_status` names the point file to load.
+- [x] E7.8 Resource: compile log of a run (streaming, subscribable).
+- [x] E7.9 Tests with the existing `CmdTool` stub: success, failure, cancel, test mode, output path reporting, log parsing, and presets resolving tool variables.
 
 **Done when:** with Half-Life compile tools configured locally, an agent compiles a map built through MCP into a `.bsp` in the game's `maps` folder, and on a leak loads the point file and reports where it is (scenario S5).
 
@@ -234,8 +234,9 @@ Goal: the fork stays easy to sync with upstream TrenchBroom. The MCP server live
 - [ ] E8.8 CMake: new libraries and the bridge are added with the fewest possible lines in upstream CMake files.
 - [ ] E8.9 Script `scripts/upstream-footprint.sh` (new file) that lists the upstream files changed by the fork with line counts, and checks that a merge with the latest upstream `master` has no conflicts.
 - [ ] E8.10 Write the "Upstream changes" section of 05-technical-design.md: each remaining upstream change, where it is and why it is required.
+- [ ] E8.11 Shared tool helpers (`src/tools/*Utils`, `NodeJson`) take the narrowest context they need: a node, then `mdl::Map&`, then `IdRegistry`, then `CallContext`, never `ui::MapDocument`. State this rule in 05-technical-design.md §10.2; add direct unit tests in `TbMcpLibTest` over `mdl::MapFixture` for the pure model helpers (`castRay`, `intersectsInterior`, `classifyBrush`, `addBrushes`, `ScopedLockOverride`); check whether `GeometryTools` can drop its `MapDocument` dependency in `shapeExtension`.
 
-**Done when:** at most ~12 upstream files are changed, none of them an upstream test file; all test suites pass; the footprint script shows a conflict-free merge with the latest upstream `master`.
+**Done when:** at most ~12 upstream files are changed, none of them an upstream test file; all test suites pass; the footprint script shows a conflict-free merge with the latest upstream `master`; shared tool helpers take no `ui::MapDocument`, and the pure model helpers have direct unit tests.
 
 ---
 

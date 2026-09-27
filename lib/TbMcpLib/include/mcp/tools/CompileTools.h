@@ -17,22 +17,22 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mcp/Host.h"
+#pragma once
 
 namespace tb::mcp
 {
+class ResourceRegistry;
+class ToolRegistry;
 
-DocumentHost::~DocumentHost() = default;
+/**
+ * Registers compile_tools_get, compile_tools_set, compile_presets_list,
+ * compile_profiles_list, compile_profile_save, compile_profile_delete, compile_run,
+ * compile_status, compile_cancel, pointfile_load, pointfile_unload, portalfile_load and
+ * portalfile_unload.
+ */
+void registerCompileTools(ToolRegistry& registry);
 
-CompileJob::~CompileJob() = default;
-
-CompileHost::~CompileHost() = default;
-
-McpHost::~McpHost() = default;
-
-CompileHost* McpHost::compileHost()
-{
-  return nullptr;
-}
+/** Registers the compile log resource trenchbroom://compile/{run}/log. */
+void registerCompileResources(ResourceRegistry& registry);
 
 } // namespace tb::mcp

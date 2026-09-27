@@ -108,6 +108,23 @@ Materials and faces
   (clip, skip, hint) with what they match. tag_apply is "Turn into <tag>", tag_remove
   "Make non-<tag>"; 'option' picks one choice when a tag offers several.
 
+Compiling
+- compile_tools_get shows the game's compile tool paths and whether each is an
+  executable file; set them with compile_tools_set (Half-Life: csg/bsp/vis/rad from
+  VHLT or ZHLT; Quake: qbsp/vis/light from ericw-tools; Quake 3: q3map2).
+- compile_presets_list shows the fast / normal / full tool chains for the game; each
+  exports the map (including unsaved changes) to <map folder>/compile/, runs the tools
+  and copies the .bsp into <game>/<mod>/maps. compile_profiles_list and
+  compile_profile_save manage the editor's own compile profiles.
+- compile_run {"preset": "normal"} starts in the background and returns a run handle
+  such as 'run:1' at once; poll compile_status (state, current task, errors, warnings,
+  leak, compiled file) or subscribe to trenchbroom://compile/{run}/log. "test": true
+  only prints the commands. One compile runs per document at a time; compile_cancel
+  stops it.
+- On a leak, compile_status names the point file: pointfile_load returns the leak path,
+  the entities near its ends and where it leaves the map; close the gap there and
+  compile again. portalfile_load shows the portals written by vis.
+
 Results
 - Modifying calls return 'changes' (created / modified / removed ids), 'selection',
   'issuesIntroduced', 'warnings' and the grid size in effect.

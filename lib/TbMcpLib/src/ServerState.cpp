@@ -157,6 +157,15 @@ ServerState::ServerState(
   , info{std::move(info_)}
   , options{std::move(options_)}
   , callRunner{std::make_unique<CallRunner>(*this)}
+  , compileRuns{std::make_unique<CompileRuns>(
+      host_, [this](const CompileRun& run, const bool ended) {
+        scheduleResourceUpdate(CompileRuns::logUri(run.id));
+        if (ended)
+        {
+          // the editor status reports running compilations
+          scheduleResourceUpdate(EditorStatusUri);
+        }
+      })}
 {
   m_hostConnection +=
     host.documentWillCloseNotifier.connect(this, &ServerState::documentWillClose);
@@ -176,6 +185,8 @@ ServerState::ServerState(
 
 ServerState::~ServerState()
 {
+  // the compile jobs refer to the documents
+  compileRuns.reset();
   *m_alive = false;
   callRunner->cancelAll();
   for (auto& [document, state] : documentStates)
@@ -452,6 +463,12 @@ std::string ServerState::documentResourceUri(
     return "info";
   }();
   return "trenchbroom://documents/" + documentId + "/" + suffix;
+}
+
+bool ServerState::isCompileRunning(ui::MapDocument& document) const
+{
+  return (compileRuns && compileRuns->running(document))
+         || host.isCompileRunning(document);
 }
 
 bool ServerState::hasSubscriptions() const

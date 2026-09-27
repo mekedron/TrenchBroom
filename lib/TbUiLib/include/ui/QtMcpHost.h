@@ -23,6 +23,7 @@
 
 #include "base/NotifierConnection.h"
 #include "mcp/Host.h"
+#include "ui/McpCompileHost.h"
 
 #include <filesystem>
 #include <optional>
@@ -56,6 +57,8 @@ private:
   size_t m_nextDocumentId = 1;
   /** Observes the tool box of each map window to report tool changes. */
   std::unordered_map<const MapWindow*, NotifierConnection> m_toolBoxConnections;
+  /** Runs compilations with the camera of the document's 3D view. */
+  McpCompileHost m_compileHost;
 
 public:
   explicit QtMcpHost(AppController& appController, QObject* parent = nullptr);
@@ -73,6 +76,7 @@ public: // mcp::McpHost
   bool isCompileRunning(MapDocument& document) override;
   mcp::DocumentHost& documentHost() override;
   mdl::GameManager& gameManager() override;
+  mcp::CompileHost* compileHost() override;
 
 public: // mcp::DocumentHost
   std::optional<mcp::DocumentInfo> documentToReplace() override;

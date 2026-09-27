@@ -114,6 +114,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialBrowser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialBrowserView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MaterialCollectionEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/McpCompileHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpPreferencePane.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServerController.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpStatusIndicator.cpp
@@ -305,6 +306,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowser.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialBrowserView.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MaterialCollectionEditor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpCompileHost.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpPreferencePane.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpServerController.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/McpStatusIndicator.h

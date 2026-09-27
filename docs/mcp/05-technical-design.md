@@ -1,6 +1,6 @@
 # TrenchBroom MCP Server — Technical Design
 
-Date: 2026-09-27 · Status: implemented for E1–E5; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
+Date: 2026-09-27 · Status: implemented for E1–E7; §13 lists the design of the remaining epics · Parent: [01-PRD.md](01-PRD.md) · Tools: [03-functional-spec.md](03-functional-spec.md) · Plan: [TASKS.md](TASKS.md)
 
 This is the engineering blueprint of the MCP server. It describes the current design and
 implementation. When the code and this document disagree, fix the code or update this document in the
@@ -13,7 +13,7 @@ same change.
 | Topic | Design |
 |---|---|
 | Core library | Qt-free static library `lib/TbMcpLib`, namespace `tb::mcp`, headers in `include/mcp/`. It contains JSON-RPC, the MCP lifecycle, the HTTP/SSE protocol state machine, the registries, the call runner, the ID registry, and **all** tool implementations. |
-| Editor glue | `lib/TbUiLib`: `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`. |
+| Editor glue | `lib/TbUiLib`: `McpServerController`, `McpTcpTransport` (`QTcpServer`), `QtMcpHost` (implements the core's host interface), `McpCompileHost` (compiles with the editor's `CompilationRun`), `QtScheduler`, `McpPreferencePane`, `McpStatusIndicator`. |
 | stdio | Executable `app/TrenchBroomMcp`: a stdio ↔ Streamable HTTP proxy (Qt Core + Network). |
 | JSON | nlohmann/json 3.12.0 via CPM (`cmake/dependencies/nlohmann_json.cmake`). |
 | Protocol | MCP revision `2025-11-25`; also accepts `2025-06-18` and `2025-03-26`. Streamable HTTP on `127.0.0.1:47100` (configurable), endpoint `/mcp`. |
@@ -80,12 +80,15 @@ lib/TbMcpLib/
     LogCapture.h            LogMessage, CapturingLogger, ScopedLogCapture, collectCachedMessages
     ObjectIds.h             IdRegistry, ObjectRef parsing/formatting, face refs
     Targets.h               idsField, resolveTargets, resolveFace, withTargets; face targets (§6.4)
+    CompileRuns.h           compile run registry: run:<n> handles, jobs, log snapshots (§10.10)
     Errors.h                ToolError, ErrorCode, Warning, makeError
     Pagination.h            cursor/limit/fields/detail helpers, selectFields, base64
     CallLog.h               in-memory ring buffer, sinks, JsonlFileSink
     Resources.h             registerResources (§8)
     RegisterAll.h           registerAll(McpServer&): every register<Domain>Tools + registerResources
     tools/<Domain>Tools.h   `void register<Domain>Tools(ToolRegistry&)` plus helpers shared with resources
+    tools/CompileUtils.h    compile presets per game family, tool path checks, profile JSON (§10.10)
+    tools/CompileLog.h      compile log analysis: tasks, exit codes, errors, warnings, leaks (§10.10)
   src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
   test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/)
   test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture
@@ -105,6 +108,7 @@ TbBaseTestUtilsLib TbFsTestUtilsLib TbMdlTestUtilsLib` and calls `catch_discover
 | `QtMcpHost.{h,cpp}` | Implements `mcp::McpHost` and `mcp::DocumentHost` over `AppController`, `MapWindowManager` and `MapWindow::toolBox()` (§4.3). |
 | `QtScheduler.{h,cpp}` | `mcp::Scheduler` via `QTimer::singleShot` on the main thread. |
 | `McpStatusIndicator.{h,cpp}` | Status bar widget next to the update indicator (`MapWindow::createStatusBar()`): "AI: n clients · <current tool> / waiting for you / idle", and a **Stop agent** button. |
+| `McpCompileHost.{h,cpp}` | Implements `mcp::CompileHost` with the editor's `CompilationRun` (§10.10). Owned by `QtMcpHost`. |
 | `McpPreferencePane.{h,cpp}` | "AI Agents (MCP)" pane in `PreferenceDialog` (icon `McpPreferences.svg`): enable, port, bind address, access token (required only for non-loopback binding), log to file, busy-wait timeout. |
 
 Supporting editor APIs:
@@ -303,8 +307,9 @@ when the client sent a `progressToken`.
 
 `document_open`, `entity_definitions_reload` and `materials_reload` are asynchronous: they emit progress,
 then load or reload in a deferred step, so a cancellation sent meanwhile is honored; the load itself is
-synchronous. Compilation (E7) returns a `run:<n>` handle immediately and is polled with `compile_status`, so
-no request stays open for minutes.
+synchronous. `compile_run` is not asynchronous in this sense: it starts the compilation and returns a
+`run:<n>` handle immediately; the run is polled with `compile_status` (§10.10), so no request stays open
+for minutes.
 
 ### 4.3 Host seam (`Host.h`)
 
@@ -336,6 +341,21 @@ public:
   virtual bool isCompileRunning(ui::MapDocument&) = 0;
   virtual DocumentHost& documentHost() = 0;
   virtual mdl::GameManager& gameManager() = 0;
+  virtual CompileHost* compileHost();                       // default nullptr → UNSUPPORTED_IN_HOST
+};
+
+class CompileJob {  // destroying a running job terminates it without callbacks
+  virtual std::string log() const = 0;  // plain text as the compilation dialog shows it
+  virtual bool running() const = 0;
+  virtual void cancel() = 0;            // ends the job; `ended` may fire before it returns
+};
+struct CompileJobCallbacks { std::function<void()> outputChanged; std::function<void()> ended; };
+
+class CompileHost {
+  // Runs the profile's enabled tasks with the editor's compilation variables; test = only log.
+  // Callbacks may fire before startCompile returns. A reload of the document cancels the job.
+  virtual Result<std::unique_ptr<CompileJob>> startCompile(ui::MapDocument&, const mdl::CompilationProfile&,
+                                                           bool test, CompileJobCallbacks) = 0;
 };
 }
 ```
@@ -352,13 +372,20 @@ game's `gamePathPreference` directly (Qt-free; open documents react through thei
   place. `closeDocument` calls `MapWindow::closeWithoutConfirmation()`. Agent-created documents do not close
   the welcome window. `isCompileRunning` asks `MapWindow::compilationRunning()`.
 
-`FakeHost` implements both interfaces with its own task and resource managers and a `GameManager` with the
-games "Test", "Quake" and "Quake 2" (the real configurations from the fixture's `games/` folder, game paths
-in `test/mdl/Game/`). `singleWindow` simulates single-window mode, `recentDocumentList` is the recent list,
-and closed documents stay alive.
+`QtMcpHost::compileHost()` returns its `McpCompileHost`, whose camera provider copies the perspective camera
+of the document's map window (used by export tasks that add an entity at the camera position).
 
-Further sub-interfaces are added by the epics that need them: `CompileHost` (E7, over `CompilationRunner`),
-`ViewHost`, `ActionHost`, `PreferenceHost` (E11), the snapshot renderer (E12). A host that does not
+`FakeHost` implements both interfaces with its own task and resource managers and a `GameManager` with the
+games "Test", "Quake", "Quake 2", "Half-Life" and "Quake 3" (the real configurations from the fixture's
+`games/` folder; game paths in `test/mdl/Game/` for Quake and Quake 2, empty folders in a temporary
+directory for the others). The game manager writes compile and engine profiles to a temporary config
+folder (`configDir()`), removed with the host. `singleWindow` simulates single-window mode,
+`recentDocumentList` is the recent list, and closed documents stay alive. `compile` is a `FakeCompileHost`
+whose `FakeCompileJob`s the test drives with `append` / `finish` (`onStart` can finish a job synchronously
+like a test run, `startError` makes the start fail); `compileHostOverride` substitutes another compile host
+(TbUiLibTest uses the real `McpCompileHost`), and `supportsCompile = false` simulates a host without one.
+
+Further sub-interfaces are added by the epics that need them: `ViewHost`, `ActionHost`, `PreferenceHost` (E11), the snapshot renderer (E12). A host that does not
 implement a capability maps to `UNSUPPORTED_IN_HOST`.
 
 ### 4.4 Server state
@@ -366,7 +393,9 @@ implement a capability maps to `UNSUPPORTED_IN_HOST`.
 `ServerState` holds everything tools may need; handlers reach it through `CallContext::server()` and tests
 through `McpServer::state()`. It creates a `DocumentState` (`IdRegistry`, open `AgentTransaction`, resource
 change hooks) for every open document whenever the document list changes, so subscriptions work before any
-tool touched a document, and drops it on `documentWillCloseNotifier`.
+tool touched a document, and drops it on `documentWillCloseNotifier`. It owns the `CompileRuns` registry
+(§10.10); `ServerState::isCompileRunning(document)` is true while an MCP run or the editor's compilation
+dialog compiles the document.
 
 ---
 
@@ -642,7 +671,8 @@ using ToolResult = Result<Json, ToolError>;
 Codes: `INVALID_ARGUMENT`, `OBJECT_NOT_FOUND`, `WRONG_OBJECT_KIND`, `OBJECT_NOT_EDITABLE`, `NO_SELECTION`,
 `NO_DOCUMENT`, `DOCUMENT_NOT_FOUND`, `INVALID_GEOMETRY`, `OUT_OF_WORLD_BOUNDS`, `OPERATION_FAILED`,
 `TRANSACTION_ACTIVE`, `NO_TRANSACTION`, `BUSY_TIMEOUT`, `CANCELLED`, `UNSAVED_CHANGES`, `FILE_EXISTS`,
-`IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`, `DRY_RUN_UNSUPPORTED`, `INTERNAL_ERROR`.
+`IO_ERROR`, `UNSUPPORTED` (game/format), `UNSUPPORTED_IN_HOST`, `DRY_RUN_UNSUPPORTED`, `COMPILE_RUNNING`,
+`INTERNAL_ERROR`.
 
 Mapping to MCP:
 - Tool failures, including argument validation failures, are `CallToolResult` with `isError: true`,
@@ -675,6 +705,7 @@ Mapping to MCP:
 | `trenchbroom://documents/{doc}/entity-definitions` | all classes of the document (per document: definitions depend on its mods and definition file) | definitions reloaded |
 | `trenchbroom://documents/{doc}/materials` | `materialsResource()`: collections `{path, materialCount}` and loaded materials `{name, collection, width, height}` (no usage counts, which change on every edit) | material collections changed, document loaded, material images processed |
 | `trenchbroom://games/{game}/config` | `gameConfigJson()`; `{game}` percent-encoded; listed for games of open documents | `game_set_path` |
+| `trenchbroom://compile/{run}/log` | the full log of a compile run as `text/plain` (`{run}` is e.g. `run:3`); listed once per known run | output appended, run ended |
 | `trenchbroom://guide` | agent guide (`AgentGuide` raw string in `Resources.cpp`) | static |
 
 Templates are listed once per open document. `DocumentState` reports `DocumentAspect::{Info, Summary,
@@ -683,8 +714,7 @@ through `ServerState::scheduleResourceUpdate` / `scheduleDocumentUpdate`, coales
 `notifications/resources/updated` per resource and scheduler turn. Nothing is recorded while no session has
 subscriptions (the hooks run on every map change, e.g. during drags).
 
-Planned resources: `documents/{doc}/issues` and `compile/{run}/log` (E7),
-`manual/{section}` (E11), `console` (E12).
+Planned resources: `documents/{doc}/issues` (E10), `manual/{section}` (E11), `console` (E12).
 
 ---
 
@@ -726,15 +756,16 @@ The raw JSON-RPC trace is logged only at debug level.
 | `EntityClassTools.cpp` | `entity_classes_list`, `entity_class_describe`, `entity_model_info` | E5 |
 | `EntityCreateTools.cpp` | `entity_create_point`, `entity_create_brush`, `entity_move_brushes` | E5 |
 | `EntityPropertyTools.cpp` | `entity_properties_set`, `entity_property_remove/rename`, `entity_spawnflags_set`, `entity_defaults_apply`, `entity_links_get`, `entity_link`, `entity_color_set` | E5 |
+| `CompileTools.cpp` | `compile_tools_get/set`, `compile_presets_list`, `compile_profiles_list`, `compile_profile_save/delete`, `compile_run`, `compile_status`, `compile_cancel`, `pointfile_load/unload`, `portalfile_load/unload`; the compile log resource | E7 |
 
 Planned files: `OrganizationTools.cpp` (`layers_list`, `layer_*`, `objects_move_to_layer`, `group_*`,
 `groups_merge`, `linked_group_*`, `visibility_set`) and `ClipboardTools.cpp` (`clipboard_*`, `map_import`)
-in E9; `CompileTools.cpp` (`compile_*`, `pointfile_*`, `portalfile_*`) in E7; `ValidationTools.cpp` (`issues_list`,
+in E9; `ValidationTools.cpp` (`issues_list`,
 `issue_*`, `validators_*`, `map_check`, `engine_*`) in E10; `ActionTools.cpp` (`actions_list`,
 `action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
 `manual_section`) in E11; snapshot and console tools in E12; `Prompts.cpp` in E13.
 
-Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
+`CompileTools.h` also declares `registerCompileResources`. Each domain header `include/mcp/tools/<Domain>Tools.h` declares `register<Domain>Tools` and the helpers
 shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `modsJson()`,
 `entityDefinitionsJson()`, `materialsJson()`, `softBoundsJson()` (GameTools.h); `mapSummary()`
 (SceneTools.h); `selectionDetails()` (SelectionTools.h); `materialsResource()` (MaterialTools.h).
@@ -755,6 +786,9 @@ shared with resources: `documentInfo()` (DocumentTools.h); `gameConfigJson()`, `
 - **`EntityUtils.{h,cpp}`**: definition lookup, property type names and definition JSON, color ranges, flag
   lookup by name, bit (`bit8`) or value, value validation (`checkPropertyValue`, `validateProperty`,
   `warnUnknownClassname`), entity targeting (`resolveEntities`, `withEntities`).
+- **`CompileUtils.{h,cpp}`** and **`CompileLog.{h,cpp}`** (headers in `include/mcp/tools/` so that
+  `TbMcpLibTest` can test them directly): compile presets, tool path checks, profile JSON and schemas; log
+  analysis (§10.10).
 
 ### 10.3 Documents and games
 
@@ -939,6 +973,69 @@ tag/entity actions. The path is the action's preference path; `enabled`/`checked
 `ActionExecutionContext` for the target window. Dialog-opening actions come from a static allow-list in
 `QtMcpHost`, checked by the E11.8 coverage test; each entry points to the matching semantic tool.
 
+### 10.10 Compiling (E7)
+
+- **Execution.** Compilations run in the editor process through `CompileHost`. `ui::McpCompileHost`
+  reuses the editor's `CompilationRun` / `CompilationRunner` unchanged: each job owns a hidden `QTextEdit`
+  that receives the runner's output (its plain text is the log), a copy of the window's perspective camera
+  and the `CompilationRun`. Tools run as `QProcess`es, so neither the UI nor other MCP calls wait. A test
+  run ends inside `startCompile`. Reloading the document cancels the job and logs
+  `#### Terminated: the document was reloaded` (the runner refers to the document's `Map`).
+- **Runs** (`CompileRuns`, owned by `ServerState`): `run:<n>` handles numbered per server; each run keeps
+  the profile, its enabled tasks, the preset name, game, document handle, session, test flag, times, the job
+  and a log snapshot. All running runs and the 20 most recent ended runs are kept (pruned when a run
+  starts). Callbacks look runs up by number through a weak alive flag, so `ended` may fire inside
+  `startCompile` or `cancel()`. Closing a document cancels its running runs, snapshots their logs and
+  destroys the jobs; destroying the registry destroys all jobs without callbacks. Output and the end of a
+  run schedule an update of the log resource; the end also updates the editor status.
+- **One compile per document.** `compile_run` fails with `COMPILE_RUNNING` (naming the run) while an MCP run
+  or the compilation dialog compiles the document; `document_close` and `document_revert` refuse while an MCP
+  run is active (`COMPILE_RUNNING`, hint `compile_cancel`). `editor_status.compileRunning` covers both.
+- **`compile_run`** takes a saved `profile` or a `preset` (exactly one) and `test`. The map must have been
+  saved once (`UNSAVED_CHANGES`, hint `document_save_as`); unsaved changes are compiled because the export
+  task writes the current state. Unless `test`, every game tool variable (`${qbsp}`) used by an enabled run
+  tool task must point to an executable file (`OPERATION_FAILED` with `details.tools`, hint
+  `compile_tools_set`); an invalid game path is a `GAME_PATH_NOT_SET` warning. It returns the
+  `compile_status` payload of the new run.
+- **Presets** (`CompileUtils`): the family is derived from the game's compilation tool names — csg/bsp/vis/rad
+  (Half-Life, VHLT/ZHLT), qbsp/vis/light (Quake, ericw-tools), bsp/vis/light with a Quake 2 map format (Quake
+  2, ericw-tools 2 with `-q2bsp`), q3map2 with the search path `baseq3` (Quake 3). Every preset uses
+  `${MAP_DIR_PATH}` as working directory, exports to `compile/${MAP_BASE_NAME}.map` (TrenchBroom properties
+  stripped), runs the tools with quoted paths and `treatNonZeroResultCodeAsError`, and copies
+  `compile/${MAP_BASE_NAME}.bsp` (Quake: also `.lit`) to `${GAME_DIR_PATH}/${MODS[-1]}/maps`.
+
+  | Family | fast | normal | full |
+  |---|---|---|---|
+  | Half-Life | csg, bsp, rad `-fast` | csg, bsp, vis, rad | csg, bsp, vis `-full`, rad `-extra` |
+  | Quake / Quake 2 | qbsp, light | qbsp, vis, light `-extra` | qbsp, vis `-level 4`, light `-extra4 -bounce` |
+  | Quake 3 | `-meta`, `-light -fast` | `-meta`, `-vis -saveprt`, `-light -fast -filter` | `-meta`, `-vis -saveprt`, `-light -fast -super 2 -filter -bounce 8` |
+
+  q3map2 stages get `-game quake3 -fs_basepath "${GAME_DIR_PATH}" -fs_game ${MODS[-1]}`. Presets can be run
+  directly or saved as editor profiles with `compile_profile_save {"preset": ...}`.
+- **Profiles**: `compile_profiles_list`, `compile_profile_save` (`overwrite` for an existing name, else
+  `FILE_EXISTS`) and `compile_profile_delete` edit the game's `CompilationConfig` through
+  `GameManager::updateCompilationConfig`, the same store the compilation dialog uses. Tasks are JSON objects
+  with `type` (`exportMap`, `copyFiles`, `renameFile`, `deleteFiles`, `runTool`, `launchEngine`) and the
+  type's keys; keys of other types are `INVALID_ARGUMENT`.
+- **Tool paths**: `compile_tools_get/set` read and write each tool's path preference
+  (`Games/<game>/Tool Path/<tool>`); a path that is missing, not a file or not executable is still set, with
+  a `TOOL_NOT_FOUND` / `TOOL_NOT_A_FILE` / `TOOL_NOT_EXECUTABLE` warning.
+- **Status** (`CompileLog`): the runner reports no structured events, so `compile_status` analyzes the log.
+  The runner's `#### ...` lines split it into the enabled tasks (the k-th start or failure line belongs to the
+  k-th task): state per task, exit codes, the current task, `completedTasks`, and the executed commands,
+  exported maps and copied files. Tool messages in the formats of VHLT/ZHLT, ericw-tools/tyrutils, q3map2 and
+  Quake 2 tools become errors and warnings (runner failure lines count as errors). Leaks are recognized from
+  `=== LEAK in hull 0 ===` / `Entity <class> @ (x, y, z)`, `Reached occupant ... at (x y z)`, `Leak file
+  written to ...` and the `leaked` banners. The run state is `cancelled` (cancel requested, document closed,
+  or `#### Terminated`), `failed` (a task failed or not all tasks completed) or `succeeded`. The compiled file
+  is the first copied `.bsp` source (else the exported map's `.bsp` if it exists); `copiedTo` lists the
+  copies; the point file is the reported leak file, else `<exported map>.pts` or `.lin`.
+- **Point and portal files**: `pointfile_load` defaults to the latest run's leak file, then
+  `compile/<base>.pts`, `<base>.pts` and the `.lin` variants; it returns the path (at most 1000 points), its
+  length, the three point entities nearest to each end, and `leavesMapAt`, where the path, walked from the end
+  inside the brushes' bounds, leaves them. `portalfile_load` defaults to `compile/<base>.prt`, then
+  `<base>.prt`. Both use `MapDocument::loadPointFile` / `loadPortalFile`, so the editor shows them.
+
 ---
 
 ## 11. Testing
@@ -956,6 +1053,7 @@ tag/entity actions. The path is the action's preference path; `enabled`/`checked
 | `tst_CallRunner` | one undo step `AI: …`; rollback leaves `modificationCount` and the undo stack unchanged; dry run leaves no trace and keeps the redo stack; explicit transactions and nesting; busy gate and timeout with `FakeHost` + `FakeScheduler`; image content blocks |
 | `tst_ChangeCollector`, `tst_CallLog` | reduction, introduced issues; ring buffer, JSONL rotation |
 | `tst_<Domain>Tools` | one test case per tool file, one `SECTION` per tool: success, invalid input, dry run, explicit ids vs selection |
+| `tst_CompileUtils`, `tst_CompileLog`, `tst_CompileTools` | presets for the real game configurations (only variables the game defines), task JSON round trips and errors, tool path checks; log analysis with sample VHLT, ericw, tyrutils, q3map2 and Quake 2 logs and every runner line; the compile tools over `FakeCompileHost`: success, failure, cancel, test mode, one run per document, output paths, leaks, document close, the log resource, point and portal files |
 | `tst_Scenarios` | scripted scenarios: S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
@@ -991,6 +1089,13 @@ material and S3 tests), and game paths in `mdl/Game/`.
   the offscreen platform fails on OpenGL): document listing, busy detection, `prepareForAgentEdit`. Creating
   and loading documents are not covered here for the same reason.
 - `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
+- `tst_McpCompileHost.cpp`: `McpCompileHost` with the `CmdTool` stub (`--printArgs`, `--exit`, `--crash`):
+  success, failure, crash, cancel, test mode, export of unsaved changes, tool variables, copy tasks, reload,
+  destroying a running job.
+- `tst_McpCompile.cpp`: the compile tools over `McpToolFixture` with the real `McpCompileHost`
+  (`FakeHost::compileHostOverride`) and `CmdTool` as the Quake tools: a preset in test mode resolves the tool
+  variables, a profile compiles unsaved changes and reports the compiled and copied files, failure, cancel,
+  and a leak whose point file `pointfile_load` loads.
 
 ### 11.3 Other
 
@@ -1020,6 +1125,10 @@ material and S3 tests), and game paths in `mdl/Game/`.
   never matches.
 - `object_get` does not report the layer color.
 - The bridge ignores portable mode when locating the discovery file.
+- Compile status is derived from the runner's log text; tool message formats not listed in §10.10 are not
+  classified. The editor's compilation dialog does not know about MCP runs, so the user can start a dialog
+  compile of the same document meanwhile. A cancelled tool process is killed without waiting (Qt logs
+  "QProcess: Destroyed while process ... is still running").
 
 ---
 
@@ -1073,3 +1182,17 @@ commit buildable and tested.
 5. Handlers never block, never open dialogs, and never call `QApplication::processEvents`.
 6. Destructive intent is explicit (`overwrite`, `unsavedChanges`) and never prompts (PRD 7.1).
 7. Shared helpers go in the `src/tools/*Utils` / `NodeJson` files; they must not grow into a second tool file.
+
+---
+
+## 15. Upstream changes
+
+Changes to original TrenchBroom files made for compiling (E7); the other epics' changes are described in
+§1.3 and §6.6:
+
+| File | Change | Reason |
+|---|---|---|
+| `lib/TbUiLib/CMakeLists.txt` | lists `McpCompileHost.{h,cpp}` | new source files of the library |
+| `lib/TbUiLib/test/CMakeLists.txt` | lists `tst_McpCompileHost.cpp`, `tst_McpCompile.cpp` | the tests need Qt and `CmdTool`, which `TbMcpLibTest` does not have |
+
+No compilation code of the editor was changed.

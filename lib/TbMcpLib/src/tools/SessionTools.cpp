@@ -196,7 +196,7 @@ Json editorStatus(ServerState& server, const Session& session)
       {"visible", map.grid().visible()},
       {"snap", map.grid().snap()},
     };
-    status["compileRunning"] = server.host.isCompileRunning(document);
+    status["compileRunning"] = server.isCompileRunning(document);
     status["transaction"] =
       state.transaction
         ? Json{{"name", state.transaction->name}, {"owner", state.transaction->clientName}}

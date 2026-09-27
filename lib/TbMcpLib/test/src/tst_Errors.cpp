@@ -31,6 +31,7 @@ TEST_CASE("Errors")
     CHECK(toString(ErrorCode::InvalidArgument) == "INVALID_ARGUMENT");
     CHECK(toString(ErrorCode::DryRunUnsupported) == "DRY_RUN_UNSUPPORTED");
     CHECK(errorCodeFromString("BUSY_TIMEOUT") == ErrorCode::BusyTimeout);
+    CHECK(errorCodeFromString("COMPILE_RUNNING") == ErrorCode::CompileRunning);
     CHECK(errorCodeFromString("nope") == std::nullopt);
   }
 

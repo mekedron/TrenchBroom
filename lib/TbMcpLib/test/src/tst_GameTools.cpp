@@ -97,8 +97,8 @@ TEST_CASE("GameTools")
     };
 
     const auto result = fixture.call("game_list");
-    CHECK(result["total"] == 3);
-    REQUIRE(result["items"].size() == 3);
+    CHECK(result["total"] == 5);
+    REQUIRE(result["items"].size() == 5);
 
     const auto quake = findGame(result, "Quake");
     REQUIRE(quake.is_object());

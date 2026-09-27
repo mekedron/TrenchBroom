@@ -20,9 +20,11 @@
 #pragma once
 
 #include "mcp/Host.h"
+#include "mdl/CompilationProfile.h"
 #include "mdl/EnvironmentConfig.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,6 +37,10 @@ class task_manager;
 
 namespace tb
 {
+namespace fs
+{
+class TestEnvironment;
+}
 namespace gl
 {
 class ResourceManager;
@@ -43,14 +49,90 @@ class ResourceManager;
 
 namespace tb::mcp
 {
+class FakeCompileHost;
+
+/**
+ * A compile job whose output and end are scripted by the test. cancel() behaves like the
+ * editor's runner: it appends "\n\n#### Terminated\n" and ends the job.
+ */
+class FakeCompileJob : public CompileJob
+{
+private:
+  FakeCompileHost* m_host;
+  CompileJobCallbacks m_callbacks;
+  std::string m_log;
+  bool m_running = true;
+
+public:
+  FakeCompileJob(FakeCompileHost& host, CompileJobCallbacks callbacks);
+  ~FakeCompileJob() override;
+
+  std::string log() const override;
+  bool running() const override;
+  void cancel() override;
+
+  /** Appends output and calls outputChanged. Precondition: running() */
+  void append(std::string_view text);
+  /** Ends the job and calls ended. Precondition: running() */
+  void finish();
+
+private:
+  friend class FakeCompileHost;
+};
+
+/**
+ * Records the compilations started through it and returns FakeCompileJobs that the test
+ * drives with append() and finish().
+ */
+class FakeCompileHost : public CompileHost
+{
+public:
+  struct StartedCompile
+  {
+    ui::MapDocument* document = nullptr;
+    mdl::CompilationProfile profile;
+    bool test = false;
+    /** The job, or nullptr once it was destroyed. */
+    FakeCompileJob* job = nullptr;
+  };
+
+  /** Every compilation started so far, in order. */
+  std::vector<StartedCompile> started;
+  /** If set, startCompile fails with this message. */
+  std::optional<std::string> startError;
+  /**
+   * Called by startCompile after the job was created and before it is returned, e.g. to
+   * append output or to finish the job synchronously like a test run does.
+   */
+  std::function<void(FakeCompileJob&, const StartedCompile&)> onStart;
+
+  ~FakeCompileHost() override;
+
+  Result<std::unique_ptr<CompileJob>> startCompile(
+    ui::MapDocument& document,
+    const mdl::CompilationProfile& profile,
+    bool test,
+    CompileJobCallbacks callbacks) override;
+
+  /** The job of the most recent compilation, or nullptr. */
+  FakeCompileJob* lastJob();
+
+private:
+  friend class FakeCompileJob;
+  void jobDestroyed(FakeCompileJob& job);
+};
 
 /**
  * A host for tests. Documents are registered explicitly or created through the document
  * host; the busy state and other editor state can be set directly.
  *
- * The game manager knows the games "Test", "Quake" and "Quake 2". Quake and Quake 2 use
- * the real game configurations from the fixture's games folder and the fixture game
- * folders (test/mdl/Game/...) as game paths.
+ * The game manager knows the games "Test", "Quake", "Quake 2", "Half-Life" and "Quake 3".
+ * All but "Test" use the real game configurations from the fixture's games folder. Quake
+ * and Quake 2 use the fixture game folders (test/mdl/Game/...) as game paths, Half-Life
+ * and Quake 3 use empty folders in the host's temporary directory (see configDir()). The
+ * game manager writes the user's configuration files (compilation profiles, engine
+ * profiles) to the host's temporary directory, which is removed when the host is
+ * destroyed.
  */
 class FakeHost : public McpHost, public DocumentHost
 {
@@ -68,8 +150,19 @@ public:
   std::vector<std::filesystem::path> recentDocumentList;
   mdl::EnvironmentConfig environmentConfig;
 
+  /** The compile host returned by compileHost(). */
+  FakeCompileHost compile;
+  /**
+   * If set, compileHost() returns this host instead of `compile`, e.g. the editor's real
+   * compile host in TbUiLibTest.
+   */
+  CompileHost* compileHostOverride = nullptr;
+  /** If false, compileHost() returns nullptr (a host that cannot compile). */
+  bool supportsCompile = true;
+
 private:
   size_t m_nextDocumentId = 1;
+  std::unique_ptr<fs::TestEnvironment> m_configEnvironment;
   std::unique_ptr<kdl::task_manager> m_taskManager;
   std::unique_ptr<gl::ResourceManager> m_resourceManager;
   std::unique_ptr<mdl::GameManager> m_gameManager;
@@ -79,6 +172,14 @@ private:
 public:
   FakeHost();
   ~FakeHost() override;
+
+  /**
+   * The temporary directory that holds the user's game configuration files, one folder
+   * per game config folder (e.g. "Quake/CompilationProfiles.cfg"; the files of the
+   * "Test" game are at the top level), and the game folders of Half-Life and Quake 3
+   * ("games/Halflife", "games/Quake3").
+   */
+  const std::filesystem::path& configDir() const;
 
   /** Registers the document and returns its handle. The new document gets the focus. */
   std::string addDocument(ui::MapDocument& document, std::string title = "unnamed.map");
@@ -96,6 +197,7 @@ public:
   bool isCompileRunning(ui::MapDocument& document) override;
   DocumentHost& documentHost() override;
   mdl::GameManager& gameManager() override;
+  CompileHost* compileHost() override;
 
   // DocumentHost
   std::optional<DocumentInfo> documentToReplace() override;

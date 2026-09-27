@@ -684,10 +684,36 @@ ToolResult documentSaveAs(CallContext& context, const Args& args)
 
 // document_close, document_revert
 
+/** A COMPILE_RUNNING error if a compile_run run of the document is running. */
+std::optional<ToolError> compileRunError(
+  CallContext& context, const DocumentInfo& document, const std::string_view action)
+{
+  if (const auto* run = context.server().compileRuns->running(*document.document))
+  {
+    return makeError(
+      ErrorCode::CompileRunning,
+      fmt::format(
+        "Compile {} of {} is running; the document cannot be {} meanwhile.",
+        run->id,
+        describeDocument(document),
+        action),
+      fmt::format(
+        "Wait until compile_status {{\"run\": \"{0}\"}} reports that it has ended, or "
+        "stop it with compile_cancel {{\"run\": \"{0}\"}}.",
+        run->id));
+  }
+  return std::nullopt;
+}
+
 ToolResult documentClose(CallContext& context, const Args& args)
 {
   const auto document = context.documentInfo();
   const auto policy = args.get<std::string>("unsavedChanges");
+
+  if (auto error = compileRunError(context, document, "closed"))
+  {
+    return *error;
+  }
 
   if (context.host().isCompileRunning(context.document()))
   {
@@ -743,6 +769,12 @@ ToolResult documentRevert(CallContext& context, const Args& args)
       fmt::format(
         "{} has never been saved, so there is no file to revert to.", document.id),
       "Use document_close with unsavedChanges: 'discard' to drop the document instead.");
+  }
+
+  // reloading the document would cancel the compilation
+  if (auto error = compileRunError(context, document, "reverted"))
+  {
+    return *error;
   }
 
   if (

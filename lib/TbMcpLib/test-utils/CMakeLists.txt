@@ -23,5 +23,6 @@ target_link_libraries(TbMcpTestUtilsLib
     TbMcpLib
     TbAppTestUtilsLib
     TbMdlTestUtilsLib
+    TbFsTestUtilsLib
     TbBaseTestUtilsLib
 )
