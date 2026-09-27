@@ -1,4 +1,4 @@
-# TrenchBroom
+# TrenchBroom with MCP
 
 [![TrenchBroom Icon](app/TrenchBroom/resources/graphics/images/AppIcon.png)](https://www.youtube.com/watch?v=shcAvnYp9ow)
 
