@@ -213,6 +213,41 @@ Looking at your work
   the changed pixels.
 - view_snapshot_user captures what the user currently sees in one of their views and
   returns that view's camera.
+- Every snapshot returns a 'snapshotId'. view_pick {"snapshot": id, "pixel": {x, y}}
+  tells what a pixel shows: object id, face id ('brush:12/face:3'), group, layer,
+  point, normal and distance; pass up to 256 'pixels' at once. keepAs names work as
+  ids; only the last 32 snapshots can be picked, and picks use the current map, so take
+  a new snapshot after edits.
+- annotations on view_snapshot: {"labels": true} writes id, classname or group name
+  and size next to objects; {"grid": {"step": 64}} draws coordinates on floor and
+  walls; {"compass": true} shows north (+Y); {"player": {"point": [x, y, z]}} stands
+  the game's player box there for scale.
+
+Spaces and placement
+- Think in rooms, not brushes: spaces_list returns the enclosed spaces ('space:' ids,
+  inner bounds, floor and ceiling heights, area, layers and groups inside), their
+  openings (doorways, windows with size and position, doors in them) and neighbours.
+  Space ids stay the same until the walls around a space change; list again after
+  geometry edits. 'sealed: false' and 'outsideOpenings' show a leak before compiling.
+- surroundings {"point": [x, y, z]} describes a point in one call: its space, the
+  distance and face of the wall in each direction, floor, ceiling and nearby objects
+  with direction and distance.
+- free_spots finds where a box fits: placement "floor", "wall" (with heightAboveFloor;
+  returns the wall normal and the wall face id to texture or align with), "ceiling" or
+  "any", in a space or region, with distances from walls and objects. Use a spot's
+  'origin' for point entities.
+- walkable_plan shows where the player can walk from the player start (text and
+  image): ',' is walkable but unreachable, 'v' reachable without a way back.
+- After every modifying call, 'issuesIntroduced' also lists placement problems the
+  call caused (source "mcp", with 'code' and 'details'): Z_FIGHTING (move or resize one
+  of details.faces), ENTITY_OUTSIDE_HULL (close the gap at details.gap or move the
+  entity inside), MODEL_BELOW_FLOOR / MODEL_FLOATING / MODEL_PENETRATES_BRUSHES (with
+  the model bounds) and UV_ASPECT_DISTORTION. issues_list checks the whole map (editor
+  validators with their quick fixes, and these checks) before compiling.
+- Keep a map manifest: map_manifest_set records spaces with their purpose, key points,
+  notes and your cameras ("saveCameras": "all") in <map>.mcp.json next to the map (for a
+  new map it is written on the first save). Start work on a map with
+  map_manifest_get {"restoreCameras": true}.
 
 Editor console
 - console_read returns the messages the editor logs (material, model and definition
@@ -224,7 +259,8 @@ Editor console
 
 Results
 - Modifying calls return 'changes' (created / modified / removed ids), 'selection',
-  'issuesIntroduced', 'warnings' and the grid size in effect.
+  'issuesIntroduced' (editor validator issues and placement problems the call caused),
+  'warnings' and the grid size in effect.
 - Errors carry a code, a message, the involved object ids and a hint for the next step.
 - List results are paginated: pass 'cursor' from 'nextCursor' to get the next page.
 

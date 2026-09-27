@@ -23,12 +23,14 @@
 #include "mcp/CallLog.h"
 #include "mcp/CompileRuns.h"
 #include "mcp/Host.h"
+#include "mcp/MapManifest.h"
 #include "mcp/McpServer.h"
 #include "mcp/ObjectIds.h"
 #include "mcp/PromptRegistry.h"
 #include "mcp/ResourceRegistry.h"
 #include "mcp/Session.h"
 #include "mcp/ToolRegistry.h"
+#include "mcp/tools/PlacementChecks.h"
 
 #include <functional>
 #include <map>
@@ -104,6 +106,10 @@ public:
   ui::MapDocument& document;
   IdRegistry ids;
   std::optional<AgentTransaction> transaction;
+  /** The state of the per-call placement checks (leak results). */
+  PlacementCache placement;
+  /** The map manifest, written next to the map when it is saved. */
+  ManifestStore manifest;
 
 private:
   NotifierConnection m_notifierConnection;

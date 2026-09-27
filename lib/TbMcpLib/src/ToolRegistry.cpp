@@ -267,8 +267,27 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
                .describe("Ids of created, modified and removed objects"),
              field("selection", object({}).allowAdditionalProperties())
                .describe("The selection after the call"),
-             field("issuesIntroduced", array(any()))
-               .describe("Validation issues introduced by the call"),
+             field(
+               "issuesIntroduced",
+               array(object(
+                       {
+                         field("objectId", string()).required(),
+                         field("type", string()).required(),
+                         field("description", string()).required(),
+                         field("code", string())
+                           .describe(
+                             "Machine code: Z_FIGHTING, ENTITY_OUTSIDE_HULL, MODEL_*, "
+                             "UV_ASPECT_DISTORTION, or the editor validator in "
+                             "UPPER_SNAKE case"),
+                         field("source", enumOf({"editor", "mcp"})),
+                         field("details", any())
+                           .describe("MCP checks: face ids, positions, bounds, measures"),
+                       })
+                       .allowAdditionalProperties()))
+               .describe(
+                 "Problems the call introduced: editor validator issues of created and "
+                 "modified objects, and MCP placement checks (z-fighting, entities "
+                 "outside the hull, model placement, texture distortion)"),
              field("warnings", array(any())),
              field("console", array(any()))
                .describe("Console warnings and errors logged while the call ran"),

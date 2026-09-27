@@ -60,6 +60,7 @@ constexpr auto CallLogConsolePrefix = std::string_view{"[AI] "};
 DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
   : document{document_}
   , ids{document_}
+  , manifest{document_.map().path()}
   , m_didChange{std::move(didChange_)}
   , m_lastModified{document_.map().modified()}
 {
@@ -67,6 +68,8 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
   // transaction is gone
   m_notifierConnection += document.documentWasLoadedNotifier.connect([&]() {
     transaction.reset();
+    placement = PlacementCache{placement.changeCount + 1};
+    manifest.mapWasLoaded(document.map().path());
     infoDidChange();
     didChange(DocumentAspect::Summary);
     didChange(DocumentAspect::Selection);
@@ -74,8 +77,11 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
     didChange(DocumentAspect::Materials);
   });
 
-  m_notifierConnection +=
-    document.documentWasSavedNotifier.connect(this, &DocumentState::infoDidChange);
+  m_notifierConnection += document.documentWasSavedNotifier.connect([&]() {
+    // the user's saves and document_save(_as): write or carry the manifest
+    manifest.mapWasSaved(document.map().path());
+    infoDidChange();
+  });
   m_notifierConnection += document.modificationStateDidChangeNotifier.connect([&]() {
     // only a change of the modified flag changes the info
     if (document.map().modified() != m_lastModified)
@@ -110,10 +116,15 @@ DocumentState::DocumentState(ui::MapDocument& document_, DidChange didChange_)
     document.nodesDidChangeNotifier.connect(this, &DocumentState::nodesDidChange);
 
   const auto summaryDidChange = [&]() { didChange(DocumentAspect::Summary); };
+  m_notifierConnection += document.nodesWereAddedNotifier.connect([=, this](const auto&) {
+    placement.nodesAddedOrRemoved();
+    summaryDidChange();
+  });
   m_notifierConnection +=
-    document.nodesWereAddedNotifier.connect([=](const auto&) { summaryDidChange(); });
-  m_notifierConnection +=
-    document.nodesWereRemovedNotifier.connect([=](const auto&) { summaryDidChange(); });
+    document.nodesWereRemovedNotifier.connect([=, this](const auto&) {
+      placement.nodesAddedOrRemoved();
+      summaryDidChange();
+    });
   m_notifierConnection += document.nodeVisibilityDidChangeNotifier.connect(
     [=](const auto&) { summaryDidChange(); });
   m_notifierConnection += document.nodeLockingDidChangeNotifier.connect(
@@ -145,6 +156,8 @@ void DocumentState::infoDidChange()
 
 void DocumentState::nodesDidChange(const std::vector<mdl::Node*>& nodes)
 {
+  placement.nodesChanged(nodes);
+
   // worldspawn holds the soft bounds, WAD list and other document settings
   if (std::ranges::find(nodes, &document.map().worldNode()) != nodes.end())
   {

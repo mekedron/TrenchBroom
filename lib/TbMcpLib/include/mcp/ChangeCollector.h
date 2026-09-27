@@ -20,9 +20,14 @@
 #pragma once
 
 #include "base/NotifierConnection.h"
+#include "mcp/Errors.h"
 #include "mcp/Json.h"
+#include "mcp/tools/PlacementChecks.h"
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -63,9 +68,34 @@ public:
 struct IntroducedIssue
 {
   std::string objectId;
+  /** The editor validator's name, or the MCP check's type (e.g. "Z-fighting"). */
   std::string type;
   std::string description;
+  /**
+   * Machine code: the MCP check's code (e.g. Z_FIGHTING), or for editor issues the
+   * validator name in UPPER_SNAKE case (issueCode).
+   */
+  std::string code = {};
+  /** "editor" (the editor's validators) or "mcp" (PlacementChecks.h). */
+  std::string source = "editor";
+  /** Details of MCP issues (face ids, positions, bounds, ...); null for editor issues. */
+  Json details = nullptr;
 };
+
+/** The validator name in UPPER_SNAKE case, e.g. "Empty brush entity" ->
+ * EMPTY_BRUSH_ENTITY. */
+std::string issueCode(std::string_view validatorName);
+
+/** An introduced issue from an MCP check. */
+IntroducedIssue introducedIssue(McpIssue issue);
+
+/**
+ * Removes the MCP issues that the call already reported as a warning with the same code
+ * about the same object (e.g. the model placement warnings of entity_create_point, the
+ * UV warnings of the material tools), so that each problem is reported once.
+ */
+void removeIssuesWarnedAbout(
+  std::vector<IntroducedIssue>& issues, const std::vector<Warning>& warnings);
 
 struct ChangeReport
 {
@@ -73,6 +103,8 @@ struct ChangeReport
   std::vector<std::string> modified;
   std::vector<std::string> removed;
   std::vector<IntroducedIssue> issuesIntroduced;
+  /** Warnings of the placement checks, e.g. LEAK_CHECK_SKIPPED. */
+  std::vector<Warning> warnings;
   bool selectionChanged = false;
   bool contextChanged = false;
 
@@ -98,6 +130,9 @@ Json selectionSummary(const mdl::Map& map, const IdRegistry& ids, size_t limit =
  * Nodes are identified by their canonical ids, so a node in a linked group that was
  * replaced by a clone (and kept its id through aliasing) is reported as modified rather
  * than removed and created.
+ *
+ * With placement options, the introduced issues also contain the MCP placement problems
+ * the call introduced (PlacementTracker).
  */
 class ChangeCollector
 {
@@ -112,11 +147,15 @@ private:
   std::unordered_map<std::string, std::unordered_set<std::string>> m_issuesBefore;
   bool m_selectionChanged = false;
   bool m_contextChanged = false;
+  std::unique_ptr<PlacementTracker> m_placement;
 
   NotifierConnection m_notifierConnection;
 
 public:
-  ChangeCollector(ui::MapDocument& document, IdRegistry& ids);
+  ChangeCollector(
+    ui::MapDocument& document,
+    IdRegistry& ids,
+    std::optional<PlacementTrackerOptions> placement = std::nullopt);
   ~ChangeCollector();
 
   ChangeCollector(const ChangeCollector&) = delete;
@@ -134,6 +173,7 @@ private:
   void addParent(const mdl::Node& node);
 
   void nodesWereAdded(const std::vector<mdl::Node*>& nodes);
+  void nodesWereRemoved(const std::vector<mdl::Node*>& nodes);
   void nodesWillBeRemoved(const std::vector<mdl::Node*>& nodes);
   void nodesWillChange(const std::vector<mdl::Node*>& nodes);
   void nodesDidChange(const std::vector<mdl::Node*>& nodes);

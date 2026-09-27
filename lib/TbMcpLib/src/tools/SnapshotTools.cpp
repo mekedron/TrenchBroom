@@ -21,8 +21,10 @@
 
 #include "ToolUtils.h"
 #include "mcp/AgentCamera.h"
+#include "mcp/Annotations.h"
 #include "mcp/Args.h"
 #include "mcp/CallContext.h"
+#include "mcp/CameraProjection.h"
 #include "mcp/Image.h"
 #include "mcp/JsonVm.h"
 #include "mcp/ObjectIds.h"
@@ -275,6 +277,52 @@ Schema optionsSchema()
     field("patches", boolean().defaultsTo(true)).describe("Draw patches"),
     field("includeHidden", boolean().defaultsTo(false))
       .describe("Also draw objects and layers hidden in the editor"),
+  });
+}
+
+Schema annotationsSchema()
+{
+  return object({
+    field(
+      "labels",
+      oneOf({
+        boolean(),
+        object({
+          field("ids", array(objectId())).describe("Label exactly these objects"),
+          field("max", integer().min(1).max(100))
+            .describe("The most labels (default 30)"),
+        }),
+      }))
+      .describe("true: label the visible groups, entities and brushes (most important "
+                "first) with "
+                "id, classname or group name and size WxDxH; or {ids, max}"),
+    field(
+      "grid",
+      oneOf({
+        boolean(),
+        object({
+          field("step", number().min(1).max(65536))
+            .describe("Distance between lines (default 64)"),
+          field("planes", enumOf({"floor", "walls", "both"}).defaultsTo("both")),
+          field("box", box())
+            .describe(
+              "Floor = box bottom, walls = box sides (default: the space around the "
+              "image center)"),
+          field("labelEvery", integer().min(1).max(64))
+            .describe("Label every n-th line with its coordinate (default: automatic)"),
+        }),
+      }))
+      .describe("Coordinate lines on the floor and the walls, with coordinate labels"),
+    field("compass", boolean())
+      .describe("A compass in the top right corner (+y is north, +x east)"),
+    field(
+      "player",
+      object({
+        field("point", vec3()).required().describe("Where the player stands"),
+        field("onFloor", boolean().defaultsTo(true))
+          .describe("Stand on the floor below the point"),
+      }))
+      .describe("A box of the game's player size with its eye height, for scale"),
   });
 }
 
@@ -1205,6 +1253,9 @@ struct RenderedView
   RgbaImage image;
   ResolvedCamera camera;
   SceneCounts counts;
+  /** The drawn objects; only valid in the step that rendered them. */
+  std::vector<mdl::Node*> nodes;
+  std::function<bool(const mdl::BrushNode&, const mdl::BrushFace&)> faceFilter;
 };
 
 using CameraResolver = std::function<Result<ResolvedCamera, ToolError>(
@@ -1278,7 +1329,12 @@ Result<RenderedView, ToolError> renderView(
         width,
         height));
   }
-  return RenderedView{std::move(rendered), camera.value(), resolved.counts};
+  return RenderedView{
+    std::move(rendered),
+    camera.value(),
+    resolved.counts,
+    std::move(request.scene.nodes),
+    std::move(request.scene.faceFilter)};
 }
 
 /**
@@ -1328,6 +1384,72 @@ void warnPending(CallContext& context, const bool pending)
       "Materials or entity models were still loading; the image may miss some of "
       "them. Take the snapshot again in a moment.");
   }
+}
+
+// Snapshot ids and annotations
+
+/** Remembers the camera of a rendered image for view_pick and returns its id. */
+std::string recordSnapshot(
+  CallContext& context,
+  const AgentCamera& camera,
+  const size_t width,
+  const size_t height,
+  Json view)
+{
+  return context.session().recordSnapshot(SnapshotRecord{
+    {}, context.documentInfo().id, camera, width, height, std::move(view)});
+}
+
+/** Whether the node is drawn by the image and would be hit by a ray. */
+std::function<bool(const mdl::Node&)> drawnPredicate(const std::vector<mdl::Node*>& nodes)
+{
+  auto set =
+    std::make_shared<std::unordered_set<const mdl::Node*>>(nodes.begin(), nodes.end());
+  return [set](const mdl::Node& node) { return set->contains(&node); };
+}
+
+/**
+ * Draws the requested annotations onto the image of the rendered view and returns what
+ * was drawn, or null if no annotations were requested.
+ */
+Result<Json, ToolError> annotate(
+  CallContext& context, RenderedView& view, const Json& annotations, const bool warn)
+{
+  if (annotations.is_null() || annotations.empty())
+  {
+    return Json(nullptr);
+  }
+  auto projection =
+    ImageProjection::create(view.camera.camera, view.image.width, view.image.height);
+  if (projection.is_error())
+  {
+    return makeError(
+      ErrorCode::InvalidArgument,
+      fmt::format("Cannot annotate the image: {}", errorMessage(projection)),
+      "Check the camera.");
+  }
+  auto warnings = std::vector<Warning>{};
+  auto spec = buildAnnotations(
+    context.map(),
+    context.ids(),
+    projection.value(),
+    view.nodes,
+    drawnPredicate(view.nodes),
+    annotations,
+    warnings);
+  if (spec.is_error())
+  {
+    return errorOf(spec);
+  }
+  if (warn)
+  {
+    for (const auto& warning : warnings)
+    {
+      context.warn(warning.code, warning.message, warning.objectIds);
+    }
+  }
+  const auto report = drawAnnotations(view.image, projection.value(), spec.value());
+  return annotationsJson(spec.value(), report);
 }
 
 // agent_camera_*
@@ -1496,13 +1618,7 @@ void viewSnapshot(CallContext& context, const Args& args, ToolCompletion complet
       auto result = std::move(rendered).value();
       warnPending(context, pending);
 
-      auto image = outputImage(context, renderer, result.image, output);
-      if (image.is_error())
-      {
-        completion(errorOf(image));
-        return;
-      }
-
+      // kept snapshots keep the image without annotations, for comparisons
       auto kept = Json(nullptr);
       if (args.has("keepAs"))
       {
@@ -1516,18 +1632,40 @@ void viewSnapshot(CallContext& context, const Args& args, ToolCompletion complet
             width,
             height,
             view,
-            std::move(result.image)});
+            result.image});
         kept = name;
       }
 
-      completion(Json{
+      auto annotations =
+        annotate(context, result, args.getOr<Json>("annotations", Json(nullptr)), true);
+      if (annotations.is_error())
+      {
+        completion(errorOf(annotations));
+        return;
+      }
+
+      auto image = outputImage(context, renderer, result.image, output);
+      if (image.is_error())
+      {
+        completion(errorOf(image));
+        return;
+      }
+
+      auto json = Json{
+        {"snapshotId",
+         recordSnapshot(context, result.camera.camera, width, height, view)},
         {"image", std::move(image).value()},
         {"camera", toJson(result.camera.camera)},
         {"cameraName", result.camera.name ? Json(*result.camera.name) : Json(nullptr)},
         {"counts", countsJson(result.counts)},
         {"keptAs", std::move(kept)},
         {"resourcesPending", pending},
-      });
+      };
+      if (!annotations.value().is_null())
+      {
+        json["annotations"] = std::move(annotations).value();
+      }
+      completion(std::move(json));
     });
 }
 
@@ -1604,13 +1742,14 @@ void aroundStep(CallContext& context, std::shared_ptr<AroundJob> job)
       const auto& args = job->args;
       const auto width = size_t(args.get<int64_t>("width"));
       const auto height = size_t(args.get<int64_t>("height"));
-      const auto spec = parseViewSpec(viewJson(args), context.map());
+      const auto view = viewJson(args);
+      const auto spec = parseViewSpec(view, context.map());
       const auto index = job->next;
-      const auto& view = job->views[index];
+      const auto& aroundView = job->views[index];
       context.progress(
         double(index),
         double(job->views.size()),
-        fmt::format("Rendering {}", view.label));
+        fmt::format("Rendering {}", aroundView.label));
 
       auto rendered = renderView(
         context,
@@ -1619,7 +1758,7 @@ void aroundStep(CallContext& context, std::shared_ptr<AroundJob> job)
         [&](const auto& bounds) {
           const auto frameBounds = job->target ? job->target : bounds;
           return resolveCameraArg(
-            context, view.camera, width, height, [&]() { return frameBounds; });
+            context, aroundView.camera, width, height, [&]() { return frameBounds; });
         },
         width,
         height,
@@ -1631,21 +1770,36 @@ void aroundStep(CallContext& context, std::shared_ptr<AroundJob> job)
         return;
       }
       job->anyPending = job->anyPending || pending;
-      const auto result = std::move(rendered).value();
+      auto result = std::move(rendered).value();
 
-      context.addText(view.label);
+      auto annotations = annotate(
+        context, result, args.getOr<Json>("annotations", Json(nullptr)), index == 0);
+      if (annotations.is_error())
+      {
+        job->completion(errorOf(annotations));
+        return;
+      }
+
+      context.addText(aroundView.label);
       auto image = outputImage(context, renderer, result.image, OutputSpec{});
       if (image.is_error())
       {
         job->completion(errorOf(image));
         return;
       }
-      job->images.push_back(Json{
-        {"label", view.label},
+      auto imageJson = Json{
+        {"label", aroundView.label},
+        {"snapshotId",
+         recordSnapshot(context, result.camera.camera, width, height, view)},
         {"camera", toJson(result.camera.camera)},
         {"image", std::move(image).value()},
         {"counts", countsJson(result.counts)},
-      });
+      };
+      if (!annotations.value().is_null())
+      {
+        imageJson["annotations"] = std::move(annotations).value();
+      }
+      job->images.push_back(std::move(imageJson));
 
       job->next += 1;
       if (job->next < job->views.size())
@@ -1876,6 +2030,8 @@ void compareKept(CallContext& context, const Args& args, ToolCompletion completi
     json["before"] = beforeName;
     json["after"] = afterName;
     json["camera"] = toJson(after->camera);
+    json["snapshotId"] =
+      recordSnapshot(context, after->camera, after->width, after->height, after->view);
     completion(std::move(json));
     return;
   }
@@ -1941,6 +2097,8 @@ void compareKept(CallContext& context, const Args& args, ToolCompletion completi
       json["before"] = beforeName;
       json["after"] = nullptr;
       json["camera"] = toJson(camera);
+      json["snapshotId"] =
+        recordSnapshot(context, camera, kept->width, kept->height, kept->view);
       completion(std::move(json));
     });
 }
@@ -2064,6 +2222,8 @@ void compareUndo(CallContext& context, const Args& args, ToolCompletion completi
         std::vector<std::string>(undoNames.begin(), undoNames.begin() + long(undone));
       json["camera"] = toJson(camera.camera);
       json["historyRestored"] = restored;
+      json["snapshotId"] =
+        recordSnapshot(context, camera.camera, width, height, viewJson(args));
       completion(std::move(json));
     });
 }
@@ -2206,6 +2366,9 @@ void viewSnapshotUser(CallContext& context, const Args& args, ToolCompletion com
       return;
     }
     completion(Json{
+      {"snapshotId",
+       recordSnapshot(
+         context, it->camera, image.value().width, image.value().height, Json::object())},
       {"views", std::move(list)},
       {"view", viewId},
       {"camera", toJson(it->camera)},
@@ -2215,6 +2378,32 @@ void viewSnapshotUser(CallContext& context, const Args& args, ToolCompletion com
 }
 
 } // namespace
+
+bool SnapshotVisibility::drawsNode(const mdl::Node& node) const
+{
+  return nodes.contains(&node);
+}
+
+bool SnapshotVisibility::drawsFace(
+  const mdl::BrushNode& brushNode, const size_t faceIndex) const
+{
+  return !faceFilter || faceFilter(brushNode, brushNode.brush().face(faceIndex));
+}
+
+SnapshotVisibility snapshotVisibility(
+  mdl::Map& map, const IdRegistry& ids, const Json& view)
+{
+  const auto spec = parseViewSpec(view, map);
+  auto scene = buildScene(map, ids, spec, true);
+  auto result = SnapshotVisibility{};
+  if (scene.is_success())
+  {
+    auto& resolved = scene.value();
+    result.nodes.insert(resolved.scene.nodes.begin(), resolved.scene.nodes.end());
+    result.faceFilter = std::move(resolved.scene.faceFilter);
+  }
+  return result;
+}
 
 // map_plan_view image form
 
@@ -2298,6 +2487,13 @@ ToolResult renderPlanImage(CallContext& context, const PlanImageRequest& request
     return errorOf(imageJson);
   }
   return Json{
+    {"snapshotId",
+     recordSnapshot(
+       context,
+       camera,
+       width,
+       height,
+       Json{{"options", Json{{"includeHidden", request.includeHidden}}}})},
     {"image", std::move(imageJson).value()},
     {"camera", toJson(camera)},
     {"counts", countsJson(resolved.counts)},
@@ -2315,6 +2511,15 @@ void registerSnapshotTools(ToolRegistry& registry)
         "An agent camera name or an inline camera (same forms as agent_camera_set); "
         "default: frame everything drawn from yaw 45, pitch -30");
   const auto countsField = field("counts", countsSchema()).describe("Drawn objects");
+  const auto snapshotIdField =
+    field("snapshotId", string())
+      .describe("Pass to view_pick to find what a pixel of the image shows");
+  const auto annotationsOutputField =
+    field("annotations", any())
+      .describe(
+        "What was drawn: {labels, labelled, labelsSkipped, grid: {step, box, floor, "
+        "walls, lines, labels} | null, compass, player: {feet, width, height, eyeHeight, "
+        "visible} | null}");
 
   registry.add(
     ToolDef{"agent_camera_set"}
@@ -2395,9 +2600,14 @@ void registerSnapshotTools(ToolRegistry& registry)
   {
     snapshotInput.push_back(f);
   }
-  snapshotInput.push_back(field("keepAs", string().matching(CameraNamePattern))
-                            .describe("Keep the image under this name for "
-                                      "view_snapshot_compare (at most 8 are kept)"));
+  snapshotInput.push_back(
+    field("keepAs", string().matching(CameraNamePattern))
+      .describe("Keep the image under this name for "
+                "view_snapshot_compare and view_pick (at most 8 "
+                "are kept; the image is kept without annotations)"));
+  snapshotInput.push_back(
+    field("annotations", annotationsSchema())
+      .describe("Draw labels, a coordinate grid, a compass or a player box for scale"));
 
   registry.add(
     ToolDef{"view_snapshot"}
@@ -2411,11 +2621,16 @@ void registerSnapshotTools(ToolRegistry& registry)
         "shading, fog, edges, hideTags (e.g. trigger, clip, skip, hint), "
         "hideClassnames, pointEntities, brushEntities, patches, entityModels, bounds, "
         "classnames, entityLinks, leakPath, grid, axes; isolate draws only the given "
-        "objects; highlight tints objects. Returns the image as image content. Example: "
-        "{\"camera\": {\"frame\": {\"ids\": [\"brush:12\"]}, \"yaw\": 30}, "
-        "\"options\": {\"hideTags\": [\"trigger\"]}}")
+        "objects; highlight tints objects. annotations draws object labels (id, "
+        "classname or group name, size), a coordinate grid on the floor and walls, a "
+        "compass and a player-sized box onto the image. Returns the image as image "
+        "content and a snapshotId: view_pick tells what any pixel of the image shows. "
+        "Example: {\"camera\": {\"frame\": {\"ids\": [\"brush:12\"]}, \"yaw\": 30}, "
+        "\"options\": {\"hideTags\": [\"trigger\"]}, \"annotations\": {\"labels\": "
+        "true, \"compass\": true}}")
       .input(object(snapshotInput))
       .output(object({
+        snapshotIdField,
         field("image", imageOutputSchema()),
         field("camera", cameraOutputSchema()),
         field("cameraName", any()).describe("The agent camera used, or null"),
@@ -2423,6 +2638,7 @@ void registerSnapshotTools(ToolRegistry& registry)
         field("keptAs", any()).describe("keepAs, or null"),
         field("resourcesPending", boolean())
           .describe("Materials or models were still loading"),
+        annotationsOutputField,
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -2464,6 +2680,9 @@ void registerSnapshotTools(ToolRegistry& registry)
   {
     aroundInput.push_back(f);
   }
+  aroundInput.push_back(
+    field("annotations", annotationsSchema())
+      .describe("Annotations drawn on every image, as view_snapshot"));
 
   registry.add(
     ToolDef{"view_snapshots_around"}
@@ -2476,7 +2695,8 @@ void registerSnapshotTools(ToolRegistry& registry)
         "\"south\", \"west\", \"top\"]}")
       .input(object(aroundInput))
       .output(object({
-        field("images", array(any())).describe("{label, camera, image, counts}"),
+        field("images", array(any()))
+          .describe("{label, snapshotId, camera, image, counts, annotations}"),
         field("target", any()).describe("The framed box, or null for everything"),
       }))
       .mutation(Mutation::None)
@@ -2529,6 +2749,8 @@ void registerSnapshotTools(ToolRegistry& registry)
         field("undoSteps", integer()),
         field("undone", array(string())).describe("The undo steps compared across"),
         field("historyRestored", boolean()),
+        field("snapshotId", string())
+          .describe("The after image's camera, for view_pick (pixels of one image)"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
@@ -2559,6 +2781,7 @@ void registerSnapshotTools(ToolRegistry& registry)
         field("view", any()).describe("The captured view, or null"),
         field("camera", cameraOutputSchema()),
         field("image", imageOutputSchema()),
+        field("snapshotId", string()).describe("For view_pick"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)

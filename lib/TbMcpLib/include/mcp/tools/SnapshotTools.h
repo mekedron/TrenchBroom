@@ -20,15 +20,27 @@
 #pragma once
 
 #include "mcp/Errors.h"
+#include "mcp/Json.h"
 #include "mcp/Snapshot.h"
 
 #include <cstddef>
+#include <functional>
 #include <optional>
+#include <unordered_set>
 #include <vector>
+
+namespace tb::mdl
+{
+class BrushFace;
+class BrushNode;
+class Map;
+class Node;
+} // namespace tb::mdl
 
 namespace tb::mcp
 {
 class CallContext;
+class IdRegistry;
 class ToolRegistry;
 
 /**
@@ -65,5 +77,25 @@ struct PlanImageRequest
  * UNSUPPORTED_IN_HOST if the host cannot render.
  */
 ToolResult renderPlanImage(CallContext& context, const PlanImageRequest& request);
+
+/** The objects that a snapshot draws. */
+struct SnapshotVisibility
+{
+  /** The drawn brushes, patches, point entities, brush entities and groups. */
+  std::unordered_set<const mdl::Node*> nodes;
+  /** The face filter of the snapshot; null draws all faces. */
+  std::function<bool(const mdl::BrushNode&, const mdl::BrushFace&)> faceFilter;
+
+  bool drawsNode(const mdl::Node& node) const;
+  bool drawsFace(const mdl::BrushNode& brushNode, size_t faceIndex) const;
+};
+
+/**
+ * The objects that a snapshot with the given view arguments (options, isolate,
+ * highlight; see SnapshotRecord::view) draws in the current state of the map, resolved
+ * like view_snapshot does. Ids that no longer exist are skipped.
+ */
+SnapshotVisibility snapshotVisibility(
+  mdl::Map& map, const IdRegistry& ids, const Json& view);
 
 } // namespace tb::mcp

@@ -5,10 +5,12 @@ add_library(TbMcpLib STATIC)
 target_sources(TbMcpLib
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AgentCamera.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Annotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CallRunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CameraProjection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ChangeCollector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CompileRuns.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ConsoleBuffer.cpp
@@ -22,6 +24,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonVm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LogCapture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MapManifest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Pagination.cpp
@@ -62,15 +65,20 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/GroupTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/HistoryTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/LayerTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ManifestTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialKnowledge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialKnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/MaterialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/NodeJson.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/PickTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/PlacementChecks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SceneTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SessionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SnapshotTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpaceAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpaceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/SpatialTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TagTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ToolUtils.cpp
@@ -78,6 +86,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/TransformTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/UvCheck.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/UvTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ValidationTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tools/ViewTools.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
@@ -85,9 +94,11 @@ target_sources(TbMcpLib
     FILES
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Args.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/AgentCamera.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Annotations.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallContext.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallLog.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CallRunner.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CameraProjection.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ChangeCollector.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/CompileRuns.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ConsoleBuffer.h
@@ -101,6 +112,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonRpc.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonVm.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/LogCapture.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/MapManifest.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/McpServer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ObjectIds.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Pagination.h
@@ -139,18 +151,24 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/GroupTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/HistoryTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/LayerTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ManifestTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialKnowledge.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialKnowledgeTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/MaterialTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/PickTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/PlacementChecks.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SceneTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SelectionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SessionTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SnapshotTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpatialTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpaceAnalysis.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/SpaceTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TagTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/TransformTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/UvCheck.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/UvTools.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ValidationTools.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/tools/ViewTools.h
 )
 

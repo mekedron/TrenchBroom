@@ -5,10 +5,12 @@ target_sources(TbMcpLibTest
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_AgentCamera.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Annotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BrushEditTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CallRunner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CameraProjection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ChangeCollector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ClipboardTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CompileLog.cpp
@@ -37,6 +39,8 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ManifestTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapManifest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialKnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialTools.cpp
@@ -44,11 +48,15 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ObjectIds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Pagination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PromptRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PickTools.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_PlacementChecks.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ResourceRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Scenarios.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SceneTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SpaceAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SpaceTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SelectionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SessionTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SnapshotTools.cpp
@@ -66,6 +74,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvCheck.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_UvWarnings.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ValidationTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ViewTools.cpp
 )
 

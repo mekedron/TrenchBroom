@@ -39,6 +39,7 @@
 #include "gl/PerspectiveCamera.h"
 #include "gl/ResourceManager.h"
 #include "gl/VboManager.h"
+#include "mcp/CameraProjection.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
@@ -82,7 +83,7 @@ namespace
 {
 
 /** The largest image side that is rendered even if the driver allows more. */
-constexpr auto MaxImageSize = 16384;
+constexpr auto MaxImageSize = int(mcp::MaxCameraImageSize);
 
 /** The number of samples per pixel; Qt uses none if multisampling is not supported. */
 constexpr auto Samples = 4;
@@ -550,68 +551,6 @@ void processResources(gl::Gl& gl, mdl::Map& map)
 
 } // namespace
 
-Result<std::unique_ptr<gl::Camera>> makeGlCamera(
-  const mcp::AgentCamera& camera, const size_t width, const size_t height)
-{
-  if (width == 0 || height == 0 || width > MaxImageSize || height > MaxImageSize)
-  {
-    return Error{fmt::format("Invalid image size {}x{}", width, height)};
-  }
-  if (
-    !std::isfinite(camera.nearPlane) || !std::isfinite(camera.farPlane)
-    || camera.nearPlane <= 0.0 || camera.farPlane <= camera.nearPlane)
-  {
-    return Error{fmt::format(
-      "Invalid clipping planes: near {}, far {}", camera.nearPlane, camera.farPlane)};
-  }
-  if (
-    !vm::is_finite(camera.position) || !vm::is_finite(camera.direction)
-    || !vm::is_finite(camera.up))
-  {
-    return Error{"Invalid camera position or orientation"};
-  }
-
-  const auto direction = vm::normalize(vm::vec3f{camera.direction});
-  const auto up = vm::normalize(vm::vec3f{camera.up});
-  if (
-    !vm::is_unit(direction, vm::Cf::almost_zero())
-    || !vm::is_unit(up, vm::Cf::almost_zero())
-    || vm::is_zero(vm::cross(direction, up), vm::Cf::almost_zero()))
-  {
-    return Error{
-      "Invalid camera orientation: direction and up must not be zero or parallel"};
-  }
-
-  const auto viewport = gl::Camera::Viewport{0, 0, int(width), int(height)};
-  const auto position = vm::vec3f{camera.position};
-  const auto nearPlane = float(camera.nearPlane);
-  const auto farPlane = float(camera.farPlane);
-
-  switch (camera.projection)
-  {
-  case mcp::CameraProjection::Perspective:
-    if (!(camera.fov >= 1.0 && camera.fov <= 150.0))
-    {
-      return Error{fmt::format(
-        "Invalid field of view {}, must be between 1 and 150 degrees", camera.fov)};
-    }
-    return std::make_unique<gl::PerspectiveCamera>(
-      float(camera.fov), nearPlane, farPlane, viewport, position, direction, up);
-  case mcp::CameraProjection::Orthographic: {
-    if (!(camera.zoom >= 0.02 && camera.zoom <= 100.0))
-    {
-      return Error{fmt::format(
-        "Invalid zoom {}, must be between 0.02 and 100 pixels per unit", camera.zoom)};
-    }
-    auto result = std::make_unique<gl::OrthographicCamera>(
-      nearPlane, farPlane, viewport, position, direction, up);
-    result->setZoom(float(camera.zoom));
-    return result;
-  }
-    switchDefault();
-  }
-}
-
 mcp::AgentCamera toAgentCamera(const gl::Camera& camera)
 {
   auto result = mcp::AgentCamera{
@@ -726,7 +665,7 @@ bool McpSnapshotRenderer::resourcesPending(MapDocument& document)
 Result<mcp::RgbaImage> McpSnapshotRenderer::render(
   MapDocument& document, const mcp::SnapshotRequest& request)
 {
-  return makeGlCamera(request.camera, request.width, request.height)
+  return mcp::makeGlCamera(request.camera, request.width, request.height)
          | kdl::and_then([&](const auto& camera) {
              return createContext() | kdl::and_then([&]() {
                       return renderInContext(document, request, *camera);

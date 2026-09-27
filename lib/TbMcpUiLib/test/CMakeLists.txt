@@ -6,6 +6,7 @@ target_sources(TbMcpUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpUiTestUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpUiTestUtils.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/RunAllTests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpAnnotations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpCompileHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_McpConsoleHook.cpp

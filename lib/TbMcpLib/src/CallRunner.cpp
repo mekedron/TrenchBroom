@@ -515,9 +515,15 @@ Json CallRunner::execute(const CallRequest& request)
     logCapture.emplace(*mapDocument, m_server.host.logTarget(*mapDocument));
     context.setLogCapture(&*logCapture);
   }
+  const auto placementCountAtStart =
+    documentState ? documentState->placement.changeCount : size_t(0);
   if (tool->mutation() == Mutation::Map && mapDocument)
   {
-    collector.emplace(*mapDocument, documentState->ids);
+    collector.emplace(
+      *mapDocument,
+      documentState->ids,
+      PlacementTrackerOptions{
+        &documentState->placement, m_server.host.knowledgeDirectory(), dryRun});
   }
 
   m_server.setActivity(ServerActivity::State::Running, tool->title());
@@ -569,6 +575,7 @@ Json CallRunner::execute(const CallRequest& request)
     if (result.is_error())
     {
       map.cancelTransaction();
+      documentState->placement.rolledBack(placementCountAtStart);
     }
     else if (dryRun)
     {
@@ -576,6 +583,7 @@ Json CallRunner::execute(const CallRequest& request)
       report = collector->finish();
       selection = selectionSummary(map, documentState->ids);
       map.cancelTransaction();
+      documentState->placement.rolledBack(placementCountAtStart);
     }
     else
     {
@@ -598,6 +606,7 @@ Json CallRunner::execute(const CallRequest& request)
 
       if (!committed)
       {
+        documentState->placement.rolledBack(placementCountAtStart);
         result = context.operationFailed(
           "The change could not be applied to all linked groups, so it was rolled back.",
           "Check for conflicts between linked groups, e.g. objects that would move "
@@ -622,6 +631,15 @@ Json CallRunner::execute(const CallRequest& request)
   }
   if (report)
   {
+    // report each problem once: as the tool's warning if it already warned about it
+    removeIssuesWarnedAbout(report->issuesIntroduced, context.warnings());
+    for (auto& warning : report->warnings)
+    {
+      context.warn(
+        std::move(warning.code),
+        std::move(warning.message),
+        std::move(warning.objectIds));
+    }
     logEntry.created = report->created.size();
     logEntry.modified = report->modified.size();
     logEntry.removed = report->removed.size();

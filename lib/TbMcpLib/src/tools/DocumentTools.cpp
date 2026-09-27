@@ -592,6 +592,15 @@ void documentOpen(CallContext& context, const Args& args, ToolCompletion complet
 
 // document_save, document_save_as
 
+/** Saving writes or carries the map manifest (DocumentState); report a failure. */
+void warnManifestNotWritten(CallContext& context)
+{
+  if (const auto& error = context.documentState().manifest.saveError())
+  {
+    context.warn("MANIFEST_NOT_WRITTEN", *error);
+  }
+}
+
 ToolResult documentSave(CallContext& context, const Args&)
 {
   auto& map = context.map();
@@ -618,6 +627,7 @@ ToolResult documentSave(CallContext& context, const Args&)
       "Check that the file and folder are writable, or save elsewhere with "
       "document_save_as.");
   }
+  warnManifestNotWritten(context);
   return Json{
     {"path", map.path().string()},
     {"savedAt", isoTime(std::chrono::system_clock::now())},
@@ -674,6 +684,7 @@ ToolResult documentSaveAs(CallContext& context, const Args& args)
       fmt::format("Could not save {}: {}", path, errorMessage(saved)),
       "Check that the folder is writable.");
   }
+  warnManifestNotWritten(context);
   return Json{
     {"path", map.path().string()},
     {"previousPath", previousPath},

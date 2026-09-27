@@ -23,8 +23,8 @@ Specs: [01-PRD.md](01-PRD.md) · [03-functional-spec.md](03-functional-spec.md) 
 | E9 | Organization, clipboard and import | §12, §13 | v1 | Done |
 | E10 | Agent vision and editor console | §17 | v1 | Done |
 | E11 | Level-design knowledge: texturing and model-aware placement | §10, §11 | v1 | Done |
-| E12 | Spatial understanding: picking, rooms, free spots, placement checks | §5, §15, §17 | v1 | Not started |
-| E13 | Validation and engine launch | §15, §16 | MVP + v1 | Not started |
+| E12 | Spatial understanding: picking, rooms, free spots, placement checks | §5, §15, §17 | v1 | Done |
+| E13 | Validation and engine launch | §15, §16 | MVP + v1 | In progress |
 | E14 | Views, camera, generic actions, preferences, knowledge | §17, §18, §19 | MVP + v1 | Not started |
 | E15 | Agent experience: prompts, guide, end-to-end scenarios | §22, 04 | v1 | Not started |
 | E16 | Headless mode, batch and advanced features | v2 items | v2 | Not started |
@@ -348,30 +348,32 @@ Goal: the agent moves from "I see a problem in the picture" to "I know the objec
 
 **Picture ↔ objects**
 
-- [ ] E12.1 `view_pick`: for a pixel (or a list of pixels) of a snapshot, the object, face, hit point, surface normal and distance, using the snapshot's camera. Snapshots keep their camera so they can be picked later.
-- [ ] E12.2 Snapshot annotations on request: labels with id, classname or group name and size; a coordinate grid on floors and walls with a chosen step; a compass; a player silhouette of the game's size as a scale reference next to a given point.
+- [x] E12.1 `view_pick`: for a pixel (or a list of pixels) of a snapshot, the object, face, hit point, surface normal and distance, using the snapshot's camera. Snapshots keep their camera so they can be picked later.
+- [x] E12.2 Snapshot annotations on request: labels with id, classname or group name and size; a coordinate grid on floors and walls with a chosen step; a compass; a player silhouette of the game's size as a scale reference next to a given point.
 
 **Rooms instead of brushes**
 
-- [ ] E12.3 `spaces_list`: finds enclosed spaces by flood fill of the empty volume (at player-size resolution) and returns for each space its inner bounds, floor and ceiling heights, floor area, openings (doorways, windows) with their size and position, neighbouring spaces, and the layer or group names found in it. Spaces get stable ids until the geometry around them changes.
-- [ ] E12.4 `surroundings`: describes in text what is around a point: the space it is in, distances to walls in each direction, nearby objects with direction and distance, floor and ceiling height.
-- [ ] E12.5 `free_spots`: finds free positions for a box of a given size in a space, on the floor, or against a wall; returns positions, the wall normal, the id of the wall face, and the free clearance; options for distance from walls and other objects and for alignment to the grid.
-- [ ] E12.6 `walkable_plan`: top-down plan (text and image) of where a player can walk and reach, considering step height, jump height, clearance under ceilings and doorways, and doors.
+- [x] E12.3 `spaces_list`: finds enclosed spaces by flood fill of the empty volume (at player-size resolution) and returns for each space its inner bounds, floor and ceiling heights, floor area, openings (doorways, windows) with their size and position, neighbouring spaces, and the layer or group names found in it. Spaces get stable ids until the geometry around them changes.
+- [x] E12.4 `surroundings`: describes in text what is around a point: the space it is in, distances to walls in each direction, nearby objects with direction and distance, floor and ceiling height.
+- [x] E12.5 `free_spots`: finds free positions for a box of a given size in a space, on the floor, or against a wall; returns positions, the wall normal, the id of the wall face, and the free clearance; options for distance from walls and other objects and for alignment to the grid.
+- [x] E12.6 `walkable_plan`: top-down plan (text and image) of where a player can walk and reach, considering step height, jump height, clearance under ceilings and doorways, and doors.
 
 **Placement checks**
 
-- [ ] E12.7 Z-fighting validator: visible coplanar overlapping faces of different brushes facing the same way (not hidden by a touching face), reported in `issuesIntroduced` of every modifying call and in `issues_list`.
-- [ ] E12.8 Leak prediction: point entities outside the sealed volume and openings to the void, found by flood fill before compiling, reported as issues with the entity and the nearest gap.
-- [ ] E12.9 Every modifying call reports placement problems it introduced: models intersecting brushes or floating (with model bounds), entities outside the hull, z-fighting, texture distortion.
+- [x] E12.7 Z-fighting validator: visible coplanar overlapping faces of different brushes facing the same way (not hidden by a touching face), reported in `issuesIntroduced` of every modifying call and in `issues_list`.
+- [x] E12.8 Leak prediction: point entities outside the sealed volume and openings to the void, found by flood fill before compiling, reported as issues with the entity and the nearest gap.
+- [x] E12.9 Every modifying call reports placement problems it introduced: models intersecting brushes or floating (with model bounds), entities outside the hull, z-fighting, texture distortion.
 
 **Map manifest**
 
-- [ ] E12.10 Map manifest: a per-map file next to the map (`<map>.mcp.json`) with spaces and their purpose, key points, notes and named agent cameras; tools to read and update it; agent cameras can be saved into it and restored in later sessions.
+- [x] E12.10 Map manifest: a per-map file next to the map (`<map>.mcp.json`) with spaces and their purpose, key points, notes and named agent cameras; tools to read and update it; agent cameras can be saved into it and restored in later sessions.
 
 **Tests and guide**
 
-- [ ] E12.11 Tests on fixture maps for picking, annotations (fake renderer), spaces, openings, surroundings, free spots, walkability, z-fighting, leak prediction and the manifest; GPU smoke test for annotations when GL is available.
-- [ ] E12.12 Agent guide: navigating a map by spaces and picks, placing with free spots, keeping a manifest.
+- [x] E12.11 Tests on fixture maps for picking, annotations (fake renderer), spaces, openings, surroundings, free spots, walkability, z-fighting, leak prediction and the manifest; GPU smoke test for annotations when GL is available.
+- [x] E12.12 Agent guide: navigating a map by spaces and picks, placing with free spots, keeping a manifest.
+
+`issues_list` (E13.1) was built with E12 so that z-fighting and entities outside the hull appear in the server's issue list; the MCP checks are not registered in the editor's validator list. Per call, texture distortion is reported as `UV_ASPECT_DISTORTION`; the other UV findings come from `uv_check` and the material tools.
 
 **Done when:** on a fixture map with two rooms and a doorway, an agent picks a chair in a snapshot and gets its id and face, lists both spaces with their doorway, finds a free wall spot for a poster with the wall face id, and gets z-fighting and an entity outside the hull reported right after the call that caused them.
 
@@ -381,7 +383,7 @@ Goal: the agent moves from "I see a problem in the picture" to "I know the objec
 
 Goal: the agent can find and fix problems in a map and start the game with it.
 
-- [ ] E13.1 `issues_list` (types, include hidden, objects, available fixes).
+- [x] E13.1 `issues_list` (types, include hidden, objects, available fixes).
 - [ ] E13.2 `issue_fix` (single and bulk), `issue_hide`, `issue_show`.
 - [ ] E13.3 `validators_list`, `validators_set`.
 - [ ] E13.4 `map_check`: agent-oriented checks: entities in walls or floating, missing player start, unreachable link targets, missing materials, entities outside rooms.

@@ -215,6 +215,74 @@ TEST_CASE("ChangeReport")
         {"ids", {ids.format(*brushNode)}},
         {"truncated", false}});
   }
+
+  SECTION("issueCode")
+  {
+    CHECK(issueCode("Empty brush entity") == "EMPTY_BRUSH_ENTITY");
+    CHECK(issueCode("Invalid UV scale") == "INVALID_UV_SCALE");
+    CHECK(
+      issueCode("Paths must use forward slashes") == "PATHS_MUST_USE_FORWARD_SLASHES");
+    CHECK(issueCode("Non-integer vertices") == "NON_INTEGER_VERTICES");
+  }
+
+  SECTION("issuesToJson")
+  {
+    auto issues = std::vector<IntroducedIssue>{
+      IntroducedIssue{
+        "entity:1",
+        "Missing entity classname",
+        "no classname",
+        "MISSING_ENTITY_CLASSNAME"},
+      introducedIssue(McpIssue{
+        "Z_FIGHTING",
+        "Z-fighting",
+        "brush:2/face:1",
+        "overlap",
+        Json{{"area", 64}},
+        "signature",
+        {"brush:2/face:1", "brush:3/face:0"}}),
+    };
+    const auto json = issuesToJson(issues);
+    CHECK(
+      json[0]
+      == Json{
+        {"objectId", "entity:1"},
+        {"type", "Missing entity classname"},
+        {"description", "no classname"},
+        {"code", "MISSING_ENTITY_CLASSNAME"},
+        {"source", "editor"}});
+    CHECK(
+      json[1]
+      == Json{
+        {"objectId", "brush:2/face:1"},
+        {"type", "Z-fighting"},
+        {"description", "overlap"},
+        {"code", "Z_FIGHTING"},
+        {"source", "mcp"},
+        {"details", {{"area", 64}}}});
+  }
+
+  SECTION("removeIssuesWarnedAbout")
+  {
+    auto issues = std::vector<IntroducedIssue>{
+      introducedIssue(McpIssue{
+        .code = "MODEL_FLOATING", .type = "Model placement", .objectId = "entity:5"}),
+      introducedIssue(McpIssue{
+        .code = "MODEL_FLOATING", .type = "Model placement", .objectId = "entity:6"}),
+      introducedIssue(McpIssue{
+        .code = "Z_FIGHTING", .type = "Z-fighting", .objectId = "brush:2/face:1"}),
+      IntroducedIssue{"entity:5", "Missing entity classname", "", "MODEL_FLOATING"},
+    };
+    removeIssuesWarnedAbout(
+      issues,
+      {Warning{"MODEL_FLOATING", "floats", {"entity:5", "brush:1"}},
+       Warning{"Z_FIGHTING", "other object", {"brush:9"}}});
+    REQUIRE(issues.size() == 3);
+    CHECK(issues[0].objectId == "entity:6");
+    CHECK(issues[1].code == "Z_FIGHTING");
+    // editor issues are never removed
+    CHECK(issues[2].source == "editor");
+  }
 }
 
 } // namespace tb::mcp

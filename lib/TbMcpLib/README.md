@@ -65,7 +65,8 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   dry runs, change reports, error mapping and the call log.
 - `ObjectIds` (`IdRegistry`): stable object ids such as `brush:1042`, based on
   `mdl::Node::runtimeId()`, surviving undo/redo and linked group updates.
-- `ChangeCollector`: created / modified / removed ids and introduced issues of a call.
+- `ChangeCollector`: created / modified / removed ids and introduced issues of a call (editor validators and
+  the MCP placement checks).
 - `Pagination`: cursors, limits and field selection for list tools.
 - `CallLog`: the ring buffer behind `session_log` plus sinks (console, JSONL file).
 - `Host`: the editor as seen by the server (`McpHost`, with the `DocumentHost` sub-interface
@@ -77,6 +78,11 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
   (`McpSnapshotRenderer` in `TbMcpUiLib`, `FakeSnapshotRenderer` in tests) draws it offscreen
   without touching the user's views. `Image` has PNG encoding, side-by-side composition and
   changed-pixel diffs.
+- `CameraProjection` (`makeGlCamera`, `ImageProjection`): the one camera of the renderer and the core, pixel rays
+  for `view_pick` and point projection; `Annotations`: labels, grids, compass and player drawn onto rendered
+  images. Every snapshot gets a `snapshotId`; the `Session` keeps the cameras of the recent ones.
+- `MapManifest`: the per-map manifest `<name>.mcp.json` (spaces, key points, notes, agent cameras), kept in memory
+  for unsaved maps and written when the document is saved.
 - `ConsoleBuffer`: the editor's console messages from editor start (filled by
   `McpConsoleHook` in `TbMcpUiLib`, by `FakeHost` in tests); `console_read` reads it, and
   every call result lists the warnings and errors logged while the call ran (`console`).
@@ -98,6 +104,11 @@ tests in new files of `TbMcpLibTest`, never in existing upstream test files (see
 - `tools/EntityModelUtils` (public header, tested directly): entity models loaded from the
   game files when the editor has not loaded them yet, animations with real bounds, the
   property that selects the animation, and placement checks against the model bounds.
+- `tools/SpaceAnalysis` (public header, tested directly): the voxel grid of empty space, spaces and openings,
+  free spots, walking and leak prediction behind `spaces_list`, `surroundings`, `free_spots`, `walkable_plan`.
+- `tools/PlacementChecks` (public header, tested directly): z-fighting and the per-call placement tracker that adds
+  the MCP checks (z-fighting, entities outside the hull, model placement, UV distortion) to `issuesIntroduced`;
+  `issues_list` reports them with the editor validators' issues.
 - `src/tools/EntityUtils`: helpers of the entity tools (definition lookup, property type
   descriptions, value validation with X14 warnings, flag lookup by name, `resolveEntities` /
   `withEntities` for tools that act on entities including worldspawn).

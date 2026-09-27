@@ -47,15 +47,6 @@ class MapDocument;
 class MapWindow;
 
 /**
- * Returns an editor camera for the given agent camera that renders an image of the given
- * size: a perspective camera with the agent camera's field of view, or an orthographic
- * camera whose zoom is the agent camera's pixels per map unit. Fails if the camera or the
- * size is invalid.
- */
-Result<std::unique_ptr<gl::Camera>> makeGlCamera(
-  const mcp::AgentCamera& camera, size_t width, size_t height);
-
-/**
  * Returns an agent camera with the projection, position, orientation, clipping planes
  * and effective field of view (perspective) or zoom (orthographic) of the given editor
  * camera.

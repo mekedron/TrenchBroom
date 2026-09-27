@@ -28,6 +28,7 @@
 #include "gl/OrthographicCamera.h"
 #include "gl/PerspectiveCamera.h"
 #include "gl/ResourceManager.h"
+#include "mcp/CameraProjection.h"
 #include "mcp/Image.h"
 #include "mcp/Json.h"
 #include "mcp/McpToolFixture.h"
@@ -219,7 +220,7 @@ TEST_CASE("makeGlCamera")
       .farPlane = 4096.0,
     };
 
-    const auto camera = makeGlCamera(agentCamera, 640, 480) | kdl::value();
+    const auto camera = mcp::makeGlCamera(agentCamera, 640, 480) | kdl::value();
     const auto* perspectiveCamera =
       dynamic_cast<const gl::PerspectiveCamera*>(camera.get());
     REQUIRE(perspectiveCamera != nullptr);
@@ -245,7 +246,7 @@ TEST_CASE("makeGlCamera")
       .farPlane = 2048.0,
     };
 
-    const auto camera = makeGlCamera(agentCamera, 800, 600) | kdl::value();
+    const auto camera = mcp::makeGlCamera(agentCamera, 800, 600) | kdl::value();
     const auto* orthographicCamera =
       dynamic_cast<const gl::OrthographicCamera*>(camera.get());
     REQUIRE(orthographicCamera != nullptr);
@@ -261,43 +262,43 @@ TEST_CASE("makeGlCamera")
   SECTION("Invalid cameras and sizes")
   {
     const auto valid = mcp::AgentCamera{};
-    CHECK(makeGlCamera(valid, 64, 64).is_success());
+    CHECK(mcp::makeGlCamera(valid, 64, 64).is_success());
 
-    CHECK(makeGlCamera(valid, 0, 64).is_error());
-    CHECK(makeGlCamera(valid, 64, 0).is_error());
-    CHECK(makeGlCamera(valid, 100000, 64).is_error());
+    CHECK(mcp::makeGlCamera(valid, 0, 64).is_error());
+    CHECK(mcp::makeGlCamera(valid, 64, 0).is_error());
+    CHECK(mcp::makeGlCamera(valid, 100000, 64).is_error());
 
     auto camera = valid;
     camera.nearPlane = 0.0;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera = valid;
     camera.farPlane = camera.nearPlane;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera = valid;
     camera.direction = vm::vec3d{0, 0, 0};
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera = valid;
     camera.up = camera.direction;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera = valid;
     camera.fov = 0.0;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera = valid;
     camera.fov = 170.0;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera = valid;
     camera.projection = mcp::CameraProjection::Orthographic;
     camera.zoom = 0.0;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
 
     camera.zoom = 1000.0;
-    CHECK(makeGlCamera(camera, 64, 64).is_error());
+    CHECK(mcp::makeGlCamera(camera, 64, 64).is_error());
   }
 }
 
@@ -365,7 +366,8 @@ TEST_CASE("toAgentCamera")
       .farPlane = 1024.0,
     };
     CHECK(
-      toAgentCamera(*(makeGlCamera(agentCamera, 32, 32) | kdl::value())) == agentCamera);
+      toAgentCamera(*(mcp::makeGlCamera(agentCamera, 32, 32) | kdl::value()))
+      == agentCamera);
   }
 }
 

@@ -19,26 +19,11 @@
 
 #pragma once
 
-#include "mcp/Json.h"
-
 namespace tb::mcp
 {
-class IdRegistry;
 class ToolRegistry;
-struct RayHit;
 
-/**
- * Registers the spatial queries objects_at_point, ray_pick, space_check and
- * map_plan_view.
- */
-void registerSpatialTools(ToolRegistry& registry);
-
-/**
- * The JSON description of a ray hit, as ray_pick and view_pick report it: `{object, kind,
- * label, face, material, normal, point, distance, entity, classname, group}` (face,
- * material and normal for brush faces; entity and classname for brushes of brush
- * entities; group if the object is in a group).
- */
-Json rayHitJson(const RayHit& hit, const IdRegistry& ids);
+/** Registers spaces_list, surroundings, free_spots and walkable_plan. */
+void registerSpaceTools(ToolRegistry& registry);
 
 } // namespace tb::mcp

@@ -21,6 +21,9 @@
 
 #include "mcp/Endpoint.h"
 
+#include <algorithm>
+#include <string>
+
 namespace tb::mcp
 {
 
@@ -45,6 +48,24 @@ std::string Session::clientDisplayName() const
     return "client " + id.substr(0, 8);
   }
   return clientVersion.empty() ? clientName : clientName + " " + clientVersion;
+}
+
+std::string Session::recordSnapshot(SnapshotRecord record)
+{
+  record.id = "snap:" + std::to_string(nextSnapshotNumber++);
+  if (snapshotRecords.size() >= MaxSnapshotRecords)
+  {
+    snapshotRecords.erase(snapshotRecords.begin());
+  }
+  snapshotRecords.push_back(std::move(record));
+  return snapshotRecords.back().id;
+}
+
+const SnapshotRecord* Session::findSnapshotRecord(const std::string& id) const
+{
+  const auto it = std::ranges::find_if(
+    snapshotRecords, [&](const auto& record) { return record.id == id; });
+  return it != snapshotRecords.end() ? &*it : nullptr;
 }
 
 } // namespace tb::mcp

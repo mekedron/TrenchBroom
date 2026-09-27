@@ -65,9 +65,12 @@ lib/TbMcpLib/
     ServerState.h           state shared with tools: host, scheduler, options, registries, sessions,
                             DocumentState per document, CallRunner, ServerActivity
     Session.h               per-client state: id, version, capabilities, subscriptions, active document, streams,
-                            named agent cameras, kept snapshots (§10.12)
+                            named agent cameras, kept snapshots, recent snapshot cameras (§10.12)
     Snapshot.h              SnapshotRequest/Scene/Options, UserView, the SnapshotRenderer interface (§10.12)
     AgentCamera.h           AgentCamera, camera math and framing helpers, camera JSON (§10.12)
+    CameraProjection.h      makeGlCamera, ImageProjection: pixel rays and point projection (§10.12)
+    Annotations.h           snapshot annotations drawn on the CPU: labels, grid, compass, player (§10.12)
+    MapManifest.h           the per-map manifest <name>.mcp.json: model, JSON, ManifestStore (§10.13)
     Image.h                 RgbaImage, PNG encoding, side-by-side composition, changed-pixel diff, downscale
     ConsoleBuffer.h         bounded buffer of the editor's console messages (§9.1)
     HttpParser.h            incremental HTTP/1.1 request parser (Content-Length bodies only)
@@ -101,6 +104,8 @@ lib/TbMcpLib/
     tools/MaterialKnowledge.h  face sampling, statistics, image analysis, notes, corpus, profiles (§10.8)
     tools/UvCheck.h         the texturing checks of uv_check and the material/UV tool warnings (§10.8)
     tools/EntityModelUtils.h   model loading, animations, frame property, placement checks (§10.7)
+    tools/SpaceAnalysis.h   voxel grid of empty space, spaces and openings, free spots, walking, leaks (§10.13)
+    tools/PlacementChecks.h z-fighting, per-call placement tracking and the MCP issue checks (§6.3, §10.13)
   src/                      same names, .cpp; tools and private tool helpers in src/tools/ (§10)
   test/                     TbMcpLibTest (tst_<Unit>.cpp, fixture/)
   test-utils/               TbMcpTestUtilsLib: FakeHost, FakeScheduler, McpToolFixture
@@ -561,6 +566,36 @@ Result envelope of modifying tools (tool data under `result`):
 }
 ```
 
+Each `issuesIntroduced` item is `{objectId, type, description, code, source}`: `source: "editor"` items come from
+the editor's validators (`code` is the validator name in UPPER_SNAKE case), `source: "mcp"` items from the MCP
+placement checks (`PlacementChecks.h`) and carry `details`:
+
+| Code | Object | `details` |
+|---|---|---|
+| `Z_FIGHTING` | a face | `faces`, `brushes`, `materials`, `area`, `center`, `plane` |
+| `ENTITY_OUTSIDE_HULL` | a point entity | `classname`, `position`, `gap` (bounds), `gapBrushes`, `cellSize` |
+| `MODEL_BELOW_FLOOR`, `MODEL_FLOATING`, `MODEL_PENETRATES_BRUSHES`, `MODEL_NO_FLOOR` | a point entity | `modelBounds`, `surface`, `relatedIds`, `distance`, `suggestedMove` |
+| `UV_ASPECT_DISTORTION` | a face | `face`, `brush`, `material`, `measured`, `fix` |
+
+**Placement tracking.** A `PlacementTracker` inside the `ChangeCollector` snapshots the MCP findings of nodes in
+`nodesWillChange` / `nodesWillBeRemoved` and diffs them by signature against the findings after the call:
+z-fighting for pairs involving created or modified brushes (signature: both brush ids and the plane); model
+placement for created or modified point entities and entities next to changed brushes (for entities without a
+snapshot only findings that name a changed brush count); UV aspect distortion for the faces of created or modified
+brushes (a cheap pre-filter skips square-texel faces whose material has neither a note nor corpus statistics).
+Findings involving created objects are always introduced. An MCP issue is dropped when the call already warned
+the same code for the same object (the model warnings of `entity_create_point`, `objects_move`,
+`entity_animation_set`; the UV warnings of the material, face and `uv_align` tools).
+
+**Leak cache.** Leak prediction is global, so the per-document `PlacementCache` (in `DocumentState`) keeps a change
+counter (never decreasing, also on undo), the leak signatures of the last analysis and the key they belong to; a
+rollback restores the key. Prediction runs only when brush, entity, patch or group ids changed; the "before"
+result is computed lazily before the first change of a call, and only when the cache is stale. While no entity is
+enclosed (an unfinished map), only entities next to a gap are reported. If one prediction takes more than 500 ms
+or the grid would be too large, leak checks are turned off for that document with one `LEAK_CHECK_SKIPPED`
+warning. Measured in Debug on 2,000 brushes: `brush_create_box` 1.3 ms without and 18.5 ms with the checks (almost
+all of it `predictLeaks`), moving 400 brushes 288 ms / 536 ms.
+
 `Mutation::External` tools omit `changes`, `selection` and `issuesIntroduced`. Read-only tools return the
 handler's JSON as `structuredContent` (plus `warnings` if any). Change lists are capped at 500 ids each
 (`truncated: true` plus counts).
@@ -840,9 +875,12 @@ call log lines, and so on.
 | `MaterialKnowledgeTools.cpp` | `material_corpus_scan`, `material_notes_get/set`, `material_usage` | E11 |
 | `UvTools.cpp` | `uv_check`, `material_fit_geometry` | E11 |
 | `EntityModelTools.cpp` | `entity_animation_set`, `entity_placement_check` | E11 |
+| `PickTools.cpp` | `view_pick` | E12 |
+| `SpaceTools.cpp` | `spaces_list`, `surroundings`, `free_spots`, `walkable_plan` | E12 |
+| `ManifestTools.cpp` | `map_manifest_get`, `map_manifest_set` | E12 |
+| `ValidationTools.cpp` | `issues_list` | E12 (E13.1) |
 
-Planned files: `ValidationTools.cpp` (`issues_list`,
-`issue_*`, `validators_*`, `map_check`, `engine_*`) in E13; `ActionTools.cpp` (`actions_list`,
+Planned: the rest of `ValidationTools.cpp` (`issue_*`, `validators_*`, `map_check`, `engine_*`) in E13; `ActionTools.cpp` (`actions_list`,
 `action_invoke`), `PreferenceTools.cpp` (`preferences_get/set`) and `KnowledgeTools.cpp` (`manual_search`,
 `manual_section`) in E14; `Prompts.cpp` in E15.
 
@@ -885,6 +923,10 @@ reads the call's logged problems or changes the selection for the call. No helpe
 - **`MaterialKnowledge.{h,cpp}`**, **`UvCheck.{h,cpp}`** and **`EntityModelUtils.{h,cpp}`** (headers in
   `include/mcp/tools/`, tested directly): material profiles (§10.8), texturing checks (§10.8), entity
   models and placement checks (§10.7).
+- **`SpaceAnalysis.{h,cpp}`** and **`PlacementChecks.{h,cpp}`** (headers in `include/mcp/tools/`, tested directly over
+  `mdl::MapFixture`): the empty-space grid, spaces, free spots, walking and leak prediction; z-fighting and the
+  placement tracker of the change report (§6.3, §10.13). They take `const mdl::Map&` and, at the JSON layer,
+  `IdRegistry`.
 - **`CompileUtils.{h,cpp}`** and **`CompileLog.{h,cpp}`** (headers in `include/mcp/tools/` so that
   `TbMcpLibTest` can test them directly): compile presets, tool path checks, profile JSON and schemas; log
   analysis (§10.10).
@@ -1372,6 +1414,36 @@ cameras live in the `Session` (at most 64) and are never shown as the user's cam
   ratio and bounds. Kept snapshots live in the `Session` (at most 8; the oldest is dropped with
   `SNAPSHOT_DROPPED`).
 - `view_snapshot_user`: `view` 3d/xy/xz/yz or `listOnly`; returns the user's view image and its camera.
+- `view_pick` (`PickTools.cpp`, synchronous): `snapshot` (a `snapshotId` or a `keepAs` name), `pixel {x, y}` or
+  `pixels` (at most 256), `includeHidden`, `ignoreTriggers`, `ignorePointEntities`, `kinds`, `ignore`,
+  `maxDistance`. Returns `{snapshot, width, height, camera, hit (single pixel), picks: [{pixel, ray, hit | null}]}`;
+  a hit has `object`, `kind`, `label`, `face`, `faceIndex`, `material`, `normal`, `point`, `distance`, `depth`,
+  `entity`, `classname`, `group`, `layer` and `bounds` (`rayHitJson` in `SpatialTools.h`, shared with `ray_pick`
+  and `space_check`; point entities get the normal of their bounds face). Unknown or dropped snapshots, pixels
+  outside the image and snapshots of another document are `INVALID_ARGUMENT` (the hint lists recent ids).
+
+**Snapshot ids and picking.** Every rendered image (`view_snapshot`, each image of `view_snapshots_around`, the
+`map_plan_view` image, the "after" image of `view_snapshot_compare`, `view_snapshot_user`) returns a `snapshotId`
+(`snap:<n>`, per session). The `Session` keeps camera, image size, document and the view arguments of the last 32
+snapshots (no pixels). `view_pick` rebuilds the scene of the snapshot from its stored arguments (editor-hidden
+objects, `hideTags`, `hideClassnames`, `isolate`, face tags) and casts the ray of each pixel through the pixel
+center (pixel (0, 0) is the top-left corner) against the **current** map, skipping hits outside the near and far
+planes. `CameraProjection.h` holds `makeGlCamera` (used by the renderer too, so pick rays and images agree) and
+`ImageProjection` (pixel → ray, point → pixel and depth in double precision, including the orthographic viewport
+rounding); orthographic cameras may have a near plane of 0 (`map_plan_view`).
+
+**Annotations** (`Annotations.h`). `view_snapshot` and `view_snapshots_around` take `annotations {labels: true |
+{ids, max ≤ 100 (30)}, grid: true | {step (64), planes floor|walls|both, box, labelEvery}, compass: true, player:
+{point, onFloor}}`. The core draws them onto the rendered `RgbaImage` (so they work with every renderer, including
+the fake one) with a built-in 5×7 font scaled with the image size. Labels (id, classname or group name, size) sit at
+the projected bounds center or the bounds face turned most towards the camera and are skipped when occluded or
+overlapping (greedy). The grid without a `box` covers the floor, ceiling and walls found by rays around the surface
+at the image center; lines behind geometry are hidden by visibility rays (a budget, about every 8 pixels). The
+compass points along the camera's horizontal forward direction (+Y north); the player is the game's player box
+(`playerSize`) with an eye-height ring standing on the floor below the point. The result reports what was drawn
+(`annotations {labels, labelled, labelsSkipped, grid, compass, player}`; warnings `GRID_STEP_INCREASED`,
+`GRID_NOT_DRAWN`, `NO_FLOOR`). A `keepAs` snapshot keeps the image without annotations so that comparisons stay
+clean.
 
 **Visibility.** Objects hidden in the editor stay hidden unless `includeHidden`; `isolate`d ids are always
 drawn. The editor's view filters (hidden tags, entity classes, show flags of the map's `EditorContext`) are
@@ -1398,13 +1470,108 @@ so the headless mode (E16) can reuse it; only `userViews`/`captureUserView` need
   renderer set up like the editor's selection renderer. The document's `MapRenderer`, the map's
   `EditorContext`, the selection and the cameras are never used. Entity links use a link renderer restricted
   to the scene's entities; point files, axes and the 2D grid are drawn as in `MapViewBase`; markers are
-  handles with a label. `makeGlCamera` / `toAgentCamera` convert cameras (tested without GL).
+  handles with a label. `toAgentCamera` converts the editor's cameras back (tested without GL); `makeGlCamera` is
+  the core's (`CameraProjection.h`).
 - User views: the typed `findChildren<MapViewBase*>()` of `MapWindow::mapView()`; the view id comes from the
   camera axis. Capturing calls `QOpenGLWidget::grabFramebuffer()`, which repaints the view once.
 - Timing: 5,000 brushes at 1024×768 take about 180 ms for the first render (shader setup) and about 35 ms
   after that (Mesa, Intel Iris Xe).
 
 ---
+
+### 10.13 Spatial understanding (E12)
+
+`view_pick` and snapshot annotations are part of agent vision (§10.12).
+
+**Empty-space analysis** (`SpaceAnalysis.h`, tested directly over `mdl::MapFixture`). `makeGrid` / `rasterize` build a
+`VoxelGrid` over a region (default: the bounds of the solid brushes padded by one cell); brushes are rasterized one
+by one over the cells their bounds overlap (cuboids by their bounds, other brushes with `intersectsInterior`), so
+large maps stay fast. `brushRole` classifies brushes:
+- *solid for spaces*: world, `func_group` and `func_detail*` brushes (not `func_detail_illusionary`) that are not
+  tool-only or liquid-only; doors, `func_wall` and triggers are reported as objects;
+- *sealing for leaks*: world and `func_group` brushes that are not tool-only or liquid-only; sky seals, clip, hint,
+  skip, trigger and origin do not, `func_detail` does not (ericw / VHLT);
+- *blocking for the player*: the solid brushes plus clip and solid brush entities (`func_wall`, `func_plat`, ...);
+  doors, triggers, `func_illusionary` and water do not block.
+
+`analyzeSpaces` returns a `SpaceMap` that holds no node pointers (safe across deferred steps). Segmentation: the
+empty cells are eroded (chessboard distance) by `openingSize / 2`; the connected cores grow back 26-connected up
+to the erosion distance (the inner bounds), then one step into the openings; long leftover passages become their
+own spaces, leftovers connected to the outside become void, everything else grows 6-connected, and small isolated
+leftovers become pockets. Boundaries between two grown regions are openings (`doorway` when they reach the floor,
+`window`, `hole`; the `func_door`s in them). A core connected to the outside is a leaking room (`sealed: false`)
+if most of its cells are enclosed in at least five directions, otherwise outdoor void. Space ids are an FNV hash of
+the inner bounds in cells: they survive unrelated edits and change when a surrounding wall moves. The default cell
+size is half the player width rounded to a power of two (16 in Quake).
+
+`predictLeaks` floods the sealing grid from outside (cell size 8, doubled until the grid has at most 1M cells;
+about 10 ms for a 20-room map in Debug). Only point entities with an `origin` in exported layers are checked; an
+entity whose cell overlaps a brush uses the nearest free neighbour cell a straight line from the origin reaches, and
+entities inside sealing brushes are not reported. The gap is where the flood path from the entity back to the
+outside first reaches a cell that sees solid in fewer than four of the six axis directions; `gapBrushes` lists up to
+eight sealing brushes nearest to it. Entities outside the grid or in cells that are not enclosed get no gap.
+`findFreeSpots` checks every candidate against the real brushes with `intersectsInterior` and against point
+entities with their model bounds; `planWalk` fits the player box with its lowest `stepHeight` units ignored, finds
+floors with five rays, and moves to the four neighbouring columns (step 18, jump 45 for all games; 63 is a
+Half-Life crouch jump).
+
+Tools (`SpaceTools.cpp`; all read-only and asynchronous with progress, cancellation between steps):
+- `spaces_list {region, cellSize, openingSize (96), detail summary|full, limit (100)}` → `{cellSize, openingSize,
+  count, spaces, openings, outsideOpenings, truncated}`. A space: `{id, bounds, size, floor {min, max, typical},
+  ceiling, height, floorArea, volume, sealed, openings, neighbours, layers, groups, objects {pointEntities,
+  brushEntities, groups, patches, classnames}, contents (full)}`; an opening: `{id (opening:n, valid in this result),
+  kind, spaces [a, b | "void"], center, bounds, width, height, bottom, normal, doors}`. Warns `SPACES_NOT_SEALED`.
+  About 250 ms (Debug) for 20 rooms.
+- `surroundings {point, radius (512), limit (20), diagonals, maxDistance (4096), includeSpace, cellSize,
+  openingSize}` → `{point, space, inside, floor, ceiling, walls [{direction, distance, face, material, object,
+  entity}], objects [{id, kind, label, position, distance, direction, dz}], objectsTruncated, description}` (compass
+  directions: +Y north, +X east).
+- `free_spots {size, placement floor|wall|ceiling|any, space, region, includeOutside, wallDistance, objectDistance,
+  step, support (1), rotate, heightAboveFloor, limit (10), sort spread|near, near}` → `{spots [{min, max, center,
+  origin, size, space, floor, clearance {-x, +x, -y, +y, down, up}, wall {face, brush, normal, material,
+  heightRange}, rotated}], count, candidates, step, coarsened}`. An unknown space is `OBJECT_NOT_FOUND`; no result
+  warns `NO_FREE_SPOT`.
+- `walkable_plan {start | from, region, cellSize, heightRange, stepHeight (18), jumpHeight (45), playerWidth,
+  playerHeight, format text|image|both, maxAreas}` → `{text, legend, origin, cellSize, columns, rows, player, start,
+  walkableCells, outsideCells, reachableCells, oneWayCells, reachableArea, unreachableAreas, spacesReached, image}`;
+  the legend is `S . v D , - # o ' '` (start, reachable, reachable without a way back, door, walkable but
+  unreachable, drop, blocked, outside, void); the PNG is drawn on the CPU. Without a start it uses the player
+  start; warns `NO_START`, `START_NOT_ON_FLOOR`.
+
+**Z-fighting** (`PlacementChecks.h`): `findZFighting(map, brushes of interest)` ports the reference rules: visible
+faces of different brushes that lie in the same plane, face the same way and overlap by more than 1 unit², unless
+an opposite-facing coplanar face of another brush covers the overlap. Faces with tool materials (`isToolMaterial`:
+names that are not rendered, such as clip*, trigger*, caulk, nodraw, skip, hint, origin, compared on the name
+after the last `/`, case-insensitive) and `trigger_*` brushes are ignored. Candidates come from the world octree;
+`NodeTree::find_intersectors` returns everything in the touched cells, so results are filtered by bounds (whole map
+with 2,000 brushes: 250 ms).
+
+**`issues_list`** (`ValidationTools.cpp`, read-only, paginated): the editor validators' issues
+(`registeredValidators()`, `node->issues()`; `fixes` are the quick-fix names, `id` is
+`issue:<runtimeId>:<issueType>:<k>` for a later `issue_fix`) and the MCP checks (z-fighting, entities outside the
+hull, model placement, UV distortion) over the whole map or `ids`. Filters `sources` (editor, mcp), `codes` (codes or
+editor type names), `ids` (objects and their contents; a face issue matches its brush), `includeHidden`. Items are
+`{id, source, code, type, description, objectId, face, lineNumber, hidden, fixes, details}`; the result adds `total`,
+`counts` per code and `leakCheck {analyzed, skippedReason}`. Leak prediction runs when requested by code or when no
+code filter is given. The MCP checks are not registered in the editor's validator list, so no upstream change is
+needed and the human's issue browser is unchanged.
+
+**Map manifest** (`MapManifest.h`, `ManifestTools.cpp`). `<name>.mcp.json` next to the map (`/x/foo.map` →
+`/x/foo.mcp.json`): `{format: "trenchbroom-mcp-manifest", version: 1, spaces [{id, name, purpose, notes, bounds}],
+keyPoints [{name, position, note}], notes [..], cameras [{name, camera}]}`; unknown top-level members are kept. It is
+read lazily, written atomically (temporary file and rename), and an invalid file is an `IO_ERROR` that saves never
+overwrite (`overwriteInvalid` does). The `ManifestStore` lives in `DocumentState`; the manifest of a never-saved map
+stays in memory (`pending`) and is written on the first save. Saves are observed through
+`MapDocument::documentWasSavedNotifier` (the editor's Save as well as `document_save` / `save_as`); save-as carries
+the manifest to the new name, and the save tools warn `MANIFEST_NOT_WRITTEN` on failure.
+- `map_manifest_get` (`Mutation::None`): `sections`, `restoreCameras: true | [names]` (loads saved cameras into the
+  session's agent cameras, `CAMERA_LIMIT`, `UNKNOWN_CAMERA`). Returns `{path, exists, pending, spaces, keyPoints,
+  notes, cameras, restoredCameras}`.
+- `map_manifest_set` (`Mutation::External`, dry run): `spaces` merged by id (null removes a field), `keyPoints`
+  merged by name (new ones need a position), `notes` appended unless present, `replace [sections]`, `saveCameras:
+  "all" | [names]`, `remove {spaces, keyPoints, notes, cameras}`, `overwriteInvalid`. Returns `{path, written,
+  pending, changed, removed, notFound, savedCameras, counts}`; warnings `MANIFEST_PENDING`,
+  `MANIFEST_ENTRY_NOT_FOUND`, `MANIFEST_OVERWRITTEN`.
 
 ## 11. Testing
 
@@ -1429,7 +1596,11 @@ so the headless mode (E16) can reuse it; only `userViews`/`captureUserView` need
 | `tst_MaterialKnowledge`, `tst_MaterialKnowledgeTools` | kinds from names and the real Quake config, `sampleFace` on Standard and Valve faces, histograms and statistics (merge, cap, JSON), summaries and kinds from statistics, image tile detection on synthetic images and the fixture textures, notes and corpus files (round trips, cache, invalid files), profile precedence with sources and samples, mod notes over game notes; `material_corpus_scan` (replace, merge, pattern, recursion, dry run, progress, cancel, no knowledge directory), `material_notes_get/set`, `material_usage` (the panel and the tile of the fixture corpus, defaults from the selection and the map) |
 | `tst_UvCheck`, `tst_UvTools`, `tst_UvWarnings` | every finding code with negatives, source gating and skip rules, the finding JSON and fixes; `uv_check` on `uv_check.map` (a stretched tile and a fractional panel), following the suggested fixes, ids vs selection, codes, pagination; `uv_align` `keepAspect`, `round`, `typical` (notes, map, default), dry run; `material_fit_geometry` followed until the face fits; the warnings of `material_apply`, `material_replace`, `face_attributes_set` and `uv_align` and their limit |
 | `tst_EntityModelUtils`, `tst_EntityModelTools` | frame property discovery (`sequence`, `frame`, fixed frames, variables that change the model), animations with names and bounds per frame, world bounds with scale, `entity_model_info`, `entity_animation_set` (names, indices, unknown animations, dry run, ids vs selection, one undo step), placement findings (a sitting model reaching below the floor, standing, floating, a chair brush, no floor), `dropToFloor` with model bounds, `objects_move` warnings, `entity_placement_check` |
-| `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities |
+| `tst_CameraProjection`, `tst_Annotations`, `tst_PickTools` | camera projection round trips (perspective, orthographic, image corners); drawing primitives and font, labels, grid, compass and player at their projected places through `view_snapshot` with the fake renderer; `view_pick` on `two_rooms.map` (brush, face, normal, pixel lists, misses, `ignore`, `maxDistance`, `kinds`, visibility of the snapshot, kept snapshots, errors) |
+| `tst_SpaceAnalysis`, `tst_SpaceTools` | on `spaces.map` (two rooms, a doorway with a `func_door`, a `Chair` group, a `Lights` layer): two spaces and one doorway with size and position, floor and ceiling, stable ids across an unrelated edit and new ids after moving a wall, leak prediction (sealed, a removed wall with its gap, an entity outside without a gap, timing); `spaces_list`, `surroundings`, `free_spots` (a poster on a wall with the face id and normal), `walkable_plan` text and image, invalid input |
+| `tst_PlacementChecks`, `tst_ValidationTools` | z-fighting rules (overlap, hidden by a touching face, tool materials and triggers ignored, different planes); per-call reports (`Z_FIGHTING` once with both faces, dry run, `ENTITY_OUTSIDE_HULL`, model placement, UV distortion, de-duplication with tool warnings; a `[.][benchmark]` case on 2,000 brushes); `issues_list` sources, filters, paging, hidden issues |
+| `tst_MapManifest`, `tst_ManifestTools` | manifest JSON round trips and invalid files; `map_manifest_get/set` merge, replace and remove, cameras saved and restored in a new session, an unsaved map's manifest written on `document_save_as`, dry run, invalid input |
+| `tst_Scenarios` | scripted scenarios: S4 (inspect `rooms.map` (Valve), import its Armory group into a Standard map next to the east wall of the selected room without overlaps, missing materials reported, imported objects selected and in the current layer), S3 (replace `wall_old*` with `wall_new*` only in the Castle layer: per-material counts, an unmatched material left alone, alignment kept, one undo step), S7 (12 columns on a circle of radius 384 facing the center, a 20-step spiral staircase, one undo step each), S1 and S6 entities; E12's acceptance scenario on `spaces.map` (pick the chair in a snapshot, both spaces with their doorway, a wall spot for a poster with the face id, z-fighting and an entity outside the hull reported by the calls that caused them) |
 
 `McpToolFixture` (`TbMcpTestUtilsLib`) runs an `McpServer` with all tools over headless documents
 (`ui::MapDocumentFixture`), a `FakeHost` and a `FakeScheduler`, with one initialized session:
@@ -1458,7 +1629,7 @@ material and S3 tests), `mcp/maps/rooms.map` (Valve, several groups including Ar
 `mcp/maps/crate_quake2.map` (Quake 2 import), `mcp/maps/uv_check.map` (knowledge.wad materials with UV problems), `mcp/corpus/` (a Valve and a Standard reference map and a
 broken one for `material_corpus_scan`), `mcp/wads/knowledge.wad` (`k_tile`, `k_panel`, `k_trim`, `{k_decal`),
 `mcp/models.fgd` with `mdl/Game/Quake/id1/progs/person.mdl` (a Quake model with the frames `stand` and `sit`)
-and `mdl/Game/Quake/id1/models/cube.mdl` (a Half-Life studio model with three sequences), `mcp/maps/no_header.map` (format detection without a header
+and `mdl/Game/Quake/id1/models/cube.mdl` (a Half-Life studio model with three sequences), `mcp/maps/spaces.map` (two rooms with a doorway and a door, a chair group, a light in a custom layer; E12), `mcp/maps/no_header.map` (format detection without a header
 comment), and game paths in `mdl/Game/`.
 
 ### 11.2 `TbMcpUiLibTest` (Qt, `RunAllTests.cpp` QApplication, offscreen)
@@ -1480,6 +1651,8 @@ comment), and game paths in `mdl/Game/`.
 - `tst_McpServerController.cpp`: preference-driven start/stop, discovery file lifecycle.
 - `tst_McpConsoleHook.cpp`: messages of a window console reach the buffer with level and document, worker-thread
   messages are marshalled, clearing clears the views and the buffer.
+- `tst_McpAnnotations.cpp`: `[gpu]` annotations drawn over real renders and `view_pick` consistency with the real
+  renderer.
 - `tst_McpSnapshotRenderer.cpp`: camera conversion, JPEG encoding, user views without a shown window (error
   paths); the `[gpu]` smoke test renders `two_rooms.map` with the real renderer and checks that the image is
   not mostly background and stable, that toggling the trigger changes it, that hiding the trigger in the editor
@@ -1542,6 +1715,20 @@ comment), and game paths in `mdl/Game/`.
   models use the first frame of each animation; the frame property is found only for direct mappings (n selects
   frame n); rays that start inside a brush pass through it. Loading a model the editor has not loaded yet
   happens synchronously on the editor thread.
+- Spaces and leaks: gaps narrower than a cell can be missed; openings wider than `openingSize` merge two spaces
+  and short narrow corridors are split between the rooms they connect; inner bounds can be one cell smaller when
+  walls are off the grid. Wall spots only on axis-aligned faces where the whole back of the box lies on one face.
+  Walking knows no crouching or swimming (water is ignored and its bottom is walkable) and uses column centers.
+- Per-call placement reports: a z-fight uncovered by removing or moving a hiding brush is found by `issues_list`
+  but not reported by the call; only UV aspect distortion is reported per call (the other UV codes come from
+  `uv_check` and the material tools); a pure addition made while the leak cache is stale reports only leaks of the
+  created entities; `issuesIntroduced` is capped at 100 items. `isToolMaterial` (`PlacementChecks`) and the tool
+  material names of `SpaceAnalysis` are separate lists.
+- `view_pick` casts against the current map, not the map as it was when the snapshot was taken; picks on
+  `view_snapshot_user` images use default visibility, not the user's view filters; patch hits have no normal;
+  the composite image of `view_snapshot_compare` cannot be picked. Annotation labels are placed greedily (some
+  are dropped), grid visibility is sampled about every 8 pixels, and the default grid box can reach through a
+  doorway.
 - Snapshots do not draw entity decals, group links, or group bounds and classnames of objects inside groups.
   `view_snapshots_around` cannot save files, and `view_snapshot_compare` returns PNG only. The 2D grid is drawn
   at the world bounds, so an orthographic camera's far plane must reach them. Capturing a user view repaints

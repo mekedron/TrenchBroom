@@ -51,6 +51,26 @@ struct KeptSnapshot
 };
 
 /**
+ * The camera of a rendered snapshot image, kept so that view_pick can find what a pixel
+ * of the image shows. No pixels are kept.
+ */
+struct SnapshotRecord
+{
+  /** "snap:<n>", unique within the session. */
+  std::string id;
+  /** The handle of the document it shows. */
+  std::string documentId;
+  AgentCamera camera;
+  size_t width = 0;
+  size_t height = 0;
+  /**
+   * The view arguments that decided which objects were drawn (options, isolate,
+   * highlight), in the form of view_snapshot.
+   */
+  Json view = Json::object();
+};
+
+/**
  * The state of one connected client. Each `initialize` creates a session.
  */
 class Session
@@ -89,6 +109,24 @@ public:
 
   /** The kept snapshots, oldest first. */
   std::vector<KeptSnapshot> keptSnapshots;
+
+  /** The most snapshot cameras a session remembers for view_pick. */
+  static constexpr size_t MaxSnapshotRecords = 32;
+
+  /** The cameras of the most recent snapshot images, oldest first. */
+  std::vector<SnapshotRecord> snapshotRecords;
+
+  /** The number of the next snapshot id. */
+  uint64_t nextSnapshotNumber = 1;
+
+  /**
+   * Remembers the camera of a rendered image, dropping the oldest record if there are
+   * MaxSnapshotRecords already. Assigns and returns the record's id.
+   */
+  std::string recordSnapshot(SnapshotRecord record);
+
+  /** The record with the given id, or nullptr if it is unknown or was dropped. */
+  const SnapshotRecord* findSnapshotRecord(const std::string& id) const;
 
   /**
    * Sends a notification over the standalone stream if the session is initialized and

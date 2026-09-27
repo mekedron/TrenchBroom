@@ -30,6 +30,7 @@
 #include "ui/MapDocument.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace tb::mcp
 {
@@ -60,6 +61,54 @@ Json cappedIds(const std::vector<std::string>& ids, const size_t limit)
 }
 
 } // namespace
+
+std::string issueCode(const std::string_view validatorName)
+{
+  auto result = std::string{};
+  auto separator = false;
+  for (const auto c : validatorName)
+  {
+    if (std::isalnum(static_cast<unsigned char>(c)))
+    {
+      if (separator && !result.empty())
+      {
+        result.push_back('_');
+      }
+      separator = false;
+      result.push_back(char(std::toupper(static_cast<unsigned char>(c))));
+    }
+    else
+    {
+      separator = true;
+    }
+  }
+  return result;
+}
+
+IntroducedIssue introducedIssue(McpIssue issue)
+{
+  return IntroducedIssue{
+    std::move(issue.objectId),
+    std::move(issue.type),
+    std::move(issue.description),
+    std::move(issue.code),
+    "mcp",
+    std::move(issue.details),
+  };
+}
+
+void removeIssuesWarnedAbout(
+  std::vector<IntroducedIssue>& issues, const std::vector<Warning>& warnings)
+{
+  std::erase_if(issues, [&](const auto& issue) {
+    return issue.source == "mcp"
+           && std::ranges::any_of(warnings, [&](const auto& warning) {
+                return warning.code == issue.code
+                       && std::ranges::find(warning.objectIds, issue.objectId)
+                            != warning.objectIds.end();
+              });
+  });
+}
 
 bool IdList::add(std::string id)
 {
@@ -122,11 +171,18 @@ Json issuesToJson(const std::vector<IntroducedIssue>& issues, const size_t limit
   auto result = Json::array();
   for (size_t i = 0; i < issues.size() && i < limit; ++i)
   {
-    result.push_back(Json{
+    auto json = Json{
       {"objectId", issues[i].objectId},
       {"type", issues[i].type},
       {"description", issues[i].description},
-    });
+      {"code", issues[i].code},
+      {"source", issues[i].source},
+    };
+    if (!issues[i].details.is_null())
+    {
+      json["details"] = issues[i].details;
+    }
+    result.push_back(std::move(json));
   }
   return result;
 }
@@ -173,14 +229,25 @@ Json selectionSummary(const mdl::Map& map, const IdRegistry& ids, const size_t l
   };
 }
 
-ChangeCollector::ChangeCollector(ui::MapDocument& document, IdRegistry& ids)
+ChangeCollector::ChangeCollector(
+  ui::MapDocument& document,
+  IdRegistry& ids,
+  std::optional<PlacementTrackerOptions> placement)
   : m_document{document}
   , m_ids{ids}
 {
+  if (placement)
+  {
+    m_placement =
+      std::make_unique<PlacementTracker>(document.map(), ids, std::move(*placement));
+  }
+
   m_notifierConnection +=
     m_document.nodesWereAddedNotifier.connect(this, &ChangeCollector::nodesWereAdded);
   m_notifierConnection += m_document.nodesWillBeRemovedNotifier.connect(
     this, &ChangeCollector::nodesWillBeRemoved);
+  m_notifierConnection +=
+    m_document.nodesWereRemovedNotifier.connect(this, &ChangeCollector::nodesWereRemoved);
   m_notifierConnection +=
     m_document.nodesWillChangeNotifier.connect(this, &ChangeCollector::nodesWillChange);
   m_notifierConnection +=
@@ -263,8 +330,10 @@ ChangeReport ChangeCollector::finish()
         beforeIt == m_issuesBefore.end()
         || !beforeIt->second.contains(issueSignature(*issue)))
       {
-        report.issuesIntroduced.push_back(IntroducedIssue{
-          id, validatorName(validators, issue->type()), issue->description()});
+        auto name = validatorName(validators, issue->type());
+        auto code = issueCode(name);
+        report.issuesIntroduced.push_back(
+          IntroducedIssue{id, std::move(name), issue->description(), std::move(code)});
       }
     }
   };
@@ -276,6 +345,17 @@ ChangeReport ChangeCollector::finish()
   for (const auto& id : report.modified)
   {
     collectIssues(id);
+  }
+
+  if (m_placement)
+  {
+    auto placement = m_placement->finish(report.created, report.modified, report.removed);
+    for (auto& issue : placement.issues)
+    {
+      report.issuesIntroduced.push_back(introducedIssue(std::move(issue)));
+    }
+    report.warnings = std::move(placement.warnings);
+    m_placement.reset();
   }
 
   return report;
@@ -320,6 +400,10 @@ void ChangeCollector::addParent(const mdl::Node& node)
 
 void ChangeCollector::nodesWereAdded(const std::vector<mdl::Node*>& nodes)
 {
+  if (m_placement)
+  {
+    m_placement->nodesWereAdded(nodes);
+  }
   for (const auto* node : nodes)
   {
     addRecursively(m_added, *node);
@@ -327,9 +411,21 @@ void ChangeCollector::nodesWereAdded(const std::vector<mdl::Node*>& nodes)
   }
 }
 
+void ChangeCollector::nodesWereRemoved(const std::vector<mdl::Node*>&)
+{
+  if (m_placement)
+  {
+    m_placement->nodesDidChange();
+  }
+}
+
 void ChangeCollector::nodesWillBeRemoved(const std::vector<mdl::Node*>& nodes)
 {
   snapshotIssues(nodes);
+  if (m_placement)
+  {
+    m_placement->nodesWillBeRemoved(nodes);
+  }
   for (const auto* node : nodes)
   {
     addRecursively(m_removed, *node);
@@ -340,10 +436,18 @@ void ChangeCollector::nodesWillBeRemoved(const std::vector<mdl::Node*>& nodes)
 void ChangeCollector::nodesWillChange(const std::vector<mdl::Node*>& nodes)
 {
   snapshotIssues(nodes);
+  if (m_placement)
+  {
+    m_placement->nodesWillChange(nodes);
+  }
 }
 
 void ChangeCollector::nodesDidChange(const std::vector<mdl::Node*>& nodes)
 {
+  if (m_placement)
+  {
+    m_placement->nodesDidChange();
+  }
   for (const auto* node : nodes)
   {
     m_changed.add(m_ids.format(*node));

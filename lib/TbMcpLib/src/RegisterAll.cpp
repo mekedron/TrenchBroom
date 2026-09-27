@@ -36,16 +36,20 @@
 #include "mcp/tools/GroupTools.h"
 #include "mcp/tools/HistoryTools.h"
 #include "mcp/tools/LayerTools.h"
+#include "mcp/tools/ManifestTools.h"
 #include "mcp/tools/MaterialKnowledgeTools.h"
 #include "mcp/tools/MaterialTools.h"
+#include "mcp/tools/PickTools.h"
 #include "mcp/tools/SceneTools.h"
 #include "mcp/tools/SelectionTools.h"
 #include "mcp/tools/SessionTools.h"
 #include "mcp/tools/SnapshotTools.h"
+#include "mcp/tools/SpaceTools.h"
 #include "mcp/tools/SpatialTools.h"
 #include "mcp/tools/TagTools.h"
 #include "mcp/tools/TransformTools.h"
 #include "mcp/tools/UvTools.h"
+#include "mcp/tools/ValidationTools.h"
 #include "mcp/tools/ViewTools.h"
 
 namespace tb::mcp
@@ -59,6 +63,7 @@ void registerAll(McpServer& server)
   registerGameTools(server.tools());
   registerSceneTools(server.tools());
   registerSpatialTools(server.tools());
+  registerSpaceTools(server.tools());
   registerSelectionTools(server.tools());
   registerGeometryTools(server.tools());
   registerTransformTools(server.tools());
@@ -78,6 +83,9 @@ void registerAll(McpServer& server)
   registerClipboardTools(server.tools());
   registerCompileTools(server.tools());
   registerSnapshotTools(server.tools());
+  registerPickTools(server.tools());
+  registerManifestTools(server.tools());
+  registerValidationTools(server.tools());
   registerConsoleTools(server.tools());
   registerResources(server);
   registerCompileResources(server.resources());

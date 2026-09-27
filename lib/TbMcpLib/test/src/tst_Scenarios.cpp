@@ -21,6 +21,8 @@
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
 #include "gl/TestUtils.h"
+#include "mcp/AgentCamera.h"
+#include "mcp/CameraProjection.h"
 #include "mcp/JsonVm.h"
 #include "mcp/McpToolFixture.h"
 #include "mdl/Brush.h"
@@ -30,10 +32,12 @@
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/GameManager.h"
 #include "mdl/GroupNode.h"
 #include "mdl/Layer.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/MapFormat.h"
 #include "mdl/Map_Brushes.h"
 #include "mdl/Map_Layers.h"
 #include "mdl/Map_Nodes.h"
@@ -43,6 +47,8 @@
 #include "mdl/UvAttributes.h"
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
+
+#include "kd/result.h"
 
 #include "vm/approx.h"
 #include "vm/bbox.h"
@@ -599,6 +605,109 @@ TEST_CASE("Scenario S3")
   CHECK(
     fixture.call("history_get", Json{{"limit", 1}})["redo"][0]["name"]
     == "AI: Replace Materials");
+}
+
+TEST_CASE("Scenario E12")
+{
+  // Two rooms and a doorway: pick the chair in a snapshot, list both spaces with their
+  // doorway, find a wall spot for a poster, and get z-fighting and an entity outside
+  // the hull reported right after the calls that caused them.
+  auto fixture = McpToolFixture{};
+  const auto* gameInfo = fixture.host().gameManager().gameInfo("Quake");
+  REQUIRE(gameInfo);
+  fixture.load(
+    getFixtureRoot() / "test" / "mcp" / "maps" / "spaces.map",
+    {.mapFormat = mdl::MapFormat::Standard, .gameInfo = *gameInfo});
+
+  // the chair's seat is the brush from (96 96 0) to (128 128 24) in the Chair group
+  const auto shot = fixture.call(
+    "view_snapshot",
+    Json{
+      {"camera", Json{{"position", {40, 40, 96}}, {"lookAt", {112, 112, 12}}}},
+      {"width", 320},
+      {"height", 240},
+    });
+  auto camera = AgentCamera{};
+  camera.position = *vec3FromJson(shot["camera"]["position"]);
+  camera.direction = *vec3FromJson(shot["camera"]["direction"]);
+  camera.up = *vec3FromJson(shot["camera"]["up"]);
+  camera.fov = shot["camera"]["fov"].get<double>();
+  camera.nearPlane = shot["camera"]["near"].get<double>();
+  camera.farPlane = shot["camera"]["far"].get<double>();
+  const auto projection = ImageProjection::create(camera, 320, 240) | kdl::value();
+  const auto seatTop = projection.project(vm::vec3d{108, 108, 24});
+  REQUIRE(seatTop.inFront);
+
+  const auto pick = fixture.call(
+    "view_pick",
+    Json{
+      {"snapshot", shot["snapshotId"]},
+      {"pixel", {{"x", int64_t(seatTop.x)}, {"y", int64_t(seatTop.y)}}},
+    });
+  const auto& hit = pick["hit"];
+  REQUIRE(hit.is_object());
+  auto* seat = fixture.node(hit["object"].get<std::string>());
+  REQUIRE(seat);
+  CHECK(seat->logicalBounds() == vm::bbox3d{{96, 96, 0}, {128, 128, 24}});
+  CHECK(hit["face"].get<std::string>().starts_with(hit["object"].get<std::string>()));
+  CHECK(*vec3FromJson(hit["normal"]) == vm::vec3d{0, 0, 1});
+  auto* chair = fixture.node(hit["group"].get<std::string>());
+  REQUIRE(dynamic_cast<mdl::GroupNode*>(chair));
+  CHECK(static_cast<mdl::GroupNode*>(chair)->name() == "Chair");
+
+  // both spaces with their doorway
+  const auto spaces = fixture.call("spaces_list");
+  REQUIRE(spaces["count"] == 2);
+  const auto& opening = spaces["openings"];
+  REQUIRE(opening.size() == 1);
+  CHECK(opening[0]["kind"] == "doorway");
+  CHECK(opening[0]["width"] == 64);
+  CHECK(opening[0]["height"] == 112);
+  const auto spaceIds = std::vector{spaces["spaces"][0]["id"], spaces["spaces"][1]["id"]};
+  CHECK(std::ranges::find(spaceIds, opening[0]["spaces"][0]) != spaceIds.end());
+  CHECK(std::ranges::find(spaceIds, opening[0]["spaces"][1]) != spaceIds.end());
+
+  // a free wall spot for a poster in the second room
+  const auto& room2 = spaces["spaces"][0]["bounds"]["min"][0].get<double>() > 256
+                        ? spaces["spaces"][0]
+                        : spaces["spaces"][1];
+  const auto spots = fixture.call(
+    "free_spots",
+    Json{
+      {"size", {64, 4, 64}},
+      {"placement", "wall"},
+      {"space", room2["id"]},
+      {"heightAboveFloor", 64},
+    });
+  REQUIRE(spots["count"].get<size_t>() > 0);
+  const auto& wall = spots["spots"][0]["wall"];
+  const auto wallFace = wall["face"].get<std::string>();
+  CHECK(wallFace.find("/face:") != std::string::npos);
+  const auto normal = *vec3FromJson(wall["normal"]);
+  CHECK(vm::abs(normal.z()) == 0.0);
+  CHECK(fixture.node(wall["brush"].get<std::string>()) != nullptr);
+
+  // z-fighting: a slab whose top lies in the floor plane of the first room
+  const auto slab = fixture.call(
+    "brush_create_box", Json{{"min", {200, 200, -8}}, {"max", {264, 264, 0}}});
+  auto zfighting = std::vector<Json>{};
+  for (const auto& issue : slab["issuesIntroduced"])
+  {
+    if (issue["code"] == "Z_FIGHTING")
+    {
+      zfighting.push_back(issue);
+    }
+  }
+  REQUIRE(zfighting.size() == 1);
+  CHECK(zfighting[0]["details"]["faces"].size() == 2);
+
+  // an entity outside the hull
+  const auto outside = fixture.call(
+    "entity_create_point", Json{{"classname", "light"}, {"position", {2000, 2000, 64}}});
+  const auto entityId = outside["result"]["entity"];
+  CHECK(std::ranges::any_of(outside["issuesIntroduced"], [&](const auto& issue) {
+    return issue["code"] == "ENTITY_OUTSIDE_HULL" && issue["objectId"] == entityId;
+  }));
 }
 
 } // namespace tb::mcp

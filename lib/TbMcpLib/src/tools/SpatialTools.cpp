@@ -143,36 +143,6 @@ vm::bbox3d intersection(const vm::bbox3d& lhs, const vm::bbox3d& rhs)
   return vm::bbox3d{vm::max(lhs.min, rhs.min), vm::min(lhs.max, rhs.max)};
 }
 
-Json hitJson(CallContext& context, const RayHit& hit)
-{
-  const auto& ids = context.ids();
-  auto result = Json{
-    {"object", ids.format(*hit.node)},
-    {"kind", std::string{toString(objectKindOf(*hit.node))}},
-    {"label", nodeLabel(*hit.node)},
-  };
-  if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(hit.node);
-      brushNode && hit.faceIndex)
-  {
-    const auto& face = brushNode->brush().face(*hit.faceIndex);
-    result["face"] = ids.formatFace(*brushNode, *hit.faceIndex);
-    result["material"] = face.materialName();
-    result["normal"] = toJson(face.normal());
-  }
-  result["point"] = toJson(hit.point);
-  result["distance"] = roundForOutput(hit.distance);
-  if (const auto* entityNode = owningBrushEntity(*hit.node))
-  {
-    result["entity"] = ids.format(*entityNode);
-    result["classname"] = entityNode->entity().classname();
-  }
-  if (auto group = groupIdOf(*hit.node, ids); !group.is_null())
-  {
-    result["group"] = std::move(group);
-  }
-  return result;
-}
-
 Json compactJson(const mdl::Node& node, const IdRegistry& ids)
 {
   return Json{
@@ -365,7 +335,7 @@ ToolResult rayPick(CallContext& context, const Args& args)
   auto result = Json{
     {"origin", toJson(ray.origin)},
     {"direction", toJson(ray.direction)},
-    {"hit", hits.empty() ? Json(nullptr) : hitJson(context, hits.front())},
+    {"hit", hits.empty() ? Json(nullptr) : rayHitJson(hits.front(), context.ids())},
   };
   if (args.get<bool>("all"))
   {
@@ -373,7 +343,7 @@ ToolResult rayPick(CallContext& context, const Args& args)
     auto hitsJson = Json::array();
     for (size_t i = 0; i < hits.size() && i < limit; ++i)
     {
-      hitsJson.push_back(hitJson(context, hits[i]));
+      hitsJson.push_back(rayHitJson(hits[i], context.ids()));
     }
     result["hits"] = std::move(hitsJson);
     if (hits.size() > limit)
@@ -437,7 +407,7 @@ Json surfaceJson(
   {
     return nullptr;
   }
-  auto result = hitJson(context, *hit);
+  auto result = rayHitJson(*hit, context.ids());
   result.erase("distance");
   result.erase("normal");
   result["z"] = roundForOutput(hit->point.z());
@@ -948,11 +918,41 @@ ToolResult mapPlanView(CallContext& context, const Args& args)
     }
     result["image"] = std::move(image.value()["image"]);
     result["camera"] = std::move(image.value()["camera"]);
+    result["snapshotId"] = std::move(image.value()["snapshotId"]);
   }
   return result;
 }
 
 } // namespace
+
+Json rayHitJson(const RayHit& hit, const IdRegistry& ids)
+{
+  auto result = Json{
+    {"object", ids.format(*hit.node)},
+    {"kind", std::string{toString(objectKindOf(*hit.node))}},
+    {"label", nodeLabel(*hit.node)},
+  };
+  if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(hit.node);
+      brushNode && hit.faceIndex)
+  {
+    const auto& face = brushNode->brush().face(*hit.faceIndex);
+    result["face"] = ids.formatFace(*brushNode, *hit.faceIndex);
+    result["material"] = face.materialName();
+    result["normal"] = toJson(face.normal());
+  }
+  result["point"] = toJson(hit.point);
+  result["distance"] = roundForOutput(hit.distance);
+  if (const auto* entityNode = owningBrushEntity(*hit.node))
+  {
+    result["entity"] = ids.format(*entityNode);
+    result["classname"] = entityNode->entity().classname();
+  }
+  if (auto group = groupIdOf(*hit.node, ids); !group.is_null())
+  {
+    result["group"] = std::move(group);
+  }
+  return result;
+}
 
 void registerSpatialTools(ToolRegistry& registry)
 {
@@ -1150,6 +1150,8 @@ void registerSpatialTools(ToolRegistry& registry)
         field("image", any())
           .describe("Image formats: {width, height, format, bytes, savedTo}"),
         field("camera", any()).describe("Image formats: the orthographic camera used"),
+        field("snapshotId", string())
+          .describe("Image formats: pass to view_pick to find what a pixel shows"),
       }))
       .mutation(Mutation::None)
       .documentUse(DocumentUse::Required)
