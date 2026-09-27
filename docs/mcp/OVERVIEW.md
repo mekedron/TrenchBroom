@@ -11,7 +11,7 @@ The agent works in the live editor window next to you. Every edit it makes shows
 
 | | |
 |---|---|
-| Tools | 197, in 37 groups |
+| Tools | 198, in 37 groups |
 | Prompts | 9 ready-made tasks (block out a level, lighting pass, texture pass, fix all issues, compile and debug, …) |
 | Resources | 12, several of them subscribable (editor status, selection, issues, console, compile log, …) |
 | Editor coverage | 98.7% of the editor's menu and shortcut actions are reachable (390 of 395; the missing 5 are debug-only) |

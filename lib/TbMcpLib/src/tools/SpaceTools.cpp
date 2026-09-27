@@ -102,9 +102,19 @@ Json compactJson(const mdl::Node& node, const IdRegistry& ids)
 SpaceOptions spaceOptions(const Args& args)
 {
   auto options = SpaceOptions{};
+  options.region = args.getOptional<vm::bbox3d>("region");
   options.cellSize = args.getOr<double>("cellSize", 0.0);
   options.openingSize = args.getOr<double>("openingSize", 96.0);
   return options;
+}
+
+/** Warns CELL_SIZE_ENLARGED if the analysis chose a larger cell size than the default. */
+void warnEnlargedCellSize(CallContext& context, const SpaceMap& spaces)
+{
+  if (auto message = enlargedCellSizeMessage(spaces))
+  {
+    context.warn("CELL_SIZE_ENLARGED", std::move(*message));
+  }
 }
 
 /**
@@ -133,6 +143,7 @@ void withSpaces(
     }
     context.progress(1.0, totalSteps, "Describing the result");
     auto shared = std::make_shared<SpaceMap>(std::move(spaces).value());
+    warnEnlargedCellSize(context, *shared);
     if (
       !shared->spaces.empty()
       && std::ranges::none_of(
@@ -303,6 +314,10 @@ ToolResult spacesListResult(
       {"groups", details.groups},
       {"objects", std::move(objects)},
     };
+    if (space.clipped)
+    {
+      item["clipped"] = true;
+    }
     if (full)
     {
       item["contents"] = std::move(contents);
@@ -1143,9 +1158,16 @@ ToolResult walkableResult(
   }
   else if (!plan.startNode)
   {
+    const auto& region = plan.region;
+    const auto outsideRegion =
+      plan.start->x() < region.min.x() || plan.start->x() > region.max.x()
+      || plan.start->y() < region.min.y() || plan.start->y() > region.max.y();
     context.warn(
       "START_NOT_ON_FLOOR",
-      "The player does not fit on a floor at the start; nothing is reachable.",
+      outsideRegion
+        ? "The start is outside the region, so nothing is reachable; pass \"start\" or "
+          "\"from\" inside the region."
+        : "The player does not fit on a floor at the start; nothing is reachable.",
       {});
   }
 
@@ -1327,15 +1349,51 @@ void walkablePlan(CallContext& context, const Args& args, ToolCompletion complet
       return;
     }
     auto sharedPlan = std::make_shared<WalkPlan>(std::move(plan).value());
-    auto options = SpaceOptions{};
-    options.openingSize = args.getOr<double>("openingSize", 96.0);
-    withSpaces(
-      context,
-      options,
-      completion,
-      [shared, sharedPlan](CallContext& c, const SpaceMap& spaces) {
-        return walkableResult(c, *shared, *sharedPlan, &spaces);
-      });
+    if (sharedPlan->enlargedFrom)
+    {
+      context.warn(
+        "CELL_SIZE_ENLARGED",
+        fmt::format(
+          "The plan used cellSize {} instead of {} to stay within {} columns; pass a "
+          "smaller \"region\" for a finer plan.",
+          roundForOutput(sharedPlan->cellSize),
+          roundForOutput(*sharedPlan->enlargedFrom),
+          WalkOptions{}.maxColumns));
+    }
+
+    // the spaces tell walkable cells inside the map from roofs; the plan is useful
+    // without them
+    context.progress(1.0, 3.0, "Analyzing the empty space");
+    context.defer([&context, args, completion, shared, sharedPlan]() {
+      if (context.cancelled())
+      {
+        completion(cancelledError());
+        return;
+      }
+      auto options = SpaceOptions{};
+      options.region = shared->options.region;
+      options.openingSize = args.getOr<double>("openingSize", 96.0);
+      auto spaces = analyzeSpaces(context.map(), options);
+      if (spaces.is_error())
+      {
+        context.warn(
+          "SPACES_SKIPPED",
+          fmt::format(
+            "The space analysis failed, so walkable cells outside all spaces (roofs) "
+            "are not told apart and spacesReached is empty: {} {}",
+            errorOf(spaces).message,
+            errorOf(spaces).hint));
+      }
+      else
+      {
+        warnEnlargedCellSize(context, spaces.value());
+      }
+      context.progress(2.0, 3.0, "Describing the result");
+      auto result = walkableResult(
+        context, *shared, *sharedPlan, spaces.is_success() ? &spaces.value() : nullptr);
+      context.progress(3.0, 3.0, "Done");
+      completion(std::move(result));
+    });
   });
 }
 
@@ -1347,7 +1405,10 @@ void registerSpaceTools(ToolRegistry& registry)
     field("cellSize", number().min(2).max(1024))
       .describe(
         "Edge length of the analysis cells (default: half the player width, 16 for "
-        "Quake and Half-Life); larger cells are faster but coarser");
+        "Quake and Half-Life, enlarged to 24, 32, 48, ... with warning "
+        "CELL_SIZE_ENLARGED when the analyzed volume needs more than 4,000,000 "
+        "cells, e.g. under a tall sky); larger cells are faster but coarser. An "
+        "explicit cellSize that needs too many cells fails with the size that fits");
   const auto openingSizeField =
     field("openingSize", number().min(8).defaultsTo(96))
       .describe(
@@ -1378,13 +1439,19 @@ void registerSpaceTools(ToolRegistry& registry)
         "floors) with size, center, bottom height, the two space ids (\"void\" for "
         "the outside) and the func_door entities in them; outsideOpenings are "
         "leaks. detail \"full\" also lists the objects in each space. Space ids "
-        "work in free_spots and map_manifest_set (with the same cellSize and "
-        "openingSize, since they depend on the segmentation). Reports progress and can "
-        "be "
-        "cancelled on large maps. Examples: {}; {\"region\": {\"min\": [0, 0, 0], "
+        "work in free_spots and map_manifest_set (with the same cellSize, openingSize "
+        "and region, since they depend on the segmentation). On large maps (e.g. under "
+        "a tall sky) the automatic cell size grows (warning CELL_SIZE_ENLARGED; pass "
+        "the reported cellSize to the other tools); a region analyzes only that box at "
+        "full resolution, and spaces cut by its border are clipped (sealed then "
+        "describes only the part inside). Reports progress and can be cancelled on "
+        "large maps. Examples: {}; {\"region\": {\"min\": [0, 0, 0], "
         "\"max\": [1024, 1024, 256]}, \"detail\": \"full\"}")
       .input(object({
-        field("region", box()).describe("Only spaces whose bounds intersect this box"),
+        field("region", box())
+          .describe(
+            "Analyze only this box (finer cells on large maps); spaces cut by its "
+            "border inside the map are marked clipped"),
         cellSizeField,
         openingSizeField,
         field("detail", enumOf({"summary", "full"}).defaultsTo("summary"))
@@ -1399,7 +1466,8 @@ void registerSpaceTools(ToolRegistry& registry)
         field("spaces", array(any()))
           .describe(
             "{id, bounds, size, floor {min, max, typical}, ceiling, height, floorArea, "
-            "volume, sealed, openings: [opening ids], neighbours: [space ids], layers, "
+            "volume, sealed, clipped (region only), openings: [opening ids], neighbours: "
+            "[space ids], layers, "
             "groups, objects {pointEntities, brushEntities, groups, patches, "
             "classnames}, contents (full)}"),
         field("openings", array(any()))
@@ -1493,7 +1561,8 @@ void registerSpaceTools(ToolRegistry& registry)
             "floor: stands on a floor; wall: back side on a wall; ceiling: hangs from "
             "it; any: free volume"),
         field("space", string()).describe("A space id from spaces_list"),
-        field("region", box()).describe("Only boxes inside this region"),
+        field("region", box())
+          .describe("Only boxes inside this region; the space analysis covers only it"),
         field("includeOutside", boolean().defaultsTo(false))
           .describe("Also spots outside all spaces (e.g. on roofs)"),
         field("wallDistance", number().min(0).defaultsTo(0))
@@ -1560,18 +1629,25 @@ void registerSpaceTools(ToolRegistry& registry)
         "# blocked at the start's height, o walkable outside all spaces (roofs), ' "
         "' no floor. North (+y) is up. Also lists unreachable walkable areas and "
         "the spaces reached; format \"image\" or \"both\" adds a PNG of the plan. "
-        "Examples: {\"format\": \"both\"}; {\"from\": \"entity:7\", "
-        "\"heightRange\": [0, 256]}")
+        "The plan is 2.5D (floors per column and the player's box above them), so a "
+        "tall sky costs nothing; the space analysis that tells roofs apart is "
+        "limited to the region and uses a coarser cell on large maps (warning "
+        "CELL_SIZE_ENLARGED); if it fails, the plan is returned without it (warning "
+        "SPACES_SKIPPED). Examples: {\"format\": \"both\"}; {\"from\": \"entity:7\", "
+        "\"heightRange\": [0, 256]}; {\"region\": {\"min\": [0, 0, -64], \"max\": "
+        "[1024, 1024, 512]}, \"cellSize\": 16}")
       .input(object({
         field("start", vec3()).describe("Start point (default: the player start)"),
         field(
           "from", objectId({ObjectKind::Entity, ObjectKind::Brush, ObjectKind::Group}))
           .describe("Start at this object (an entity's origin, else its bounds center)"),
-        field("region", box()).describe("Area to analyze (default: the whole map)"),
+        field("region", box())
+          .describe(
+            "Area to analyze; the plan covers only its columns (default: the whole map)"),
         field("cellSize", number().min(2).max(1024))
           .describe(
             "Plan cell size in map units (default: half the player width, larger for big "
-            "maps so that the text fits 200 x 200 cells)"),
+            "maps so that the text fits 200 x 200 cells and the plan 250,000 cells)"),
         field("heightRange", vec2())
           .describe("[min, max] floor heights to show, e.g. one level"),
         field("stepHeight", number().min(0).defaultsTo(18))

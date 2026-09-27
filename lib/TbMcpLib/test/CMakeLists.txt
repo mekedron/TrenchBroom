@@ -41,6 +41,7 @@ target_sources(TbMcpLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ListDetail.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_KnowledgeTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerTools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ManifestTools.cpp

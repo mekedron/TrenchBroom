@@ -99,7 +99,9 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
    `objects_array` (its count includes the original). Use "dryRun": true when unsure.
    Save after each step.
 5. Placement: `spaces_list`, `surroundings`, `free_spots` (floor, wall, ceiling spots with
-   an 'origin' for point entities), `space_check` for a box, `ray_pick`.
+   an 'origin' for point entities), `space_check` for a box, `ray_pick`. On large maps
+   (e.g. under a tall sky) the space analysis coarsens its cells (CELL_SIZE_ENLARGED):
+   pass a "region" around the area you work on for full resolution.
 6. Entities: `entity_classes_list`, `entity_class_describe` (size, model, properties,
    spawnflags), then `entity_create_point` with "dropToFloor": true, or
    `entity_create_brush` from brushes. `entity_spawnflags_set` sets flags by name,
@@ -123,6 +125,10 @@ the player width) and `walkable_plan`. Units; "~" marks approximate engine value
   'issuesIntroduced' (editor validators and the MCP checks: Z_FIGHTING,
   ENTITY_OUTSIDE_HULL, MODEL_*, UV_ASPECT_DISTORTION), 'warnings', 'grid' and 'console'
   (warnings and errors the editor logged meanwhile). Fix introduced issues right away.
+- Id lists longer than 50 are cut ("detail": "ids", the default); 'truncatedLists' then
+  gives the totals, counts per kind and a 'listsId' for `result_list_get`. For bulk edits
+  (`map_import`, `objects_delete` of hundreds of objects) pass "detail": "summary" (counts
+  and 5 ids per list); "full" returns every id.
 - Errors carry a code, a message, the object ids and a hint. Lists are paginated: pass
   'nextCursor' as 'cursor'.
 - While the user drags or has a dialog open, modifying calls wait.

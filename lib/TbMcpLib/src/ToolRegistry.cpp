@@ -247,6 +247,18 @@ schema::Schema ToolDef::inputSchema() const
         .describe("Validate and report what would happen (including changes and issues) "
                   "without changing anything"));
   }
+  if (m_mutation == Mutation::Map)
+  {
+    addFieldIfAbsent(
+      result,
+      field("detail", enumOf({"summary", "ids", "full"}).defaultsTo("ids"))
+        .describe(
+          "How much of the id lists of the response to return (changes, selection, "
+          "issuesIntroduced and the id lists of the result): ids keeps up to 50 items "
+          "per list; summary keeps up to 5 and adds counts per kind to changes; full "
+          "keeps all. Cut lists are described in truncatedLists and can be paged with "
+          "result_list_get"));
+  }
   if (m_paginated)
   {
     for (auto& paginationField : paginationFields())
@@ -277,7 +289,9 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
              field("result", m_output.value_or(object({}).allowAdditionalProperties()))
                .describe("Tool-specific result"),
              field("changes", object({}).allowAdditionalProperties())
-               .describe("Ids of created, modified and removed objects"),
+               .describe(
+                 "Ids of created, modified and removed objects; with truncated, counts "
+                 "and countsByKind (also with detail summary)"),
              field("selection", object({}).allowAdditionalProperties())
                .describe("The selection after the call"),
              field(
@@ -308,6 +322,10 @@ std::optional<schema::Schema> ToolDef::outputSchema() const
                  "Problems the call introduced: editor validator issues of created and "
                  "modified objects, and MCP placement checks (z-fighting, entities "
                  "outside the hull, model placement, texture distortion)"),
+             field("truncatedLists", any())
+               .describe(
+                 "Only if lists were cut to the detail level: {listsId, lists: [{path, "
+                 "total, shown, byKind}], hint}; result_list_get pages through them"),
              field("warnings", array(any()))
                .describe("Non-fatal problems: {code, message, objectIds}"),
              field("console", array(any()))

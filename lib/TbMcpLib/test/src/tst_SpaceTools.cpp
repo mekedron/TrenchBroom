@@ -19,11 +19,13 @@
 
 #include "TestEnvironment.h"
 #include "mcp/McpToolFixture.h"
+#include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFormat.h"
+#include "mdl/Map_Nodes.h"
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
@@ -103,7 +105,136 @@ const Json* findSpaceContaining(const Json& spaces, const double x, const double
   return nullptr;
 }
 
+void addCuboid(mdl::Map& map, const vm::bbox3d& box, const std::string& material = "wall")
+{
+  auto brush = mdl::BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()}
+                 .createCuboid(box, material)
+                 .value();
+  mdl::addNodes(
+    map, {{&mdl::parentForNodes(map), {new mdl::BrushNode{std::move(brush)}}}});
+}
+
+/**
+ * A 4096 x 4096 courtyard under a sky 1024 units above the ground (too many cells for
+ * the space analysis at 16 units), with a closed 256 x 256 x 128 hut and a player start.
+ */
+void buildTallSkyMap(mdl::Map& map)
+{
+  const auto t = 16.0;
+  const auto size = 4096.0;
+  const auto height = 1024.0;
+  addCuboid(map, {{-t, -t, -t}, {size + t, size + t, 0}});
+  addCuboid(map, {{-t, -t, height}, {size + t, size + t, height + t}}, "sky");
+  addCuboid(map, {{-t, -t, 0}, {0, size + t, height}});
+  addCuboid(map, {{size, -t, 0}, {size + t, size + t, height}});
+  addCuboid(map, {{0, -t, 0}, {size, 0, height}});
+  addCuboid(map, {{0, size, 0}, {size, size + t, height}});
+
+  // the hut: interior 512..768 x 512..768 x 0..128
+  addCuboid(map, {{496, 496, 128}, {784, 784, 144}});
+  addCuboid(map, {{496, 496, 0}, {512, 784, 128}});
+  addCuboid(map, {{768, 496, 0}, {784, 784, 128}});
+  addCuboid(map, {{512, 496, 0}, {768, 512, 128}});
+  addCuboid(map, {{512, 768, 0}, {768, 784, 128}});
+
+  auto* start = new mdl::EntityNode{mdl::Entity{{
+    {"classname", "info_player_start"},
+    {"origin", "2048 2048 24"},
+  }}};
+  mdl::addNodes(map, {{&mdl::parentForNodes(map), {start}}});
+}
+
 } // namespace
+
+TEST_CASE("SpaceTools on a map with a tall sky")
+{
+  auto fixture = McpToolFixture{};
+  auto& document = fixture.create({.gameInfo = mdl::QuakeGameInfo});
+  buildTallSkyMap(document.map());
+  const auto hutRegion = Json{{"min", {384, 384, -16}}, {"max", {896, 896, 256}}};
+
+  SECTION("spaces_list")
+  {
+    // the automatic cell size is enlarged
+    const auto result = fixture.call("spaces_list");
+    CHECK(result["cellSize"] == 24);
+    CHECK(hasWarning(result, "CELL_SIZE_ENLARGED"));
+    CHECK(findSpaceContaining(result["spaces"], 2048, 2048));
+
+    // an explicit one is not; the error says what to pass
+    const auto error = fixture.callExpectingError("spaces_list", Json{{"cellSize", 16}});
+    CHECK(error.code == ErrorCode::InvalidArgument);
+    CHECK(error.hint.find("\"cellSize\": 24") != std::string::npos);
+    CHECK(error.hint.find("\"region\"") != std::string::npos);
+
+    // a region limits the grid, so the default cell size fits
+    const auto region = fixture.call("spaces_list", Json{{"region", hutRegion}});
+    CHECK(region["cellSize"] == 16);
+    CHECK_FALSE(hasWarning(region, "CELL_SIZE_ENLARGED"));
+    REQUIRE(region["count"] == 2);
+    const auto& spaces = region["spaces"];
+    const auto hut = std::ranges::find_if(spaces, [](const auto& space) {
+      return space["bounds"]["min"] == Json::array({512, 512, 0});
+    });
+    REQUIRE(hut != spaces.end());
+    CHECK((*hut)["bounds"]["max"] == Json::array({768, 768, 128}));
+    CHECK((*hut)["sealed"] == true);
+    CHECK_FALSE(hut->contains("clipped"));
+    // the courtyard around the hut is cut by the region
+    const auto courtyard = std::ranges::find_if(
+      spaces, [&](const auto& space) { return space["id"] != (*hut)["id"]; });
+    CHECK((*courtyard)["clipped"] == true);
+    CHECK((*courtyard)["sealed"] == true);
+  }
+
+  SECTION("walkable_plan")
+  {
+    const auto result = fixture.call("walkable_plan");
+    CHECK(result["start"]["floor"][2] == 0);
+    CHECK(result["reachableCells"].get<size_t>() > 1000);
+    CHECK(hasWarning(result, "CELL_SIZE_ENLARGED"));
+    CHECK_FALSE(hasWarning(result, "SPACES_SKIPPED"));
+    CHECK_FALSE(result["spacesReached"].empty());
+
+    // cellSize is honored
+    const auto coarse = fixture.call("walkable_plan", Json{{"cellSize", 128}});
+    CHECK(coarse["cellSize"] == 128);
+    CHECK(coarse["columns"] == 34);
+
+    // the plan covers only the region
+    const auto region = fixture.call(
+      "walkable_plan",
+      Json{{"region", hutRegion}, {"cellSize", 32}, {"start", {400, 400, 24}}});
+    CHECK(region["origin"] == Json::array({384, 384}));
+    CHECK(region["columns"] == 16);
+    CHECK(region["rows"] == 16);
+    CHECK(region["reachableCells"].get<size_t>() > 0);
+    CHECK_FALSE(hasWarning(region, "CELL_SIZE_ENLARGED"));
+
+    // a start outside the region
+    const auto outside =
+      fixture.call("walkable_plan", Json{{"region", hutRegion}, {"cellSize", 32}});
+    CHECK(hasWarning(outside, "START_NOT_ON_FLOOR"));
+
+    // too many columns: the error says what to pass
+    const auto error = fixture.callExpectingError(
+      "walkable_plan", Json{{"cellSize", 4}, {"format", "image"}});
+    CHECK(error.hint.find("\"cellSize\": ") != std::string::npos);
+  }
+
+  SECTION("map_check rooms")
+  {
+    const auto result = fixture.call("map_check", Json{{"checks", {"rooms"}}});
+    CHECK(result["skipped"].empty());
+    CHECK(result["checksRun"] == Json::array({"rooms"}));
+    CHECK(hasWarning(result, "CELL_SIZE_ENLARGED"));
+
+    const auto region =
+      fixture.call("map_check", Json{{"checks", {"rooms"}}, {"region", hutRegion}});
+    CHECK(region["skipped"].empty());
+    CHECK_FALSE(hasWarning(region, "CELL_SIZE_ENLARGED"));
+  }
+}
 
 TEST_CASE("SpaceTools")
 {

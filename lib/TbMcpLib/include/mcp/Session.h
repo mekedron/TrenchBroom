@@ -73,6 +73,17 @@ struct SnapshotRecord
 /**
  * The state of one connected client. Each `initialize` creates a session.
  */
+/** The full lists of a modifying call whose response cut them (result_list_get). */
+struct KeptLists
+{
+  /** "lists:<n>", unique within the session. */
+  std::string id;
+  /** The tool that made the call. */
+  std::string tool;
+  /** Path in the response (e.g. "changes.created", "result.ids") -> all items. */
+  std::map<std::string, Json> lists;
+};
+
 class Session
 {
 public:
@@ -118,6 +129,24 @@ public:
 
   /** The number of the next snapshot id. */
   uint64_t nextSnapshotNumber = 1;
+
+  /** The most calls whose cut lists a session keeps; keeping another drops the oldest. */
+  static constexpr size_t MaxKeptLists = 10;
+
+  /** The full lists of the recent calls whose response cut lists, oldest first. */
+  std::vector<KeptLists> keptLists;
+
+  /** The number of the next lists id. */
+  uint64_t nextListsNumber = 1;
+
+  /**
+   * Keeps the full lists of a call, dropping the oldest kept lists if there are
+   * MaxKeptLists already. Assigns and returns the id.
+   */
+  std::string keepLists(KeptLists lists);
+
+  /** The kept lists with the given id, or nullptr if they are unknown or were dropped. */
+  const KeptLists* findKeptLists(const std::string& id) const;
 
   /**
    * Remembers the camera of a rendered image, dropping the oldest record if there are

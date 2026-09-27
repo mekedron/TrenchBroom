@@ -68,4 +68,22 @@ const SnapshotRecord* Session::findSnapshotRecord(const std::string& id) const
   return it != snapshotRecords.end() ? &*it : nullptr;
 }
 
+std::string Session::keepLists(KeptLists lists)
+{
+  lists.id = "lists:" + std::to_string(nextListsNumber++);
+  if (keptLists.size() >= MaxKeptLists)
+  {
+    keptLists.erase(keptLists.begin());
+  }
+  keptLists.push_back(std::move(lists));
+  return keptLists.back().id;
+}
+
+const KeptLists* Session::findKeptLists(const std::string& id) const
+{
+  const auto it =
+    std::ranges::find_if(keptLists, [&](const auto& lists) { return lists.id == id; });
+  return it != keptLists.end() ? &*it : nullptr;
+}
+
 } // namespace tb::mcp

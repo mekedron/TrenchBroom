@@ -35,6 +35,7 @@
 #include "mdl/ModelUtils.h"
 #include "mdl/NodeTree.h"
 #include "mdl/PatchNode.h"
+#include "mdl/PickResult.h"
 #include "mdl/WorldNode.h"
 
 #include "vm/ray.h"
@@ -496,6 +497,47 @@ vm::bbox3d VoxelGrid::bounds() const
     origin + vm::vec3d{double(dims[0]), double(dims[1]), double(dims[2])} * cellSize};
 }
 
+double gridCellCount(
+  const vm::bbox3d& region,
+  const double cellSize,
+  const size_t padding,
+  const bool columnsOnly)
+{
+  auto total = 1.0;
+  for (size_t i = 0; i < (columnsOnly ? 2u : 3u); ++i)
+  {
+    const auto first = std::floor(region.min[i] / cellSize) - double(padding);
+    const auto last = std::ceil(region.max[i] / cellSize) + double(padding);
+    total *= std::max(1.0, last - first);
+  }
+  return total;
+}
+
+double fittingCellSize(
+  const vm::bbox3d& region,
+  const double minCellSize,
+  const size_t padding,
+  const size_t maxCells,
+  const bool columnsOnly)
+{
+  // minCellSize x 1, 1.5, 2, 3, 4, 6, ...
+  auto power = minCellSize;
+  auto cellSize = minCellSize;
+  for (size_t i = 0; i < 64; ++i)
+  {
+    cellSize = i % 2 == 0 ? power : power * 1.5;
+    if (gridCellCount(region, cellSize, padding, columnsOnly) <= double(maxCells))
+    {
+      break;
+    }
+    if (i % 2 == 1)
+    {
+      power *= 2.0;
+    }
+  }
+  return cellSize;
+}
+
 Result<VoxelGrid, ToolError> makeGrid(
   const vm::bbox3d& region,
   const double cellSize,
@@ -508,28 +550,37 @@ Result<VoxelGrid, ToolError> makeGrid(
   }
   auto grid = VoxelGrid{};
   grid.cellSize = cellSize;
-  auto total = 1.0;
   for (size_t i = 0; i < 3; ++i)
   {
     const auto first = std::floor(region.min[i] / cellSize) - double(padding);
     const auto last = std::ceil(region.max[i] / cellSize) + double(padding);
     grid.origin[i] = first * cellSize;
-    const auto count = std::max(1.0, last - first);
-    grid.dims[i] = size_t(count);
-    total *= count;
+    grid.dims[i] = size_t(std::max(1.0, last - first));
   }
+  const auto total = gridCellCount(region, cellSize, padding);
   if (total > double(maxCells))
   {
+    // a region with the same height and the same x:y proportions that fits
+    const auto size = region.size();
+    const auto scale = std::sqrt(double(maxCells) / total);
     return makeError(
       ErrorCode::InvalidArgument,
       fmt::format(
-        "The analysis grid would have {} cells of size {}; at most {} are allowed.",
+        "The analysis grid over {} x {} x {} map units would have {} cells of size {}; "
+        "at most {} are allowed.",
+        size.x(),
+        size.y(),
+        size.z(),
         size_t(total),
         cellSize,
         maxCells),
       fmt::format(
-        "Pass a larger cellSize (e.g. {}) or a smaller region.",
-        cellSize * std::ceil(std::cbrt(total / double(maxCells)) + 0.01)));
+        "Pass \"cellSize\": {} (or larger), or a smaller \"region\" (about {} x {} x {} "
+        "map units with this cell size).",
+        fittingCellSize(region, cellSize, padding, maxCells),
+        std::floor(size.x() * scale / cellSize) * cellSize,
+        std::floor(size.y() * scale / cellSize) * cellSize,
+        size.z()));
   }
   grid.solid.assign(grid.size(), 0);
   return grid;
@@ -1053,33 +1104,60 @@ struct OpeningFace
 Result<SpaceMap, ToolError> analyzeSpaces(
   const mdl::Map& map, const SpaceOptions& options)
 {
-  const auto cellSize = options.cellSize > 0.0 ? options.cellSize : defaultCellSize(map);
   const auto spaceSolid = [](const mdl::BrushNode&, const BrushRole& role) {
     return role.spaceSolid;
   };
-  auto region = options.region;
-  if (!region)
-  {
-    region = brushBounds(map, spaceSolid);
-  }
-  if (!region)
+  const auto mapBounds = brushBounds(map, spaceSolid);
+  const auto region = options.region ? options.region : mapBounds;
+  if (!region || !mapBounds)
   {
     return makeError(
       ErrorCode::InvalidArgument,
       "The map has no solid brushes that could enclose spaces.");
   }
 
+  auto result = SpaceMap{};
+  auto cellSize = options.cellSize;
+  if (!(cellSize > 0.0))
+  {
+    const auto defaultSize = defaultCellSize(map);
+    cellSize = fittingCellSize(*region, defaultSize, 1, options.maxCells);
+    if (cellSize != defaultSize)
+    {
+      result.enlargedFrom = defaultSize;
+    }
+  }
   auto gridResult = makeGrid(*region, cellSize, 1, options.maxCells);
   if (gridResult.is_error())
   {
     return errorOf(gridResult);
   }
 
-  auto result = SpaceMap{};
   result.grid = std::move(gridResult).value();
   result.openingSize = options.openingSize;
+  result.region = options.region;
   auto& grid = result.grid;
   rasterize(grid, map, spaceSolid);
+
+  // where an explicit region cuts through the map, its border acts as a wall
+  auto cut = std::vector<size_t>{};
+  if (options.region)
+  {
+    forEachBorderCell(grid, [&](const size_t index) {
+      const auto center = grid.cellCenter(grid.cellOf(index));
+      if (
+        center.x() > mapBounds->min.x() && center.x() < mapBounds->max.x()
+        && center.y() > mapBounds->min.y() && center.y() < mapBounds->max.y()
+        && center.z() > mapBounds->min.z() && center.z() < mapBounds->max.z())
+      {
+        if (!grid.solid[index])
+        {
+          grid.solid[index] = 1;
+          cut.push_back(index);
+        }
+      }
+    });
+  }
 
   const auto count = grid.size();
   const auto erosion =
@@ -1513,7 +1591,39 @@ Result<SpaceMap, ToolError> analyzeSpaces(
     std::ranges::sort(space.neighbours);
   }
 
+  for (const auto index : cut)
+  {
+    forEachFaceNeighbour(grid, index, [&](const size_t neighbourIndex) {
+      if (const auto label = labels[neighbourIndex]; label >= 0)
+      {
+        result.spaces[size_t(label)].clipped = true;
+      }
+    });
+  }
+
   return result;
+}
+
+std::optional<std::string> enlargedCellSizeMessage(const SpaceMap& spaces)
+{
+  if (!spaces.enlargedFrom)
+  {
+    return std::nullopt;
+  }
+  const auto size = spaces.grid.bounds().size();
+  return fmt::format(
+    "The space analysis used cellSize {} instead of {}, because the analyzed volume "
+    "({} x {} x {} map units, e.g. up to a tall sky) needs too many cells at {}; small "
+    "rooms and openings are coarser. For finer results pass a \"region\" around the "
+    "area of interest. Space ids depend on the cell size: pass \"cellSize\": {} (and "
+    "the same region) to other tools that take these ids.",
+    spaces.grid.cellSize,
+    *spaces.enlargedFrom,
+    size.x(),
+    size.y(),
+    size.z(),
+    *spaces.enlargedFrom,
+    spaces.grid.cellSize);
 }
 
 SpaceDetails describeSpace(mdl::Map& map, const SpaceMap& spaces, const size_t spaceIndex)
@@ -2447,7 +2557,6 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
   plan.playerHeight = options.playerHeight > 0.0 ? options.playerHeight : player.height;
   plan.stepHeight = options.stepHeight;
   plan.jumpHeight = options.jumpHeight;
-  plan.cellSize = options.cellSize > 0.0 ? options.cellSize : defaultCellSize(map);
 
   auto roles = RoleCache{};
   const auto blocks = [](const mdl::BrushNode&, const BrushRole& role) {
@@ -2460,28 +2569,45 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
   }
   plan.region = *region;
 
-  auto gridResult = makeGrid(*region, plan.cellSize, 0, options.maxCells);
-  if (gridResult.is_error())
+  // a 2.5D plan: columns over x and y, never a grid over the height
+  plan.cellSize = options.cellSize;
+  if (!(plan.cellSize > 0.0))
   {
-    return errorOf(gridResult);
+    const auto defaultSize = defaultCellSize(map);
+    plan.cellSize = fittingCellSize(*region, defaultSize, 0, options.maxColumns, true);
+    if (plan.cellSize != defaultSize)
+    {
+      plan.enlargedFrom = defaultSize;
+    }
   }
-  auto grid = std::move(gridResult).value();
-  plan.origin = {grid.origin.x(), grid.origin.y()};
-  plan.columns = grid.dims[0];
-  plan.rows = grid.dims[1];
-  const auto columnCount = plan.columns * plan.rows;
+  const auto columnCount = size_t(gridCellCount(*region, plan.cellSize, 0, true));
   if (columnCount > options.maxColumns)
   {
     return makeError(
       ErrorCode::InvalidArgument,
       fmt::format(
-        "The plan would have {} x {} columns; at most {} columns are allowed.",
-        plan.columns,
-        plan.rows,
+        "The plan over {} x {} map units would have {} columns of size {}; at most {} "
+        "are allowed.",
+        region->size().x(),
+        region->size().y(),
+        columnCount,
+        plan.cellSize,
         options.maxColumns),
-      "Pass a larger cellSize or a smaller region.");
+      fmt::format(
+        "Pass \"cellSize\": {} (or larger), or a smaller \"region\".",
+        fittingCellSize(*region, plan.cellSize, 0, options.maxColumns, true)));
   }
-  rasterize(grid, map, blocks);
+  const auto columnGrid =
+    makeGrid(
+      vm::bbox3d{
+        {region->min.x(), region->min.y(), 0.0}, {region->max.x(), region->max.y(), 0.0}},
+      plan.cellSize,
+      0,
+      options.maxColumns)
+      .value();
+  plan.origin = {columnGrid.origin.x(), columnGrid.origin.y()};
+  plan.columns = columnGrid.dims[0];
+  plan.rows = columnGrid.dims[1];
 
   const auto halfWidth = plan.playerWidth / 2.0;
   const auto blocking = [&](const mdl::Node& node) {
@@ -2511,15 +2637,31 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
       {x - halfWidth + 0.01, y - halfWidth + 0.01, z + lift},
       {x + halfWidth - 0.01, y + halfWidth - 0.01, z + plan.playerHeight - 0.01}});
   };
-  // and a thin column above the floor point, so that floors inside brushes do not count
+  // and a thin column above the floor point, so that floors inside brushes do not count;
+  // one query of the node tree for both boxes
   const auto standable = [&](const double x, const double y, const double z) {
-    return fits(x, y, z)
-           && isFree(vm::bbox3d{
-             {x - 0.5, y - 0.5, z + 0.1},
-             {x + 0.5, y + 0.5, z + plan.playerHeight - 0.01}});
+    const auto lift = std::min(plan.stepHeight, plan.playerHeight / 2.0);
+    const auto playerBox = vm::bbox3d{
+      {x - halfWidth + 0.01, y - halfWidth + 0.01, z + lift},
+      {x + halfWidth - 0.01, y + halfWidth - 0.01, z + plan.playerHeight - 0.01}};
+    const auto columnBox = vm::bbox3d{
+      {x - 0.5, y - 0.5, z + 0.1}, {x + 0.5, y + 0.5, z + plan.playerHeight - 0.01}};
+    for (const auto* node :
+         map.worldNode().nodeTree().find_intersectors(vm::merge(playerBox, columnBox)))
+    {
+      if (blocking(*node))
+      {
+        const auto& brush = static_cast<const mdl::BrushNode*>(node)->brush();
+        if (intersectsInterior(brush, playerBox) || intersectsInterior(brush, columnBox))
+        {
+          return false;
+        }
+      }
+    }
+    return true;
   };
 
-  // floors: upward facing surfaces hit by a ray down each column
+  // floors: upward facing surfaces in each column
   const auto acceptFloor = [&](const mdl::Node& node) {
     if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(&node))
     {
@@ -2531,8 +2673,8 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
   plan.cramped.assign(columnCount, 0);
   plan.blocked.assign(columnCount, 0);
   plan.door.assign(columnCount, 0);
-  const auto top = grid.bounds().max.z() + 1.0;
-  const auto depth = grid.bounds().size().z() + 2.0;
+  const auto top = std::ceil(region->max.z() / plan.cellSize) * plan.cellSize + 1.0;
+  const auto bottom = std::floor(region->min.z() / plan.cellSize) * plan.cellSize - 1.0;
   for (size_t row = 0; row < plan.rows; ++row)
   {
     for (size_t column = 0; column < plan.columns; ++column)
@@ -2540,32 +2682,84 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
       const auto index = column + row * plan.columns;
       const auto x = plan.origin.x() + (double(column) + 0.5) * plan.cellSize;
       const auto y = plan.origin.y() + (double(row) + 0.5) * plan.cellSize;
-      // the player stands on the highest surface under its box, so the rays at the
-      // inset corners of the box find floors, too
+      // the player stands on the highest surface under its box, so the floors at the
+      // inset corners of the box count, too
       auto zs = std::vector<double>{};
-      const auto inset = std::max(0.0, halfWidth - 1.0);
-      for (const auto& [dx, dy] : std::array<std::array<double, 2>, 5>{
-             {{0, 0},
-              {-inset, -inset},
-              {inset, -inset},
-              {-inset, inset},
-              {inset, inset}}})
-      {
-        const auto hits =
-          castRay(map, vm::ray3d{{x + dx, y + dy, top}, {0, 0, -1}}, acceptFloor, depth);
-        for (const auto& hit : hits)
+      const auto addFloor = [&](const double z) {
+        if (std::ranges::none_of(
+              zs, [&](const auto other) { return std::abs(other - z) < 1.0; }))
         {
-          if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(hit.node);
-              brushNode && hit.faceIndex
-              && brushNode->brush().face(*hit.faceIndex).normal().z() < 0.7)
+          zs.push_back(z);
+        }
+      };
+      const auto inset = std::max(0.0, halfWidth - 1.0);
+      const auto points = std::array<vm::vec2d, 5>{{
+        {x, y},
+        {x - inset, y - inset},
+        {x + inset, y - inset},
+        {x - inset, y + inset},
+        {x + inset, y + inset},
+      }};
+      // one query for the column instead of a ray per point; a vertical line enters a
+      // convex brush through at most one upward facing face, where the line meets the
+      // face's plane inside all other faces
+      const auto columnBox = vm::bbox3d{
+        {x - inset - 0.5, y - inset - 0.5, bottom},
+        {x + inset + 0.5, y + inset + 0.5, top}};
+      for (auto* node : map.worldNode().nodeTree().find_intersectors(columnBox))
+      {
+        if (!acceptFloor(*node))
+        {
+          continue;
+        }
+        if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(node))
+        {
+          const auto& brush = brushNode->brush();
+          const auto& bounds = brush.bounds();
+          for (const auto& point : points)
           {
-            continue;
+            if (
+              point.x() < bounds.min.x() || point.x() > bounds.max.x()
+              || point.y() < bounds.min.y() || point.y() > bounds.max.y())
+            {
+              continue;
+            }
+            for (const auto& face : brush.faces())
+            {
+              const auto& plane = face.boundary();
+              if (plane.normal.z() < 0.7)
+              {
+                continue;
+              }
+              const auto z = plane.zAt(point);
+              const auto onFloor = vm::vec3d{point.x(), point.y(), z};
+              if (
+                z >= bottom && z <= top
+                && std::ranges::all_of(brush.faces(), [&](const auto& other) {
+                     return &other == &face
+                            || other.boundary().point_distance(onFloor) <= 0.01;
+                   }))
+              {
+                addFloor(z);
+                break;
+              }
+            }
           }
-          const auto z = hit.point.z();
-          if (std::ranges::none_of(
-                zs, [&](const auto other) { return std::abs(other - z) < 1.0; }))
+        }
+        else if (auto* patchNode = dynamic_cast<mdl::PatchNode*>(node))
+        {
+          for (const auto& point : points)
           {
-            zs.push_back(z);
+            const auto ray = vm::ray3d{{point.x(), point.y(), top}, {0, 0, -1}};
+            auto pickResult = mdl::PickResult{};
+            patchNode->pick(map.editorContext(), ray, pickResult);
+            for (const auto& hit : pickResult.all())
+            {
+              if (hit.distance() <= top - bottom)
+              {
+                addFloor(top - hit.distance());
+              }
+            }
           }
         }
       }
@@ -2687,19 +2881,26 @@ Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options)
       }
     }
 
+    // the columns blocked at the start's height: one layer of cells
     const auto referenceZ =
-      plan.startNode ? plan.nodes[*plan.startNode].z : plan.start->z();
+      (plan.startNode ? plan.nodes[*plan.startNode].z : plan.start->z())
+      + plan.playerHeight / 2.0;
     if (
-      const auto layer = grid.cellAt(
-        {grid.origin.x() + 1.0,
-         grid.origin.y() + 1.0,
-         referenceZ + plan.playerHeight / 2.0}))
+      referenceZ >= std::floor(region->min.z() / plan.cellSize) * plan.cellSize
+      && referenceZ < std::ceil(region->max.z() / plan.cellSize) * plan.cellSize)
     {
+      auto layer = makeGrid(
+                     vm::bbox3d{
+                       {region->min.x(), region->min.y(), referenceZ},
+                       {region->max.x(), region->max.y(), referenceZ}},
+                     plan.cellSize,
+                     0,
+                     options.maxColumns)
+                     .value();
+      rasterize(layer, map, blocks);
       for (size_t index = 0; index < columnCount; ++index)
       {
-        const auto cell =
-          CellIndex{index % plan.columns, index / plan.columns, (*layer)[2]};
-        plan.blocked[index] = grid.solid[grid.index(cell)];
+        plan.blocked[index] = layer.solid[index];
       }
     }
   }

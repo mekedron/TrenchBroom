@@ -24,6 +24,7 @@ target_sources(TbMcpLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonRpc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/JsonVm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ListDetail.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LogCapture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapManifest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/McpServer.cpp
@@ -122,6 +123,7 @@ target_sources(TbMcpLib
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/Json.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonRpc.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/JsonVm.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/ListDetail.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/LogCapture.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/MapManifest.h
       ${CMAKE_CURRENT_SOURCE_DIR}/include/mcp/McpServer.h

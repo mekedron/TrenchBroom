@@ -30,7 +30,9 @@
 #include "ui/MapDocument.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <utility>
 
 namespace tb::mcp
 {
@@ -145,23 +147,56 @@ bool ChangeReport::empty() const
   return created.empty() && modified.empty() && removed.empty();
 }
 
-Json changesToJson(const ChangeReport& report, const size_t limit)
+Json changesToJson(
+  const ChangeReport& report,
+  const ListDetail detail,
+  std::vector<TruncatedList>* truncated)
 {
-  auto result = Json{
-    {"created", cappedIds(report.created, limit)},
-    {"modified", cappedIds(report.modified, limit)},
-    {"removed", cappedIds(report.removed, limit)},
-  };
-  if (
-    report.created.size() > limit || report.modified.size() > limit
-    || report.removed.size() > limit)
+  const auto limit = listLimit(detail);
+  auto result = Json::object();
+  auto counts = Json::object();
+  auto byKind = Json::object();
+  auto cut = false;
+  for (const auto& [name, ids] :
+       std::array<std::pair<std::string, const std::vector<std::string>*>, 3>{{
+         {"created", &report.created},
+         {"modified", &report.modified},
+         {"removed", &report.removed},
+       }})
+  {
+    auto all = Json(*ids);
+    counts[name] = ids->size();
+    if (!ids->empty())
+    {
+      byKind[name] = countsByKind(all);
+    }
+    if (ids->size() > limit)
+    {
+      cut = true;
+      auto shown = Json::array();
+      for (size_t i = 0; i < limit; ++i)
+      {
+        shown.push_back((*ids)[i]);
+      }
+      result[name] = std::move(shown);
+      if (truncated)
+      {
+        truncated->push_back(TruncatedList{"changes." + name, std::move(all)});
+      }
+    }
+    else
+    {
+      result[name] = std::move(all);
+    }
+  }
+  if (cut)
   {
     result["truncated"] = true;
-    result["counts"] = Json{
-      {"created", report.created.size()},
-      {"modified", report.modified.size()},
-      {"removed", report.removed.size()},
-    };
+  }
+  if (cut || detail == ListDetail::Summary)
+  {
+    result["counts"] = std::move(counts);
+    result["countsByKind"] = std::move(byKind);
   }
   return result;
 }

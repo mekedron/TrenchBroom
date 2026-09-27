@@ -24,6 +24,7 @@
 #include "mcp/Args.h"
 #include "mcp/ChangeCollector.h"
 #include "mcp/ConsoleBuffer.h"
+#include "mcp/ListDetail.h"
 #include "mcp/LogCapture.h"
 #include "mcp/ProtocolVersion.h"
 #include "mcp/Scheduler.h"
@@ -38,6 +39,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <limits>
 #include <unordered_map>
 
 namespace tb::mcp
@@ -583,6 +585,13 @@ Json CallRunner::execute(const CallRequest& request)
 
   const auto dryRun = tool->isModifying() && findMember(request.arguments, "dryRun")
                       && request.arguments["dryRun"].get<bool>();
+  const auto* detailArgument =
+    tool->mutation() == Mutation::Map ? findMember(request.arguments, "detail") : nullptr;
+  const auto detail =
+    detailArgument && detailArgument->is_string()
+      ? listDetailFromString(detailArgument->get<std::string>()).value_or(ListDetail::Ids)
+      : ListDetail::Ids;
+  const auto limit = listLimit(detail);
 
   auto logEntry = CallLogEntry{};
   logEntry.sessionId = session->id;
@@ -716,7 +725,7 @@ Json CallRunner::execute(const CallRequest& request)
     {
       // the report must be computed while the changes still exist
       report = collector->finish();
-      selection = selectionSummary(map, documentState->ids);
+      selection = selectionSummary(map, documentState->ids, limit);
       map.cancelTransaction();
       documentState->placement.rolledBack(placementCountAtStart);
     }
@@ -794,15 +803,23 @@ Json CallRunner::execute(const CallRequest& request)
   auto structured = Json{};
   if (tool->isModifying())
   {
+    // long id lists are cut to the detail level; the full lists are kept for
+    // result_list_get
+    auto truncated = std::vector<TruncatedList>{};
+    auto toolResult = std::move(result.value());
+    if (tool->mutation() == Mutation::Map)
+    {
+      truncateIdLists(toolResult, "result", limit, truncated);
+    }
     structured = Json{
       {"ok", true},
       {"dryRun", dryRun},
       {"undoStep", undoStep ? Json(*undoStep) : Json(nullptr)},
-      {"result", std::move(result.value())},
+      {"result", std::move(toolResult)},
     };
     if (report)
     {
-      auto changes = changesToJson(*report);
+      auto changes = changesToJson(*report, detail, &truncated);
       if (dryRun && !report->created.empty())
       {
         changes["ephemeral"] = true;
@@ -812,10 +829,28 @@ Json CallRunner::execute(const CallRequest& request)
     if (mapDocument && tool->mutation() == Mutation::Map)
     {
       structured["selection"] =
-        !selection.is_null() ? std::move(selection)
-                             : selectionSummary(mapDocument->map(), documentState->ids);
-      structured["issuesIntroduced"] =
-        report ? issuesToJson(report->issuesIntroduced) : Json::array();
+        !selection.is_null()
+          ? std::move(selection)
+          : selectionSummary(mapDocument->map(), documentState->ids, limit);
+      const auto& issues =
+        report ? report->issuesIntroduced : std::vector<IntroducedIssue>{};
+      structured["issuesIntroduced"] = issuesToJson(issues, limit);
+      if (issues.size() > limit)
+      {
+        truncated.push_back(TruncatedList{
+          "issuesIntroduced", issuesToJson(issues, std::numeric_limits<size_t>::max())});
+      }
+    }
+    if (!truncated.empty())
+    {
+      auto kept = KeptLists{};
+      kept.tool = tool->name();
+      for (const auto& list : truncated)
+      {
+        kept.lists[list.path] = list.items;
+      }
+      const auto listsId = session->keepLists(std::move(kept));
+      structured["truncatedLists"] = truncatedListsJson(truncated, listsId, limit);
     }
     auto warnings = Json::array();
     for (const auto& warning : context.warnings())

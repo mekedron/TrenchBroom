@@ -688,8 +688,32 @@ warning. Measured in Debug on 2,000 brushes: `brush_create_box` 1.3 ms without a
 all of it `predictLeaks`), moving 400 brushes 288 ms / 536 ms.
 
 `Mutation::External` tools omit `changes`, `selection` and `issuesIntroduced`. Read-only tools return the
-handler's JSON as `structuredContent` (plus `warnings` if any). Change lists are capped at 500 ids each
-(`truncated: true` plus counts).
+handler's JSON as `structuredContent` (plus `warnings` if any).
+
+**Response size (`detail`, `ListDetail.h`).** Every `Mutation::Map` tool takes `detail` (injected like `dryRun`):
+`"ids"` (default) keeps at most 50 items per list, `"summary"` at most 5, `"full"` all. It applies to the change
+lists, `selection.ids`, `issuesIntroduced` and the id lists of the tool's `result`, which `truncateIdLists` finds
+generically: arrays of object ids and arrays of objects whose `id` is an object id (object summaries), in nested
+objects and in arrays of arrays or objects (the `instances` of `objects_array`), so no tool cuts its own lists.
+Lists at or below the limit are unchanged, so small responses look as before. A cut change list sets
+`changes.truncated: true` and adds `counts` ({created, modified, removed}) and `countsByKind` (per list, e.g.
+`{"created": {"brush": 1490, "entity": 10}}`, from the id prefix; `face` for face ids); `summary` adds both always.
+When any list was cut, the envelope gets
+
+```json
+"truncatedLists": {
+  "listsId": "lists:3",
+  "lists": [{"path": "result.ids", "total": 1500, "shown": 50, "byKind": {"brush": 1490, "entity": 10}},
+            {"path": "changes.created", "total": 1500, "shown": 50, "byKind": {...}}],
+  "hint": "... result_list_get {\"listsId\": \"lists:3\", \"path\": \"result.ids\"}, or pass detail: \"full\" ..."
+}
+```
+
+(`byKind` counts issues by `code`). The session keeps the full lists of its last 10 such calls (`Session::keepLists`,
+`KeptLists`); `result_list_get {listsId, path}` (read-only, paginated) pages through one of them and names the tool.
+The selection itself is not kept (`selection_get` lists it). Importing a 2,000-brush map with `map_import` returns
+20 KB instead of 58 KB by default and 7 KB with `summary`; deleting it with `objects_delete` 2.4 KB instead of 31 KB
+(1.1 KB with `summary`).
 
 ### 6.4 Selection independence (X7): select, act, restore
 
@@ -811,6 +835,7 @@ void registerGeometryTools(ToolRegistry& registry)
 - `DocumentUse`: `None` (no `document` parameter), `Optional`, `Required` (`NO_DOCUMENT` without a target
   document). Default: `Required` for `Mutation::Map`, `None` otherwise.
 - Injected parameters: `document?` for `DocumentUse != None`; `dryRun? = false` for `Map`/`External`;
+  `detail? = "summary"|"ids"|"full"` (default `"ids"`) for `Map` (§6.3, response size);
   for `.paginated()`: `cursor?`, `limit? = 100 (1..1000)`, `fields?`, `detail? = "summary"|"full"`.
 - `CallContext`: `server() host() session() tool() hasDocument() documentInfo() document() map()
   documentState() ids() dryRun() warn() warnings() addImage() progress() setUndoStep() loggedProblems()
@@ -967,7 +992,7 @@ call log lines, and so on.
 
 | File | Tools | Epic |
 |---|---|---|
-| `SessionTools.cpp` | `editor_status`, `document_list`, `document_activate`, `session_log` | E1 |
+| `SessionTools.cpp` | `editor_status`, `document_list`, `document_activate`, `session_log`, `result_list_get` | E1 |
 | `HistoryTools.cpp` | `history_get`, `undo`, `redo`, `transaction_begin/commit/rollback` | E1 |
 | `DocumentTools.cpp` | `document_new/open/save/save_as/close/revert/recent`, `map_files_list`, `document_export_map/obj`, `autosave_list` | E2 |
 | `GameTools.cpp` | `game_list`, `game_info`, `game_set_path`, `mods_get/set`, `entity_definitions_get/set/reload`, `materials_collections_get/set`, `materials_reload`, `soft_bounds_get/set` | E2 |
@@ -1688,7 +1713,9 @@ so the headless mode (E16) can reuse it; only `userViews`/`captureUserView` need
 **Empty-space analysis** (`SpaceAnalysis.h`, tested directly over `mdl::MapFixture`). `makeGrid` / `rasterize` build a
 `VoxelGrid` over a region (default: the bounds of the solid brushes padded by one cell); brushes are rasterized one
 by one over the cells their bounds overlap (cuboids by their bounds, other brushes with `intersectsInterior`), so
-large maps stay fast. `brushRole` classifies brushes:
+large maps stay fast. A grid that would exceed its cell budget fails with an error whose hint names the parameters to
+change and their values: `"cellSize": <fittingCellSize>` and a `"region"` size that fits. `brushRole` classifies
+brushes:
 - *solid for spaces*: world, `func_group` and `func_detail*` brushes (not `func_detail_illusionary`) that are not
   tool-only or liquid-only; doors, `func_wall` and triggers are reported as objects;
 - *sealing for leaks*: world and `func_group` brushes that are not tool-only or liquid-only; sky seals, clip, hint,
@@ -1714,9 +1741,17 @@ outside air that way gets `edgeGap` (the two cells), which `spaces_list` reports
 connected to the outside is a leaking room (`sealed: false`)
 if most of its cells are enclosed in at least five directions, otherwise outdoor void. Space ids are an FNV hash of
 the inner bounds in cells: they survive unrelated edits and change when a surrounding wall moves; they depend on
-the segmentation, i.e. are only valid with the same `cellSize` and `openingSize`. The doors of an opening are the
-`func_door*` brushes whose bounds touch the opening's box widened by one cell along its axis. The default cell
-size is half the player width rounded to a power of two (16 in Quake).
+the segmentation, i.e. are only valid with the same `cellSize`, `openingSize` and region. The doors of an opening are
+the `func_door*` brushes whose bounds touch the opening's box widened by one cell along its axis. The default cell
+size is half the player width rounded to a power of two (16 in Quake and Half-Life). Without an explicit `cellSize`
+the analysis enlarges it when the grid would exceed `maxCells` (4,000,000): `fittingCellSize` takes the first of
+default × 1, 1.5, 2, 3, 4, 6, ... that fits (24 for a 4,096 × 4,096 map under a sky 1,024 units up), the
+`SpaceMap` records `enlargedFrom`, and the tools warn `CELL_SIZE_ENLARGED` (`enlargedCellSizeMessage`: pass a region
+for finer cells, pass the reported cell size to the tools that take the ids). An explicit `cellSize` is never
+changed. With a `region` the grid covers only the region plus one cell: border cells whose center lies inside the
+bounds of the space-solid brushes are made solid (the region's border acts as a wall), so a room cut by the border
+is not mistaken for the void, and the spaces touching such cells are `clipped` (`sealed` then describes the part
+inside); border cells beyond the map's bounds stay the void.
 
 `predictLeaks` floods the sealing grid from outside (cell size 8, doubled until the grid has at most 1M cells;
 about 10 ms for a 20-room map in Debug). Only point entities with an `origin` in exported layers are checked; an
@@ -1728,20 +1763,27 @@ eight sealing brushes nearest to it. Entities outside the grid or in cells that 
 entities with their model bounds; `wallDistance` applies to space-solid world and `func_group` brushes and to brushes
 whose innermost group's bounds contain the candidate's center (a room built as a group), `objectDistance` to
 everything else (point entities, brush entities, `func_detail`, groups that do not enclose the spot); `planWalk`
-fits the player box with its lowest `stepHeight` units ignored, finds floors with five rays (center and inset corners
-of the box), and moves to the four neighbouring columns (step 18, jump 45 for all games; 63 is a Half-Life crouch
-jump). Like the game, the box rests on the highest surface under its footprint: a floor with a standable floor at most
-`stepHeight` higher under the box (a step narrower than the player, a 2 unit floor tile) is not a node of its own, so
-stairs with treads shallower than the player and low tiles are walked over.
+is 2.5D: it builds x-y columns over the region (no grid over the height, so a tall sky costs nothing; the automatic
+column size grows like the cell size above when the plan would exceed 250,000 columns, `WalkPlan::enlargedFrom`),
+fits the player box with its lowest `stepHeight` units ignored, finds the floors of a column with one node-tree
+query for the column's footprint (at the center and the inset corners of the box, a vertical line meets a convex
+brush's upward face — normal z >= 0.7 — where it lies inside all other faces; patches are picked with rays), checks
+the player box and a thin column above each floor with one query, rasterizes one layer of cells at the start's
+height for the blocked columns, and moves to the four neighbouring columns (step 18, jump 45 for all games; 63 is a
+Half-Life crouch jump). Like the game, the box rests on the highest surface under its footprint: a floor with a
+standable floor at most `stepHeight` higher under the box (a step narrower than the player, a 2 unit floor tile) is not
+a node of its own, so stairs with treads shallower than the player and low tiles are walked over.
 
 Tools (`SpaceTools.cpp`; all read-only and asynchronous with progress, cancellation between steps):
 - `spaces_list {region, cellSize, openingSize (96), detail summary|full, limit (100)}` → `{cellSize, openingSize,
-  count, spaces, openings, outsideOpenings, truncated}`. A space: `{id, bounds, size, floor {min, max, typical},
-  ceiling, height, floorArea, volume, sealed, openings, neighbours, layers, groups, objects {pointEntities,
+  count, spaces, openings, outsideOpenings, truncated}`; `region` limits the analysis (and the list) to that box.
+  A space: `{id, bounds, size, floor {min, max, typical}, ceiling, height, floorArea, volume, sealed, clipped (only
+  when cut by the region), openings, neighbours, layers, groups, objects {pointEntities,
   brushEntities, groups, patches, classnames}, contents (full)}`; an opening: `{id (opening:n, valid in this result),
   kind, spaces [a, b | "void"], center, bounds, width, height, bottom, normal, doors}`. Warns `SPACES_NOT_SEALED`
   and `EDGE_ONLY_GAPS` (sealed spaces touching the outside only along an edge or a corner, with a position each).
-  About 250 ms (Debug) for 20 rooms.
+  About 250 ms (Debug) for 20 rooms. `surroundings`, `free_spots` (with its `region`) and `walkable_plan` warn
+  `CELL_SIZE_ENLARGED` the same way.
 - `surroundings {point, radius (512), limit (20), diagonals, maxDistance (4096), includeSpace, cellSize,
   openingSize}` → `{point, space, inside, floor, ceiling, walls [{direction, distance, face, material, object,
   entity}], objects [{id, kind, label, position, distance, direction, dz}], objectsTruncated, description}` (compass
@@ -1756,7 +1798,13 @@ Tools (`SpaceTools.cpp`; all read-only and asynchronous with progress, cancellat
   walkableCells, outsideCells, reachableCells, oneWayCells, reachableArea, unreachableAreas, spacesReached, image}`;
   the legend is `S . v D , - # o ' '` (start, reachable, reachable without a way back, door, walkable but
   unreachable, drop, blocked, outside, void); the PNG is drawn on the CPU. Without a start it uses the player
-  start; warns `NO_START`, `START_NOT_ON_FLOOR`.
+  start; warns `NO_START`, `START_NOT_ON_FLOOR` (naming a start outside the region). `region` and `cellSize` are
+  honored: the plan covers only the region's columns; the default text cell size grows until the text fits 200 × 200
+  cells. The space analysis that tells roofs (`o`) apart covers the same region with the automatic cell size; if it
+  fails the plan is returned without it (warning `SPACES_SKIPPED`, `spacesReached` empty). On a 4,200 × 3,900 unit
+  Counter-Strike map with a sky 1,024 units up (2,000 brushes, Debug build): default text plan (cell 32) 9 s,
+  image plan at cell 16 32 s, a 600 × 600 region 0.5 s; `spaces_list` (cell 24) 11 s, with that region 0.5 s;
+  `map_check` 1.5 s.
 
 **Z-fighting** (`PlacementChecks.h`): `findZFighting(map, brushes of interest)` ports the reference rules: visible
 faces of different brushes that lie in the same plane, face the same way and overlap by more than 1 unit², unless
@@ -1781,9 +1829,10 @@ checks are not registered in the editor's validator list, so the human's issue b
 validators, each finding with a severity, a plain description and a `suggestedFix {description, tool, args}` naming the
 MCP call that fixes it (tool null when no single call does). Input `checks` (placement, player_start, links, materials,
 rooms; default all), `ids` (objects and their contents; player_start is map-level and runs with ids only when listed),
-`cellSize`, `openingSize`. Items `{id (check:<code>:<object or signature>), check, code, severity, description,
-objectId, objectIds, position, details, suggestedFix}`; the result adds `total`, `counts`, `checksRun`, `skipped
-[{check, reason}]`. Each check is a deferred step (progress per check, cancellation between checks); the space analysis
+`region` (limits the space analysis; `ENTITY_OUTSIDE_SPACES` then checks only entities inside it), `cellSize`,
+`openingSize` (the automatic cell size is enlarged with `CELL_SIZE_ENLARGED` like in `spaces_list`). Items `{id
+(check:<code>:<object or signature>), check, code, severity, description, objectId, objectIds, position, details,
+suggestedFix}`; the result adds `total`, `counts`, `checksRun`, `skipped [{check, reason}]`. Each check is a deferred step (progress per check, cancellation between checks); the space analysis
 runs once per call, only when a check or a suggested move needs it, and fixes use at most 25 free-spot searches.
 - *placement*: models that load get the `modelPlacementIssues` codes; other standing classes (info_player_*, monster_*,
   item_*, weapon_*, ammo_*, classes with a model that are not light/env_/ambient_/path_/target_/trigger_/misc_/func_/

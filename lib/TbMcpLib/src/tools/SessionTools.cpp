@@ -36,6 +36,9 @@
 #include "prefs/Preferences.h"
 #include "ui/MapDocument.h"
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+
 #include <algorithm>
 
 namespace tb::mcp
@@ -223,6 +226,53 @@ Json editorStatus(ServerState& server, const Session& session)
   return status;
 }
 
+namespace
+{
+
+ToolResult resultListGetTool(CallContext& context, const Args& args)
+{
+  const auto listsId = args.get<std::string>("listsId");
+  const auto path = args.get<std::string>("path");
+  const auto* kept = context.session().findKeptLists(listsId);
+  if (!kept)
+  {
+    return makeError(
+      ErrorCode::InvalidArgument,
+      fmt::format("No kept lists with id {}.", listsId),
+      fmt::format(
+        "The lists of the last {} calls with cut lists are kept per session; repeat the "
+        "call with detail: \"full\" or use a newer listsId.",
+        Session::MaxKeptLists));
+  }
+  const auto it = kept->lists.find(path);
+  if (it == kept->lists.end())
+  {
+    auto paths = std::vector<std::string>{};
+    for (const auto& [listPath, items] : kept->lists)
+    {
+      paths.push_back(listPath);
+    }
+    return makeError(
+      ErrorCode::InvalidArgument,
+      fmt::format("{} has no list {}.", listsId, path),
+      fmt::format("Its lists are: {}.", fmt::join(paths, ", ")));
+  }
+
+  auto request = pageRequest(args, 0);
+  if (request.is_error())
+  {
+    return errorOf(request);
+  }
+  const auto items = std::vector<Json>(it->second.begin(), it->second.end());
+  auto page = makePage(items, request.value(), 0);
+  page["listsId"] = listsId;
+  page["path"] = path;
+  page["tool"] = kept->tool;
+  return page;
+}
+
+} // namespace
+
 void registerSessionTools(ToolRegistry& registry)
 {
   registry.add(
@@ -322,6 +372,35 @@ void registerSessionTools(ToolRegistry& registry)
       .mutation(Mutation::None)
       .paginated()
       .handler(sessionLogTool));
+
+  registry.add(
+    ToolDef{"result_list_get"}
+      .title("Get Result List")
+      .description(
+        "Pages through a full id list that a modifying call cut to its detail level "
+        "(read-only): the response's truncatedLists names the listsId and the paths "
+        "(changes.created, changes.modified, changes.removed, issuesIntroduced, "
+        "result.<field>). The lists of the last 10 such calls of this session are "
+        "kept. Example: {\"listsId\": \"lists:3\", \"path\": \"changes.created\", "
+        "\"limit\": 500}")
+      .input(object({
+        field("listsId", string()).required().describe("truncatedLists.listsId"),
+        field("path", string())
+          .required()
+          .describe("A path from truncatedLists.lists, e.g. 'result.ids'"),
+      }))
+      .output(object({
+        field("items", array(any())).required().describe("The list's items"),
+        field("total", integer()).required().describe("Number of items in the list"),
+        field("nextCursor", any()).describe("Cursor of the next page, or null"),
+        field("listsId", string()),
+        field("path", string()),
+        field("tool", string()).describe("The tool of the call"),
+      }))
+      .mutation(Mutation::None)
+      .paginated()
+      .idempotent()
+      .handler(resultListGetTool));
 }
 
 } // namespace tb::mcp

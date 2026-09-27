@@ -22,6 +22,7 @@
 #include "base/NotifierConnection.h"
 #include "mcp/Errors.h"
 #include "mcp/Json.h"
+#include "mcp/ListDetail.h"
 #include "mcp/tools/PlacementChecks.h"
 
 #include <memory>
@@ -113,10 +114,16 @@ struct ChangeReport
 };
 
 /**
- * Serializes the change lists. Each list is capped at `limit` ids; if any list is
- * truncated, the result contains `"truncated": true` and the full counts.
+ * Serializes the change lists. Each list keeps at most listLimit(detail) ids; if any list
+ * is cut, the result contains `"truncated": true`, and the cut lists are appended to
+ * `truncated` (paths "changes.created", ...). If a list was cut or the detail is
+ * Summary, the result also contains `counts` and `countsByKind` (per list, e.g.
+ * `{"created": {"brush": 1490, "entity": 10}}`).
  */
-Json changesToJson(const ChangeReport& report, size_t limit = 500);
+Json changesToJson(
+  const ChangeReport& report,
+  ListDetail detail = ListDetail::Ids,
+  std::vector<TruncatedList>* truncated = nullptr);
 Json issuesToJson(const std::vector<IntroducedIssue>& issues, size_t limit = 100);
 
 /**

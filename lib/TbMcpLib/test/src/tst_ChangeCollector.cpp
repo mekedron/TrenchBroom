@@ -186,10 +186,40 @@ TEST_CASE("ChangeReport")
         {"removed", {"entity:4"}},
       });
 
-    const auto truncated = changesToJson(report, 2);
-    CHECK(truncated["created"].size() == 2);
-    CHECK(truncated["truncated"] == true);
-    CHECK(truncated["counts"]["created"] == 3);
+    // summary: at most 5 ids per list, counts per kind
+    report.created.clear();
+    for (size_t i = 0; i < 60; ++i)
+    {
+      report.created.push_back("brush:" + std::to_string(i + 1));
+    }
+    report.created.push_back("entity:100");
+    const auto summary = changesToJson(report, ListDetail::Summary);
+    CHECK(summary["created"].size() == 5);
+    CHECK(summary["truncated"] == true);
+    CHECK(summary["counts"] == Json{{"created", 61}, {"modified", 0}, {"removed", 1}});
+    CHECK(
+      summary["countsByKind"]
+      == Json{
+        {"created", {{"brush", 60}, {"entity", 1}}},
+        {"removed", {{"entity", 1}}},
+      });
+
+    // ids: at most 50 ids per list; the cut list is reported in full
+    auto truncated = std::vector<TruncatedList>{};
+    const auto ids = changesToJson(report, ListDetail::Ids, &truncated);
+    CHECK(ids["created"].size() == 50);
+    CHECK(ids["removed"] == Json{"entity:4"});
+    CHECK(ids["truncated"] == true);
+    CHECK(ids["counts"]["created"] == 61);
+    REQUIRE(truncated.size() == 1);
+    CHECK(truncated[0].path == "changes.created");
+    CHECK(truncated[0].items.size() == 61);
+
+    // full: everything, no counts
+    const auto full = changesToJson(report, ListDetail::Full);
+    CHECK(full["created"].size() == 61);
+    CHECK_FALSE(full.contains("truncated"));
+    CHECK_FALSE(full.contains("counts"));
   }
 
   SECTION("selectionSummary")

@@ -125,10 +125,30 @@ struct VoxelGrid
 
 /**
  * A grid over the region, aligned to multiples of the cell size and padded by the given
- * number of cells on every side. Fails if it would have more than maxCells cells.
+ * number of cells on every side. Fails if it would have more than maxCells cells; the
+ * error names the cell size (fittingCellSize) and the region size that would fit.
  */
 Result<VoxelGrid, ToolError> makeGrid(
   const vm::bbox3d& region, double cellSize, size_t padding, size_t maxCells);
+
+/**
+ * The number of cells of a grid over the region with the given cell size and padding
+ * (see makeGrid); with `columnsOnly`, the number of x-y columns.
+ */
+double gridCellCount(
+  const vm::bbox3d& region, double cellSize, size_t padding, bool columnsOnly = false);
+
+/**
+ * The smallest cell size of the sequence minCellSize x 1, 1.5, 2, 3, 4, 6, 8, ... for
+ * which the grid over the region (see gridCellCount) has at most maxCells cells (columns
+ * with `columnsOnly`).
+ */
+double fittingCellSize(
+  const vm::bbox3d& region,
+  double minCellSize,
+  size_t padding,
+  size_t maxCells,
+  bool columnsOnly = false);
 
 /**
  * Marks the cells overlapped by the interior of the brushes accepted by the predicate.
@@ -212,9 +232,19 @@ LeakReport predictLeaks(const mdl::Map& map, const LeakOptions& options = {});
 
 struct SpaceOptions
 {
-  /** The region to analyze; default: the bounds of the space-solid brushes. */
+  /**
+   * The region to analyze; default: the bounds of the space-solid brushes. The grid
+   * covers only the region (plus one cell). Where the region cuts through the map (the
+   * border cell lies inside the bounds of the space-solid brushes), its border acts as a
+   * wall and the spaces touching it are `clipped`; beyond the map's bounds, the border is
+   * the void as without a region.
+   */
   std::optional<vm::bbox3d> region = std::nullopt;
-  /** The cell size; 0 uses defaultCellSize. */
+  /**
+   * The cell size; 0 chooses it: defaultCellSize, enlarged (fittingCellSize) if the grid
+   * would have more than maxCells cells (SpaceMap::enlargedFrom). An explicit cell size
+   * is never changed: the analysis fails instead.
+   */
   double cellSize = 0.0;
   /**
    * Openings (doorways, windows) whose smaller side is at most this size separate
@@ -272,6 +302,11 @@ struct SpaceGeometry
    * are narrower than openingSize in every direction.
    */
   bool hasCore = true;
+  /**
+   * Whether the space reaches the border of an explicit region inside the map: its
+   * bounds are cut there, and `sealed` describes only the part inside the region.
+   */
+  bool clipped = false;
   /** Indices into SpaceMap::openings. */
   std::vector<size_t> openings;
   /** Indices of neighbouring spaces. */
@@ -294,6 +329,13 @@ struct SpaceMap
   std::vector<SpaceGeometry> spaces;
   std::vector<OpeningGeometry> openings;
   double openingSize = 0.0;
+  /** The explicit region the analysis was limited to, if any. */
+  std::optional<vm::bbox3d> region = std::nullopt;
+  /**
+   * The cell size the analysis would have used (defaultCellSize) if it was enlarged
+   * automatically to stay within maxCells; nullopt if it was not.
+   */
+  std::optional<double> enlargedFrom = std::nullopt;
 
   /** The label of the cell containing the point, or Void outside the grid. */
   int32_t labelAt(const vm::vec3d& point) const;
@@ -317,6 +359,12 @@ struct SpaceMap
  */
 Result<SpaceMap, ToolError> analyzeSpaces(
   const mdl::Map& map, const SpaceOptions& options = {});
+
+/**
+ * The warning (CELL_SIZE_ENLARGED) for an analysis whose cell size was enlarged
+ * automatically (SpaceMap::enlargedFrom), or nullopt if it was not.
+ */
+std::optional<std::string> enlargedCellSizeMessage(const SpaceMap& spaces);
 
 struct HeightStats
 {
@@ -477,8 +525,13 @@ constexpr auto DefaultJumpHeight = 45.0;
 
 struct WalkOptions
 {
+  /** The area to analyze; default: the bounds of the player-blocking brushes. */
   std::optional<vm::bbox3d> region = std::nullopt;
-  /** 0 uses defaultCellSize. */
+  /**
+   * The column size; 0 chooses it: defaultCellSize, enlarged (fittingCellSize) if the
+   * plan would have more than maxColumns columns (WalkPlan::enlargedFrom). An explicit
+   * size is never changed: the plan fails instead.
+   */
   double cellSize = 0.0;
   /** 0 uses playerSize() of the game. */
   double playerWidth = 0.0;
@@ -487,7 +540,6 @@ struct WalkOptions
   double jumpHeight = DefaultJumpHeight;
   /** The start point; default: info_player_start, then info_player_deathmatch. */
   std::optional<vm::vec3d> start = std::nullopt;
-  size_t maxCells = 4'000'000;
   size_t maxColumns = 250'000;
 };
 
@@ -505,6 +557,8 @@ struct WalkPlan
 {
   vm::vec2d origin;
   double cellSize = 0.0;
+  /** The column size before it was enlarged automatically, if it was. */
+  std::optional<double> enlargedFrom = std::nullopt;
   size_t columns = 0;
   size_t rows = 0;
   double stepHeight = 0.0;
@@ -534,6 +588,10 @@ struct WalkPlan
  * dropping down. The box rests on the highest floor under it: a floor with a standable
  * floor at most stepHeight higher under the box is not a position of its own. Doors are
  * passable. Floors are brush faces (walkable slope, normal z >= 0.7) and patches.
+ *
+ * The analysis is 2.5D: per x-y column, rays find the floor surfaces, and each floor is
+ * checked for a free player box above it; the empty volume above the player (e.g. up to
+ * a skybox) is never rasterized, so its cost grows with the number of columns only.
  */
 Result<WalkPlan, ToolError> planWalk(mdl::Map& map, const WalkOptions& options = {});
 

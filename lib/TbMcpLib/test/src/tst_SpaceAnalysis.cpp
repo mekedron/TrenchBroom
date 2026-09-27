@@ -151,6 +151,12 @@ std::vector<std::string> spaceIds(const SpaceMap& spaces)
   return result;
 }
 
+vm::bbox3d spacesBounds(const mdl::Map& map)
+{
+  return *brushBounds(
+    map, [](const mdl::BrushNode&, const BrushRole& role) { return role.spaceSolid; });
+}
+
 const auto Room1 = vm::bbox3d{{0, 0, 0}, {512, 384, 192}};
 const auto Room2 = vm::bbox3d{{528, 0, 0}, {1040, 384, 192}};
 
@@ -355,6 +361,75 @@ TEST_CASE("SpaceAnalysis")
   {
     const auto result = analyzeSpaces(map, {.cellSize = 1.0, .maxCells = 1000});
     REQUIRE(result.is_error());
+    // the hint names the parameters and a cell size that fits
+    const auto hint = errorOf(result).hint;
+    CHECK(
+      hint.find(
+        "\"cellSize\": "
+        + std::to_string(int(fittingCellSize(spacesBounds(map), 1.0, 1, 1000))))
+      != std::string::npos);
+    CHECK(hint.find("\"region\"") != std::string::npos);
+  }
+
+  SECTION("gridCellCount and fittingCellSize")
+  {
+    const auto region = vm::bbox3d{{0, 0, 0}, {4096, 4096, 1024}};
+    CHECK(gridCellCount(region, 16.0, 0) == 256.0 * 256.0 * 64.0);
+    CHECK(gridCellCount(region, 16.0, 1) == 258.0 * 258.0 * 66.0);
+    CHECK(gridCellCount(region, 16.0, 0, true) == 256.0 * 256.0);
+    // 16, 24, 32, 48, 64, ...
+    CHECK(fittingCellSize(region, 16.0, 1, 4'000'000) == 24.0);
+    CHECK(fittingCellSize(region, 16.0, 1, 1'000'000) == 32.0);
+    CHECK(fittingCellSize(region, 16.0, 1, 500'000) == 48.0);
+    CHECK(fittingCellSize(region, 16.0, 0, 250'000, true) == 16.0);
+    CHECK(fittingCellSize(region, 16.0, 0, 10'000, true) == 48.0);
+  }
+
+  SECTION("analyzeSpaces enlarges the automatic cell size")
+  {
+    const auto result = analyzeSpaces(map, {.maxCells = 20'000});
+    REQUIRE(result.is_success());
+    const auto& spaces = result.value();
+    CHECK(spaces.enlargedFrom == 16.0);
+    CHECK(spaces.grid.cellSize > 16.0);
+    CHECK(spaces.grid.size() <= 20'000);
+    const auto message = enlargedCellSizeMessage(spaces);
+    REQUIRE(message);
+    CHECK(message->find("\"region\"") != std::string::npos);
+
+    const auto unchanged = analyzeSpaces(map);
+    REQUIRE(unchanged.is_success());
+    CHECK(unchanged.value().enlargedFrom == std::nullopt);
+    CHECK(enlargedCellSizeMessage(unchanged.value()) == std::nullopt);
+
+    // an explicit cell size is never changed
+    CHECK(analyzeSpaces(map, {.cellSize = 16.0, .maxCells = 20'000}).is_error());
+  }
+
+  SECTION("analyzeSpaces covers only the region")
+  {
+    // the western half of room 1: the region's border cuts through the room
+    const auto region = vm::bbox3d{{0, 0, 0}, {256, 384, 192}};
+    const auto result = analyzeSpaces(map, {.region = region});
+    REQUIRE(result.is_success());
+    const auto& spaces = result.value();
+    CHECK(spaces.region == region);
+    CHECK(spaces.grid.bounds().min == vm::vec3d{-16, -16, -16});
+    CHECK(spaces.grid.bounds().max == vm::vec3d{272, 400, 208});
+
+    const auto room1 = spaces.spaceAt({64, 192, 24});
+    REQUIRE(room1);
+    // cut by the region, not open to the void
+    CHECK(spaces.spaces[*room1].clipped);
+    CHECK(spaces.spaces[*room1].sealed);
+    CHECK(spaces.spaces[*room1].bounds.max.x() <= 256.0);
+
+    // a region around the whole map clips nothing
+    const auto whole =
+      analyzeSpaces(map, {.region = vm::bbox3d{{-64, -64, -64}, {1100, 450, 300}}});
+    REQUIRE(whole.is_success());
+    CHECK(std::ranges::none_of(
+      whole.value().spaces, [](const auto& space) { return space.clipped; }));
   }
 
   SECTION("predictLeaks")
@@ -561,6 +636,33 @@ TEST_CASE("SpaceAnalysis")
     CHECK(seat->z == 24.0);
     // next to a wall there is no room for the player
     CHECK(nodeAt(8, 192) == nullptr);
+  }
+
+  SECTION("planWalk covers only the region")
+  {
+    const auto region = vm::bbox3d{{0, 0, -16}, {512, 384, 256}};
+    const auto result = planWalk(map, {.region = region, .cellSize = 32.0});
+    REQUIRE(result.is_success());
+    const auto& plan = result.value();
+    CHECK(plan.cellSize == 32.0);
+    CHECK(plan.origin == vm::vec2d{0, 0});
+    CHECK(plan.columns == 16);
+    CHECK(plan.rows == 12);
+    CHECK(plan.startNode);
+  }
+
+  SECTION("planWalk enlarges the automatic cell size")
+  {
+    const auto result = planWalk(map, {.maxColumns = 500});
+    REQUIRE(result.is_success());
+    const auto& plan = result.value();
+    CHECK(plan.enlargedFrom == 16.0);
+    CHECK(plan.columns * plan.rows <= 500);
+
+    // an explicit cell size is never changed
+    const auto error = planWalk(map, {.cellSize = 16.0, .maxColumns = 500});
+    REQUIRE(error.is_error());
+    CHECK(errorOf(error).hint.find("\"cellSize\": ") != std::string::npos);
   }
 
   SECTION("timing")

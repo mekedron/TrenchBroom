@@ -641,6 +641,10 @@ struct CheckRun
       if (result.is_success())
       {
         spaces = std::move(result).value();
+        if (auto message = enlargedCellSizeMessage(*spaces))
+        {
+          context->warn("CELL_SIZE_ENLARGED", std::move(*message));
+        }
       }
       else
       {
@@ -1629,6 +1633,10 @@ void checkRooms(CheckRun& run, const Scope& scope)
       continue;
     }
     const auto origin = entity.origin();
+    if (spaces->region && !spaces->region->contains(origin))
+    {
+      continue;
+    }
     const auto label = spaces->labelAt(origin);
     if (label >= 0 || spaces->spaceAt(origin, 1))
     {
@@ -1816,6 +1824,7 @@ void mapCheck(CallContext& context, const Args& args, ToolCompletion completion)
   run->completion = std::move(completion);
   run->page = std::move(request).value();
   run->ids = args.getOptional<std::vector<std::string>>("ids");
+  run->spaceOptions.region = args.getOptional<vm::bbox3d>("region");
   run->spaceOptions.cellSize = args.getOr<double>("cellSize", 0.0);
   run->spaceOptions.openingSize = args.getOr<double>("openingSize", 96.0);
 
@@ -1913,10 +1922,16 @@ void registerMapCheckTools(ToolRegistry& registry)
             "Limit the object-based checks to these objects and their contents "
             "(entities, brushes, groups, layers). player_start is a map-level check "
             "and runs with ids only when listed in checks. Default: the whole map"),
+        field("region", box())
+          .describe(
+            "Limit the space analysis of the rooms check to this box; "
+            "ENTITY_OUTSIDE_SPACES then checks only the entities inside it. Default: the "
+            "whole map"),
         field("cellSize", number().min(2).max(1024))
           .describe(
             "Cell size of the space analysis in map units (default: half the player "
-            "width); smaller is more precise and slower"),
+            "width, enlarged with warning CELL_SIZE_ENLARGED when the map needs too many "
+            "cells, e.g. under a tall sky); smaller is more precise and slower"),
         field("openingSize", number().min(8).defaultsTo(96))
           .describe(
             "Openings up to this size in map units separate spaces (rooms check), as "
