@@ -428,38 +428,35 @@ bool matchHandle(
   }
 }
 
-/**
- * The brushes that handle tools act on: explicit `ids`, else the selected brushes, else
- * all editable brushes (the handles pick the affected ones).
- */
-Result<std::vector<mdl::Node*>, ToolError> handleCandidates(
-  CallContext& context, const Args& args)
+std::vector<mdl::Node*> brushNodesOf(const std::vector<MatchedHandles>& matched)
 {
-  auto& map = context.map();
-  if (args.has("ids"))
-  {
-    return resolveTargets(context, args, "ids", {ObjectKind::Brush});
-  }
-
-  const auto& selectedBrushes = map.selection().brushes;
-  if (!selectedBrushes.empty())
-  {
-    return std::vector<mdl::Node*>{selectedBrushes.begin(), selectedBrushes.end()};
-  }
-
   auto result = std::vector<mdl::Node*>{};
-  collectEditableBrushes(map.editorContext(), map.worldNode(), result);
+  for (const auto& m : matched)
+  {
+    result.push_back(m.brushNode);
+  }
   return result;
 }
 
-/**
- * Matches all handles to the candidate brushes. Every handle must belong to at least one
- * candidate (INVALID_ARGUMENT otherwise); brushes without any handle are dropped.
- */
-Result<std::vector<MatchedHandles>, ToolError> matchHandles(
+std::vector<std::string> brushIdsOf(
+  const std::vector<MatchedHandles>& matched, const IdRegistry& ids)
+{
+  return formatIds(brushNodesOf(matched), ids);
+}
+
+/** Handles matched to candidate brushes. */
+struct HandleMatch
+{
+  /** The candidates that have at least one handle. */
+  std::vector<MatchedHandles> matched;
+  /** The indices of the handles that no candidate has. */
+  std::vector<size_t> unknown;
+};
+
+HandleMatch matchHandles(
   const Handles& handles, const std::vector<mdl::Node*>& candidates)
 {
-  auto result = std::vector<MatchedHandles>{};
+  auto result = HandleMatch{};
   auto found = std::vector<bool>(handles.positions.size(), false);
 
   for (auto* node : candidates)
@@ -475,41 +472,187 @@ Result<std::vector<MatchedHandles>, ToolError> matchHandles(
     }
     if (!matched.empty())
     {
-      result.push_back(std::move(matched));
+      result.matched.push_back(std::move(matched));
     }
   }
 
-  auto unknown = std::vector<std::string>{};
   for (size_t i = 0; i < found.size(); ++i)
   {
     if (!found[i])
     {
-      unknown.push_back(formatHandle(handles.positions[i]));
+      result.unknown.push_back(i);
     }
-  }
-  if (!unknown.empty())
-  {
-    static constexpr const char* kindNames[] = {"vertex", "edge", "face"};
-    return makeError(
-      ErrorCode::InvalidArgument,
-      std::string{"No target brush has a "} + kindNames[size_t(handles.kind)]
-        + " at: " + joinStrings(unknown) + ".",
-      "Use object_get with detail 'full' to list the vertices of a brush; positions are "
-      "matched within 0.01 units. Edges are given by their two end points, faces by all "
-      "their vertices (in any order).");
   }
   return result;
 }
 
-std::vector<mdl::Node*> brushNodesOf(const std::vector<MatchedHandles>& matched)
+std::string brushCount(const size_t count)
 {
-  auto result = std::vector<mdl::Node*>{};
-  for (const auto& m : matched)
-  {
-    result.push_back(m.brushNode);
-  }
-  return result;
+  return std::to_string(count) + (count == 1 ? " brush" : " brushes");
 }
+
+/**
+ * The error for handles that were not found in `searched` (a description of the searched
+ * brushes). It names the brushes of the map that have the handles, so that the agent can
+ * fix the call.
+ */
+ToolError handlesNotFound(
+  CallContext& context,
+  const Handles& handles,
+  const std::vector<size_t>& unknown,
+  const std::string& searched,
+  const bool explicitIds)
+{
+  auto& map = context.map();
+  const auto& ids = context.ids();
+  const auto& editorContext = map.editorContext();
+
+  auto allBrushes = std::vector<mdl::BrushNode*>{};
+  collectBrushes(map.worldNode(), allBrushes);
+
+  auto positions = std::vector<std::string>{};
+  auto editableOwners = std::vector<std::string>{};
+  auto otherOwners = std::vector<std::string>{};
+  for (const auto i : unknown)
+  {
+    positions.push_back(formatHandle(handles.positions[i]));
+    for (auto* brushNode : allBrushes)
+    {
+      auto matched = MatchedHandles{brushNode, {}, {}, {}};
+      if (matchHandle(brushNode->brush(), handles.kind, handles.positions[i], matched))
+      {
+        auto& owners =
+          editorContext.selectable(*brushNode) ? editableOwners : otherOwners;
+        const auto id = ids.format(*brushNode);
+        if (std::ranges::find(owners, id) == owners.end())
+        {
+          owners.push_back(id);
+        }
+      }
+    }
+  }
+
+  static constexpr const char* kindNames[] = {"vertex", "edge", "face"};
+  const auto message = std::string{"No "} + kindNames[size_t(handles.kind)] + " at "
+                       + joinStrings(positions) + " was found in " + searched + ".";
+
+  auto hint = std::string{};
+  if (!editableOwners.empty())
+  {
+    hint += "Brushes " + joinStrings(editableOwners) + " have "
+            + (unknown.size() == 1 ? "it" : "them") + ". ";
+    if (explicitIds)
+    {
+      hint +=
+        "Pass their ids in 'ids', or omit 'ids' to use the selected brushes or else "
+        "every brush that has the handles. ";
+    }
+  }
+  if (!otherOwners.empty())
+  {
+    hint += "Brushes " + joinStrings(otherOwners)
+            + " have them but are hidden, locked, or inside a closed group: show or "
+              "unlock their layer (layer_set_state), or open their group (group_open). ";
+  }
+  if (editableOwners.empty() && otherOwners.empty())
+  {
+    hint +=
+      "No brush in the map has them. Use object_get with detail 'full' to list the "
+      "vertices of a brush; positions are matched within 0.01 units. Edges are given by "
+      "their two end points, faces by all their vertices (in any order).";
+  }
+
+  auto objectIds = editableOwners;
+  objectIds.insert(objectIds.end(), otherOwners.begin(), otherOwners.end());
+  const auto code = editableOwners.empty() && !otherOwners.empty()
+                      ? ErrorCode::ObjectNotEditable
+                      : ErrorCode::InvalidArgument;
+  if (hint.ends_with(' '))
+  {
+    hint.pop_back();
+  }
+  return makeError(code, message, hint, std::move(objectIds));
+}
+
+/**
+ * Finds the brushes that have the handles:
+ * - with explicit `ids`, only these brushes, and each handle must belong to one of them;
+ * - else, if the selected brushes have every handle, the selected brushes (a handle
+ * shared with an unselected brush only changes the selected one, as in the editor);
+ * - else every visible, unlocked brush that has one of the handles (warning
+ *   HANDLES_OUTSIDE_SELECTION if brushes are selected).
+ * Handles that are not found give an error that says where they were searched and which
+ * brushes have them. Brushes without any handle are dropped.
+ */
+Result<std::vector<MatchedHandles>, ToolError> resolveHandles(
+  CallContext& context, const Args& args, const Handles& handles)
+{
+  auto& map = context.map();
+  const auto& ids = context.ids();
+
+  if (args.has("ids"))
+  {
+    auto targets = resolveTargets(context, args, "ids", {ObjectKind::Brush});
+    if (targets.is_error())
+    {
+      return errorOf(targets);
+    }
+    auto match = matchHandles(handles, targets.value());
+    if (!match.unknown.empty())
+    {
+      return handlesNotFound(
+        context,
+        handles,
+        match.unknown,
+        "the " + brushCount(targets.value().size()) + " given in 'ids' ("
+          + joinStrings(formatIds(targets.value(), ids)) + ")",
+        true);
+    }
+    return std::move(match.matched);
+  }
+
+  const auto& selectedBrushes = map.selection().brushes;
+  const auto selected =
+    std::vector<mdl::Node*>{selectedBrushes.begin(), selectedBrushes.end()};
+  if (!selected.empty())
+  {
+    auto match = matchHandles(handles, selected);
+    if (match.unknown.empty())
+    {
+      return std::move(match.matched);
+    }
+  }
+
+  auto editableBrushes = std::vector<mdl::Node*>{};
+  collectEditableBrushes(map.editorContext(), map.worldNode(), editableBrushes);
+  auto match = matchHandles(handles, editableBrushes);
+  if (!match.unknown.empty())
+  {
+    const auto count = editableBrushes.size();
+    const auto whole = "the " + std::to_string(count) + " visible, unlocked "
+                       + (count == 1 ? "brush" : "brushes") + " of the whole map";
+    return handlesNotFound(
+      context,
+      handles,
+      match.unknown,
+      selected.empty()
+        ? whole
+        : "neither the selection (" + brushCount(selected.size()) + ") nor " + whole,
+      false);
+  }
+
+  if (!selected.empty())
+  {
+    context.warn(
+      "HANDLES_OUTSIDE_SELECTION",
+      "The " + brushCount(selected.size())
+        + " selected do not have all of the handles, so every visible, unlocked brush "
+          "that has one of them was changed. Pass 'ids' to choose the brushes.",
+      brushIdsOf(match.matched, ids));
+  }
+  return std::move(match.matched);
+}
+
 
 // brush_clip
 
@@ -1098,12 +1241,7 @@ ToolResult verticesMove(CallContext& context, const Args& args)
   {
     return errorOf(handles);
   }
-  auto candidates = handleCandidates(context, args);
-  if (candidates.is_error())
-  {
-    return errorOf(candidates);
-  }
-  auto matched = matchHandles(handles.value(), candidates.value());
+  auto matched = resolveHandles(context, args, handles.value());
   if (matched.is_error())
   {
     return errorOf(matched);
@@ -1308,12 +1446,7 @@ ToolResult verticesRemove(CallContext& context, const Args& args)
   {
     return errorOf(handles);
   }
-  auto candidates = handleCandidates(context, args);
-  if (candidates.is_error())
-  {
-    return errorOf(candidates);
-  }
-  auto matched = matchHandles(handles.value(), candidates.value());
+  auto matched = resolveHandles(context, args, handles.value());
   if (matched.is_error())
   {
     return errorOf(matched);
@@ -1723,8 +1856,9 @@ std::vector<Field> handleFields()
   return {
     idsField(
       {ObjectKind::Brush},
-      "Brushes whose handles are affected. Default: the selected brushes; if no brush is "
-      "selected, every visible, unlocked brush that has one of the handles"),
+      "Brushes whose handles are affected; each handle must belong to one of them. "
+      "Default: the selected brushes if they have every handle, else every visible, "
+      "unlocked brush that has one of the handles"),
     field("vertices", array(vec3()).nonEmpty())
       .describe("Vertex positions, e.g. [[0, 0, 64]]"),
     field("edges", array(array(vec3()).minSize(2).maxSize(2)).nonEmpty())
@@ -1846,8 +1980,14 @@ void registerBrushEditTools(ToolRegistry& registry)
         "Moves vertices, edges or faces of brushes by 'vector', like the Vertex, Edge "
         "and Face tools. Pass exactly one of 'vertices', 'edges' or 'faces', given by "
         "positions (matched within 0.01 units; use object_get with detail 'full' to "
-        "list them). Shared handles move together: every target brush that has the "
-        "handle is changed. A move that would make a brush non-convex or degenerate "
+        "list them). Target brushes: 'ids' if given; else the selected brushes if they "
+        "have every handle; else every visible, unlocked brush that has one of the "
+        "handles (warning HANDLES_OUTSIDE_SELECTION if brushes are selected). Shared "
+        "handles move together: every target brush that has the handle is changed. "
+        "Handles that are not found fail with INVALID_ARGUMENT (OBJECT_NOT_EDITABLE if "
+        "only hidden or locked brushes have them); the error says where they were "
+        "searched and which brushes have them. A move that would make a brush non-convex "
+        "or degenerate "
         "fails with INVALID_GEOMETRY naming the brushes. Moving a vertex onto another "
         "merges them (hasRemainingVertices false). The selection is restored "
         "afterwards. "
@@ -1892,8 +2032,9 @@ void registerBrushEditTools(ToolRegistry& registry)
       .description(
         "Removes vertices, edges (both end points) or faces (all their vertices) from "
         "brushes, like Delete in the Vertex, Edge and Face tools; each brush becomes the "
-        "convex hull of its remaining vertices. Fails with INVALID_GEOMETRY if a brush "
-        "would become degenerate. The selection is restored afterwards. "
+        "convex hull of its remaining vertices. Handles are given and target brushes "
+        "chosen as in vertices_move. Fails with INVALID_GEOMETRY if a brush would "
+        "become degenerate. The selection is restored afterwards. "
         "Example: {\"vertices\": [[64, 64, 64]]}")
       .input(object(handleFields()))
       .output(object({

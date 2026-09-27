@@ -37,9 +37,14 @@
 #include "mdl/Tag.h"
 #include "mdl/TagManager.h"
 #include "mdl/UvAttributes.h"
+#include "mdl/UvCoordSystem.h"
 #include "mdl/WorldNode.h"
 
+#include "vm/scalar.h"
+#include "vm/vec.h"
+
 #include <algorithm>
+#include <cmath>
 
 namespace tb::mcp
 {
@@ -185,6 +190,40 @@ Json nodeState(const mdl::Map& map, const mdl::Node& node)
   };
 }
 
+double faceRotation(const mdl::BrushFace& face)
+{
+  const auto storedRotation = double(face.uvAttributes().rotation);
+  if (!face.uvCoordSystem().is<mdl::ParallelUvCoordSystem>())
+  {
+    return storedRotation;
+  }
+
+  // the U axis of a new face with this normal (ParallelUvCoordSystem's initial axes)
+  const auto& normal = face.normal();
+  const auto initialUAxis = vm::find_abs_max_component(normal) == vm::axis::z
+                              ? vm::normalize(vm::cross(vm::vec3d{0, 1, 0}, normal))
+                              : vm::normalize(vm::cross(vm::vec3d{0, 0, 1}, normal));
+
+  const auto uAxis = face.uAxis();
+  const auto uvNormal = vm::cross(uAxis, face.vAxis());
+  const auto projectedUAxis = uAxis - normal * vm::dot(uAxis, normal);
+  const auto almostZero = vm::constants<double>::almost_zero();
+  if (
+    vm::is_zero(projectedUAxis, almostZero) || vm::is_zero(uvNormal, almostZero)
+    || vm::is_zero(vm::dot(uvNormal, normal), almostZero))
+  {
+    return storedRotation;
+  }
+
+  // the editor rotates the UV axes about the UV normal when the rotation changes; the
+  // axes are stored with float precision, so the angle is rounded to 0.001 degrees
+  const auto axis = vm::dot(uvNormal, normal) > 0.0 ? normal : -normal;
+  const auto angle = vm::normalize_degrees(
+    vm::to_degrees(vm::measure_angle(vm::normalize(projectedUAxis), initialUAxis, axis)));
+  const auto rounded = std::round(angle * 1000.0) / 1000.0;
+  return rounded >= 360.0 ? rounded - 360.0 : rounded;
+}
+
 Json faceJson(
   const mdl::Map& map,
   const mdl::BrushNode& brushNode,
@@ -208,7 +247,7 @@ Json faceJson(
   {
     result["offset"] = toJson(vm::vec2d{uv.offset});
     result["scale"] = toJson(vm::vec2d{uv.scale});
-    result["rotation"] = roundForOutput(double(uv.rotation));
+    result["rotation"] = roundForOutput(faceRotation(face));
     result["area"] = roundForOutput(face.area());
     result["tags"] = faceTagNames(map, face);
     if (const auto contents = surface.contents)

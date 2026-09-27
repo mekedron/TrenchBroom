@@ -79,10 +79,24 @@ Json nodeSummary(const mdl::Node& node, const IdRegistry& ids);
 Json nodeState(const mdl::Map& map, const mdl::Node& node);
 
 /**
+ * The rotation of a face's texture in degrees in [0, 360), as the face shows it.
+ *
+ * Standard (paraxial) faces derive their UV axes from the stored rotation, which is
+ * returned as is. Parallel (Valve 220) faces keep explicit UV axes; their stored rotation
+ * is bookkeeping that the editor changes on every transform with alignment lock, even a
+ * pure translation that leaves the axes unchanged. For them the rotation is derived from
+ * the UV axes: the angle by which the axes of a new face with the same normal must be
+ * rotated about the UV normal (u x v) so that the U axis matches, which is the angle a
+ * rotation change rotates the axes by. Setting this value as the rotation leaves the
+ * texture unchanged.
+ */
+double faceRotation(const mdl::BrushFace& face);
+
+/**
  * Describes one face of a brush. Summary: `{"id", "index", "normal", "center",
- * "material"}`. Full additionally has `"offset", "scale", "rotation", "area", "tags"`,
- * the surface attributes (`"surfaceContents"`, `"surfaceFlags"`, `"surfaceValue"`, if
- * set) and `"vertices"`.
+ * "material"}`. Full additionally has `"offset", "scale", "rotation"` (faceRotation),
+ * `"area", "tags"`, the surface attributes (`"surfaceContents"`, `"surfaceFlags"`,
+ * `"surfaceValue"`, if set) and `"vertices"`.
  */
 Json faceJson(
   const mdl::Map& map,

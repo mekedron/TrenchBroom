@@ -28,6 +28,7 @@
 #include "mdl/EntityNode.h"
 #include "mdl/Grid.h"
 #include "mdl/Map.h"
+#include "mdl/Map_NodeVisibility.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
@@ -429,6 +430,61 @@ TEST_CASE("BrushEditTools")
       CHECK(a->logicalBounds().min.z() == 0);
     }
 
+    SECTION("handles outside the selection are found in the brushes that have them")
+    {
+      mdl::selectNodes(map, {far});
+      const auto result = fixture.call(
+        "vertices_move",
+        Json{{"edges", {{{64, 0, 64}, {64, 64, 64}}}}, {"vector", {0, 0, 16}}});
+      CHECK(a->logicalBounds().max.z() == 80);
+      CHECK(b->logicalBounds().max.z() == 80);
+      CHECK(far->logicalBounds().max.z() == 64);
+      CHECK(hasWarning(result, "HANDLES_OUTSIDE_SELECTION"));
+      CHECK(selectedIds(fixture, map) == std::vector<std::string>{farId});
+    }
+
+    SECTION("a selection that has the handles restricts the brushes")
+    {
+      mdl::selectNodes(map, {b});
+      const auto result = fixture.call(
+        "vertices_move", Json{{"vertices", {{64, 64, 64}}}, {"vector", {0, 0, 16}}});
+      CHECK(a->logicalBounds().max.z() == 64);
+      CHECK(b->logicalBounds().max.z() == 80);
+      CHECK_FALSE(hasWarning(result, "HANDLES_OUTSIDE_SELECTION"));
+    }
+
+    SECTION("errors for handles that are not found say where they were searched")
+    {
+      const auto inIds = fixture.callExpectingError(
+        "vertices_move",
+        Json{{"ids", {farId}}, {"vertices", {{0, 0, 0}}}, {"vector", {0, 0, 16}}});
+      CHECK(inIds.code == ErrorCode::InvalidArgument);
+      CHECK(inIds.message.find("given in 'ids' (" + farId + ")") != std::string::npos);
+      CHECK(inIds.hint.find(aId) != std::string::npos);
+      CHECK(inIds.hint.find("omit 'ids'") != std::string::npos);
+      CHECK(inIds.objectIds == std::vector<std::string>{aId});
+
+      mdl::selectNodes(map, {far});
+      const auto withSelection = fixture.callExpectingError(
+        "vertices_move", Json{{"vertices", {{1, 2, 3}}}, {"vector", {0, 0, 16}}});
+      CHECK(withSelection.code == ErrorCode::InvalidArgument);
+      CHECK(
+        withSelection.message.find("neither the selection (1 brush) nor the 3 visible")
+        != std::string::npos);
+      CHECK(withSelection.hint.find("No brush in the map") != std::string::npos);
+
+      mdl::deselectAll(map);
+      mdl::hideNodes(map, {a});
+      const auto hidden = fixture.callExpectingError(
+        "vertices_move", Json{{"vertices", {{0, 0, 0}}}, {"vector", {0, 0, 16}}});
+      CHECK(hidden.code == ErrorCode::ObjectNotEditable);
+      CHECK(
+        hidden.message.find("the 2 visible, unlocked brushes of the whole map")
+        != std::string::npos);
+      CHECK(hidden.objectIds == std::vector<std::string>{aId});
+      CHECK(hidden.hint.find("layer_set_state") != std::string::npos);
+    }
+
     SECTION("non-convex, out of bounds and unknown handles")
     {
       const auto nonConvex = fixture.callExpectingError(
@@ -537,6 +593,18 @@ TEST_CASE("BrushEditTools")
       "vertices_remove",
       Json{{"edges", {{{256, 0, 64}, {256, 64, 64}}}}, {"dryRun", true}});
     CHECK(far->brush().vertexCount() == 8);
+
+    // a vertex of an unselected brush
+    mdl::selectNodes(map, {far});
+    const auto outside = fixture.call("vertices_remove", Json{{"vertices", {{0, 0, 0}}}});
+    CHECK(hasWarning(outside, "HANDLES_OUTSIDE_SELECTION"));
+    CHECK(a->brush().vertexCount() == 6);
+    CHECK(far->brush().vertexCount() == 8);
+
+    const auto unknown = fixture.callExpectingError(
+      "vertices_remove", Json{{"ids", {bId}}, {"vertices", {{256, 0, 0}}}});
+    CHECK(unknown.code == ErrorCode::InvalidArgument);
+    CHECK(unknown.objectIds == std::vector<std::string>{farId});
   }
 
   SECTION("vertices_snap")

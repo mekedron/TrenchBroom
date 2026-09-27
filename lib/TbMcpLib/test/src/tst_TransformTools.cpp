@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "mcp/JsonVm.h"
 #include "mcp/McpToolFixture.h"
 #include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
@@ -27,6 +28,7 @@
 #include "mdl/EntityProperties.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Node.h"
@@ -79,6 +81,12 @@ bool boundsEqual(const vm::bbox3d& actual, const vm::bbox3d& expected)
 {
   return vm::is_equal(actual.min, expected.min, 0.001)
          && vm::is_equal(actual.max, expected.max, 0.001);
+}
+
+/** Whether two JSON vectors are equal within 0.001. */
+bool vecEqual(const Json& actual, const Json& expected)
+{
+  return vm::is_equal(*vec3FromJson(actual), *vec3FromJson(expected), 0.001);
 }
 
 bool hasWarning(const Json& result, const std::string& code)
@@ -739,6 +747,89 @@ TEST_CASE("TransformTools")
         fixture.call("transaction_rollback");
       }
     }
+  }
+}
+
+TEST_CASE("TransformTools with Valve 220 UVs")
+{
+  auto fixture = McpToolFixture{};
+  auto& map = fixture.create({.mapFormat = mdl::MapFormat::Valve}).map();
+  auto* brush = addBox(map, {{0, 0, 0}, {64, 64, 64}});
+  const auto id = fixture.id(*brush);
+
+  // face_attributes_get of the top face of a brush
+  const auto topFace = [&](const std::string& brushId) {
+    const auto result =
+      fixture.call("face_attributes_get", Json{{"ids", {brushId}}, {"detail", "full"}});
+    for (const auto& item : result["items"])
+    {
+      if (item["normal"] == Json{0, 0, 1})
+      {
+        return item;
+      }
+    }
+    FAIL("no top face");
+    return Json{};
+  };
+
+  const auto topId = topFace(id)["id"].get<std::string>();
+  fixture.call("face_attributes_set", Json{{"ids", {topId}}, {"rotation", 30}});
+  const auto original = topFace(id);
+  CHECK(original["rotation"] == 30);
+
+  SECTION("translated copies report the rotation of the original")
+  {
+    const auto array = fixture.call(
+      "objects_array",
+      Json{
+        {"ids", {id}},
+        {"pattern", "line"},
+        {"count", 3},
+        {"offset", {128, 0, 0}},
+        {"alignmentLock", true},
+      });
+    for (const auto& instance : resultOf(array)["instances"])
+    {
+      const auto top = topFace(instance[0].get<std::string>());
+      CHECK(top["rotation"] == 30);
+      CHECK(vecEqual(top["uAxis"], original["uAxis"]));
+      CHECK(vecEqual(top["vAxis"], original["vAxis"]));
+    }
+
+    fixture.call(
+      "objects_move",
+      Json{{"ids", {id}}, {"vector", {0, 64, 0}}, {"alignmentLock", true}});
+    CHECK(topFace(id)["rotation"] == 30);
+    CHECK(vecEqual(topFace(id)["uAxis"], original["uAxis"]));
+  }
+
+  SECTION("setting the reported rotation keeps the texture")
+  {
+    fixture.call(
+      "objects_move",
+      Json{{"ids", {id}}, {"vector", {0, 64, 0}}, {"alignmentLock", true}});
+    const auto moved = topFace(id);
+    fixture.call("face_attributes_set", Json{{"ids", {topId}}, {"rotation", 30}});
+    CHECK(vecEqual(topFace(id)["uAxis"], moved["uAxis"]));
+
+    fixture.call("face_attributes_set", Json{{"ids", {topId}}, {"rotation", 0}});
+    CHECK(topFace(id)["rotation"] == 0);
+    CHECK(vecEqual(topFace(id)["uAxis"], Json{1, 0, 0}));
+  }
+
+  SECTION("a rotated brush reports the rotated texture")
+  {
+    fixture.call(
+      "objects_rotate",
+      Json{{"ids", {id}}, {"angle", 90}, {"axis", "z"}, {"alignmentLock", true}});
+    const auto rotated = topFace(id);
+    CHECK(rotated["rotation"] != 30);
+    CHECK_FALSE(vecEqual(rotated["uAxis"], original["uAxis"]));
+
+    // setting the reported rotation changes nothing
+    fixture.call(
+      "face_attributes_set", Json{{"ids", {topId}}, {"rotation", rotated["rotation"]}});
+    CHECK(vecEqual(topFace(id)["uAxis"], rotated["uAxis"]));
   }
 }
 

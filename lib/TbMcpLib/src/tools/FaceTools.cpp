@@ -72,6 +72,9 @@ using namespace schema;
 /** At most this many faces are described in the result of a modifying face tool. */
 constexpr size_t MaxFacesInResult = 50;
 
+/** Rotations that differ by less than this many degrees are equal. */
+constexpr double RotationEpsilon = 0.001;
+
 const mdl::FaceAttribsConfig& faceAttribsConfig(const mdl::Map& map)
 {
   return map.gameInfo().gameConfig.faceAttribsConfig;
@@ -218,7 +221,7 @@ Json faceAttributesJson(
      face.material() ? toJson(vm::vec2d{face.textureSize()}) : Json(nullptr)},
     {"offset", toJson(vm::vec2d{uv.offset})},
     {"scale", toJson(vm::vec2d{uv.scale})},
-    {"rotation", roundForOutput(double(uv.rotation))},
+    {"rotation", roundForOutput(faceRotation(face))},
     {"uAxis", toJson(face.uAxis())},
     {"vAxis", toJson(face.vAxis())},
     {"tags", faceTagNames(map, face)},
@@ -715,9 +718,19 @@ ToolResult faceAttributesSet(CallContext& context, const Args& args)
     update.yScale = mdl::MultiplyValue{float(factors->y())};
     hasChange = true;
   }
+  // Valve faces rotate by the difference to their stored rotation, which can differ
+  // from the rotation they show (see faceRotation), so they are rotated per face.
+  auto parallelRotation = std::optional<double>{};
   if (const auto rotation = args.getOptional<double>("rotation"))
   {
-    update.rotation = mdl::SetValue{float(*rotation)};
+    if (mdl::isParallelUvCoordSystem(format))
+    {
+      parallelRotation = *rotation;
+    }
+    else
+    {
+      update.rotation = mdl::SetValue{float(*rotation)};
+    }
     hasChange = true;
   }
   if (const auto angle = args.getOptional<double>("rotateBy"))
@@ -822,7 +835,10 @@ ToolResult faceAttributesSet(CallContext& context, const Args& args)
     return errorOf(faces);
   }
 
-  updates.push_back(std::move(update));
+  if (update != mdl::UpdateBrushFaceAttributes{})
+  {
+    updates.push_back(std::move(update));
+  }
   if (hasExtra)
   {
     updates.push_back(std::move(extra));
@@ -830,6 +846,27 @@ ToolResult faceAttributesSet(CallContext& context, const Args& args)
   if (auto result = setAttributes(context, faces.value(), updates); result.is_error())
   {
     return result;
+  }
+  if (parallelRotation)
+  {
+    if (auto result = applyPerFace(
+          context,
+          faces.value(),
+          [&](
+            const mdl::BrushFace& face) -> std::optional<mdl::UpdateBrushFaceAttributes> {
+            const auto delta =
+              vm::normalize_degrees(*parallelRotation - faceRotation(face));
+            if (delta < RotationEpsilon || delta > 360.0 - RotationEpsilon)
+            {
+              return std::nullopt;
+            }
+            return mdl::UpdateBrushFaceAttributes{
+              .rotation = mdl::AddValue{float(delta)}};
+          });
+        result.is_error())
+    {
+      return result;
+    }
   }
   return facesResult(context, faces.value());
 }
@@ -1281,8 +1318,11 @@ void registerFaceTools(ToolRegistry& registry)
       .description(
         "The attributes of faces: material, materialSize ([width, height] in texels, "
         "null if the material is not loaded), offset [u, v] (texels), scale [u, v] "
-        "(world units per texel), rotation (degrees), the UV axes uAxis / vAxis, and the "
-        "face's smart tags. In formats that store them (format.storesSurfaceAttributes, "
+        "(world units per texel), rotation (degrees; for valve220 UVs derived from the "
+        "UV "
+        "axes, since the value stored in the map drifts on transforms with alignment "
+        "lock), the UV axes uAxis / vAxis, and the face's smart tags. In formats that "
+        "store them (format.storesSurfaceAttributes, "
         "e.g. Quake 2) or when set, surfaceFlags and contentFlags {bits, names (from "
         "the game config), unknownBits, fromMaterial (not set on the face; the "
         "material's default applies)} and surfaceValue (with surfaceValueFromMaterial); "
@@ -1345,7 +1385,8 @@ void registerFaceTools(ToolRegistry& registry)
         field("offsetBy", vec2()).describe("Added to the offset"),
         field("scale", vec2()).describe("Scale [u, v]; negative flips, 0 is invalid"),
         field("scaleBy", vec2()).describe("Multiplies the scale"),
-        field("rotation", angle()).describe("Rotation in degrees"),
+        field("rotation", angle())
+          .describe("Rotation in degrees, as face_attributes_get reports it"),
         field("rotateBy", angle()).describe("Added to the rotation (degrees)"),
         field("surfaceFlags", flagsChangeSchema("surface flags")),
         field("contentFlags", flagsChangeSchema("content flags")),

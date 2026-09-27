@@ -951,8 +951,13 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
 - `face_extrude` groups faces by normal and extrudes each group. `face_extrude_new` reimplements the Extrude
   tool's split (outward, or inward for negative distances) and stamp logic with mdl calls, since those are
   file-local to `ExtrudeTool.cpp`.
-- `vertices_move` targets the selected brushes, or else every editable brush that has one of the handles;
-  positions match within 0.01.
+- `vertices_move` and `vertices_remove` find the brushes of their handles (positions match within 0.01):
+  explicit `ids` if given; else the selected brushes if they have every handle (a handle shared with an
+  unselected brush then changes only the selected one, as in the editor); else every editable brush that has
+  one of the handles, with a `HANDLES_OUTSIDE_SELECTION` warning if brushes are selected. Handles that are not
+  found fail with `INVALID_ARGUMENT` (`OBJECT_NOT_EDITABLE` if only hidden or locked brushes have them); the
+  message says where they were searched (the ids, the selection and the whole map with brush counts) and the
+  hint names the brushes that have them.
 - Subtracting with cutters that touch nothing and intersecting disjoint brushes follow the editor (brushes are
   removed) and warn `NOTHING_SUBTRACTED` / `EMPTY_INTERSECTION`. Other warnings: `NOTHING_CLIPPED`,
   `VERTICES_MERGED`, `SNAP_FAILED`, `NOT_HOLLOWED`.
@@ -1016,6 +1021,15 @@ they take a `ui::MapDocument`; only the parameter type `ui::DrawShapeToolParamet
   property, palette) and calls `mdl::loadTexture`. RGB/BGR/RGBA/BGRA are box-filtered to at most `maxSize`
   and written as PNG with miniz (`CallContext::addImage`); compressed formats fail with `UNSUPPORTED`. No GL
   context is needed.
+- **Rotation of Valve faces.** Parallel (Valve 220) UV coordinate systems keep explicit UV axes, and their
+  stored rotation is bookkeeping: `ParallelUvCoordSystem::computeRotationAngle` measures the transformed U axis
+  against the V axis, so every transform with alignment lock, even a pure translation, adds ±90° to the stored
+  rotation while the axes (and the texture) stay correct. `faceRotation` (`NodeJson`) therefore derives the
+  rotation of Valve faces from the UV axes: the angle about the UV normal from the initial axes of a new face
+  with the same normal (replicating `ParallelUvCoordSystem`'s `computeInitialAxes`) to the projected U axis.
+  All face descriptions report it, and `face_attributes_set` turns an absolute `rotation` of Valve faces into a
+  per-face `AddValue` of the difference, so setting the reported value leaves the texture unchanged. Standard
+  faces report and set the stored rotation.
 - **Face attributes.** `face_attributes_get` (paginated) reports offset, scale, rotation, the UV axes, flags as
   `{bits, names, unknownBits, fromMaterial}`, value and color, plus a `format` block (map format, Valve or
   Standard UVs, whether the format saves surface attributes and colors, the game's flag names). Flag names
