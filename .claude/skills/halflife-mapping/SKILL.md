@@ -133,11 +133,16 @@ detail goes into `func_wall`.
   `sitidle`, `lying_on_back`, `relaxstand`, `standing_idle`), `m_fMoveTo 0`, placed at the
   monster, and a `targetname` that nothing ever fires.
 - **Repeating actions (dancing, buying soda)**: `scripted_sequence` per move with `m_iszPlay`
-  (`yes`, `no`, `wave`, `checktie`, `franticbutton`, `buysoda`; Barney `barn_wave`),
+  (`yes`, `no`, `wave`, `franticbutton`, `buysoda`; Barney `barn_wave`),
   spawnflags 4+32+64 (repeatable, no interruptions, override AI); a `multi_manager` with
   spawnflag 1 (multithreaded) that fires the moves with delays and itself after 4–5 s; a
   `trigger_auto` starts it. Moves fired while the previous one still plays are skipped
-  (`can't play` in the log).
+  (`can't play` in the log). Never loop `checktie`: its model event says "why do we all have
+  to wear these ridiculous ties" every time; the other moves above are silent.
+- **Other models as NPCs**: `monster_generic` with `model` (any GoldSrc model, also from other
+  mods copied into `valve/models/`) is friendly, drops to the floor and can be held in a
+  looping pose by a scripted_sequence; its hull is 32×32×72 from the origin up. Keep poles and
+  props out of that box or it spawns "stuck in wall" inside a yellow particle field.
 - **Busy NPCs must not follow the player**: spawnflag 256 (`Pre-Disaster`) on scientists and
   guards — they decline to follow and keep their script. Seated scientists have it
   implicitly. Leave one guard without it if the player should get a follower.
